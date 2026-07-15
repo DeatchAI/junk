@@ -1,0 +1,28 @@
+# User request: ignore the server-deprecated dir
+server-deprecated-use-v2/
+
+# Xcode specific ignores
+xcuserdata/
+*.xcuserdatad
+buildServer.json
+
+# Node dependencies and build folders
+node_modules/
+.next/
+out/
+dist/
+build/
+.vercel/
+
+# Environment files
+.env*
+!.env.example
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

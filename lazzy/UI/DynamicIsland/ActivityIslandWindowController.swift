@@ -1,0 +1,321 @@
+import AppKit
+import Combine
+import SwiftUI
+
+/// An always-on-top control surface for work that continues after the composer closes.
+/// Its frame changes only when the user opens or closes the island, never for streaming
+/// activity updates, which avoids AppKit/SwiftUI sizing feedback during tool bursts.
+@MainActor
+final class ActivityIslandWindowController: NSObject, ObservableObject {
+  private var islandWindow: NSPanel?
+  private let runStore: DetachedRunStore
+  private var completionDismissWorkItem: DispatchWorkItem?
+  private var hoverCollapseWorkItem: DispatchWorkItem?
+  private var cancellables = Set<AnyCancellable>()
+  private var isDismissedByUser = false
+  private var isSuppressedByVisibleComposer = false
+  private var isPointerHovering = false
+  private var isAnimatingFrame = false
+
+  @Published private(set) var isVisible = false
+  @Published private(set) var isExpanded = false
+
+  var onOpenConversation: ((String) -> Void)?
+  var onApprovalResponse: ((String, Bool) -> Void)?
+
+  private var physicalNotchHeight: CGFloat = 40
+  /// The compact controls retain their existing 48pt inset, while this extra
+  /// lane moves each one 16pt beyond the opaque camera cutout.
+  private let compactSideLaneWidth: CGFloat = 64
+
+  init(runStore: DetachedRunStore) {
+    self.runStore = runStore
+    super.init()
+    runStore.$runs
+      .receive(on: RunLoop.main)
+      .sink { [weak self] _ in
+        guard let self, self.isVisible, self.isExpanded, !self.isAnimatingFrame, let window = self.islandWindow else { return }
+        self.applyFrame(to: window, expanded: true)
+      }
+      .store(in: &cancellables)
+  }
+
+  func show() {
+    present(ignoringComposerVisibility: false)
+  }
+
+  /// Debug previews must remain testable from the menu even if a floating chat
+  /// happens to be open. This only changes presentation, never run state.
+  func showDebugPreview() {
+    isDismissedByUser = false
+    present(ignoringComposerVisibility: true)
+  }
+
+  private func present(ignoringComposerVisibility: Bool) {
+    completionDismissWorkItem?.cancel()
+    completionDismissWorkItem = nil
+    guard !isSuppressedByVisibleComposer || ignoringComposerVisibility else {
+      hideForVisibleComposer()
+      return
+    }
+    guard !isDismissedByUser else { return }
+    guard !runStore.presentationRuns.isEmpty else {
+      hide()
+      return
+    }
+    if islandWindow == nil { createWindow() }
+    guard let window = islandWindow else { return }
+
+    applyFrame(to: window, expanded: isExpanded)
+    window.alphaValue = 1
+    window.orderFrontRegardless()
+    isVisible = true
+  }
+
+  /// Lets the user register a successful background run, then removes the island
+  /// once it is no longer carrying useful live state.
+  func showCompletion(for duration: TimeInterval = 4) {
+    show()
+    guard isVisible else { return }
+
+    let dismissal = DispatchWorkItem { [weak self] in
+      guard let self, !self.runStore.hasActiveRuns else { return }
+      self.hide()
+    }
+    completionDismissWorkItem = dismissal
+    DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: dismissal)
+  }
+
+  func showApproval() {
+    isDismissedByUser = false
+    show()
+  }
+
+  /// Makes the notch visible just before a composer animates into it. Returning
+  /// the final panel frame lets the source panel use the same destination,
+  /// producing a single continuous handoff rather than two unrelated fades.
+  func beginComposerHandoff() -> NSRect? {
+    guard runStore.hasActiveRuns, !isDismissedByUser else { return nil }
+    if islandWindow == nil { createWindow() }
+    guard let window = islandWindow else { return nil }
+
+    isExpanded = false
+    applyFrame(to: window, expanded: false)
+    window.alphaValue = 0
+    window.orderFrontRegardless()
+    isVisible = true
+
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = 0.2
+      context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+      window.animator().alphaValue = 1
+    }
+    return window.frame
+  }
+
+  /// A floating chat already carries the full streamed activity. Keep the
+  /// island out of the way until the user closes every visible composer.
+  func setComposerVisible(_ isVisible: Bool) {
+    guard isSuppressedByVisibleComposer != isVisible else { return }
+    isSuppressedByVisibleComposer = isVisible
+    if isVisible {
+      hideForVisibleComposer()
+    } else if runStore.hasActiveRuns {
+      show()
+    }
+  }
+
+  /// Keep the island hidden for the current task after an explicit dismissal.
+  /// Starting another task, or an approval request, deliberately makes it visible again.
+  func dismiss() {
+    isDismissedByUser = true
+    hide()
+  }
+
+  func prepareForNewRun() {
+    isDismissedByUser = false
+  }
+
+  func hide() {
+    hoverCollapseWorkItem?.cancel()
+    hoverCollapseWorkItem = nil
+    isPointerHovering = false
+    isAnimatingFrame = false
+    completionDismissWorkItem?.cancel()
+    completionDismissWorkItem = nil
+    guard let window = islandWindow else { return }
+    isExpanded = false
+    isVisible = false
+    window.orderOut(nil)
+  }
+
+  /// Unlike a user dismissal, this is a reversible presentation rule. It
+  /// intentionally does not set the dismissed flag or discard run state.
+  private func hideForVisibleComposer() {
+    hoverCollapseWorkItem?.cancel()
+    hoverCollapseWorkItem = nil
+    isPointerHovering = false
+    isAnimatingFrame = false
+    completionDismissWorkItem?.cancel()
+    completionDismissWorkItem = nil
+    isExpanded = false
+    isVisible = false
+    islandWindow?.orderOut(nil)
+  }
+
+  func toggleExpanded() {
+    setExpanded(true, animated: true)
+  }
+
+  func setExpanded(_ expanded: Bool, animated: Bool) {
+    guard isExpanded != expanded else { return }
+    isExpanded = expanded
+    guard let window = islandWindow else { return }
+    applyFrame(to: window, expanded: isExpanded, animated: animated)
+    if isExpanded {
+      window.makeKeyAndOrderFront(nil)
+    } else {
+      window.orderFrontRegardless()
+    }
+  }
+
+  func collapse() {
+    setExpanded(false, animated: true)
+  }
+
+  func setHovering(_ isHovering: Bool) {
+    guard isVisible, !isSuppressedByVisibleComposer else { return }
+    isPointerHovering = isHovering
+    hoverCollapseWorkItem?.cancel()
+    hoverCollapseWorkItem = nil
+
+    if isHovering {
+      setExpanded(true, animated: true)
+      return
+    }
+
+    // Resizing the panel can briefly move the AppKit hover boundary. Waiting
+    // through that handoff prevents a false exit/re-entry loop from making
+    // the notch pulse forever.
+    let collapse = DispatchWorkItem { [weak self] in
+      guard let self, !self.isPointerHovering else { return }
+      self.setExpanded(false, animated: true)
+    }
+    hoverCollapseWorkItem = collapse
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.32, execute: collapse)
+  }
+
+  private func createWindow() {
+    let screen = NSScreen.main ?? NSScreen.screens.first
+    physicalNotchHeight = physicalNotchSize(for: screen).height
+    let initialSize = panelSize(for: screen, expanded: false)
+    let panel = NSPanel(
+      contentRect: NSRect(origin: .zero, size: initialSize),
+      styleMask: [.borderless, .nonactivatingPanel],
+      backing: .buffered,
+      defer: false
+    )
+
+    panel.isFloatingPanel = true
+    panel.becomesKeyOnlyIfNeeded = true
+    panel.level = .statusBar
+    panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+    panel.hidesOnDeactivate = false
+    panel.backgroundColor = .clear
+    panel.isOpaque = false
+    panel.hasShadow = false
+    panel.isMovable = false
+    panel.ignoresMouseEvents = false
+
+    let view = ActivityIslandView(
+      store: runStore,
+      controller: self,
+      physicalNotchHeight: physicalNotchHeight,
+      onToggle: { [weak self] in self?.toggleExpanded() },
+      onCollapse: { [weak self] in self?.collapse() },
+      onDismiss: { [weak self] in self?.dismiss() },
+      onOpenConversation: { [weak self] conversationId in
+        self?.onOpenConversation?(conversationId)
+      },
+      onApprovalResponse: { [weak self] requestId, approved in
+        self?.runStore.resolveApproval(id: requestId)
+        self?.onApprovalResponse?(requestId, approved)
+      }
+    )
+    let hostingView = NSHostingView(rootView: view)
+    hostingView.sizingOptions = []
+    hostingView.autoresizingMask = [.width, .height]
+    panel.contentView = hostingView
+    islandWindow = panel
+  }
+
+  private func applyFrame(to window: NSWindow, expanded: Bool, animated: Bool = false) {
+    let screen = window.screen ?? NSScreen.main ?? NSScreen.screens.first
+    guard let screen else { return }
+    let size = panelSize(for: screen, expanded: expanded)
+    let frame = NSRect(
+      x: screen.frame.midX - size.width / 2,
+      y: screen.frame.maxY - size.height,
+      width: size.width,
+      height: size.height
+    )
+    guard window.frame != frame else { return }
+    guard !isAnimatingFrame else { return }
+    guard animated else {
+      window.setFrame(frame, display: true)
+      return
+    }
+
+    isAnimatingFrame = true
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = 0.28
+      context.allowsImplicitAnimation = true
+      window.animator().setFrame(frame, display: true)
+      context.completionHandler = { [weak self] in
+        self?.isAnimatingFrame = false
+      }
+    }
+  }
+
+  private func panelSize(for screen: NSScreen?, expanded: Bool) -> CGSize {
+    let physicalNotch = physicalNotchSize(for: screen)
+    guard expanded else {
+      return CGSize(
+        width: physicalNotch.width + (compactSideLaneWidth * 2),
+        height: physicalNotch.height
+      )
+    }
+
+    let contentSize = sizeForExpandedState
+    let availableWidth = max(360, (screen?.visibleFrame.width ?? contentSize.width) - 48)
+    let compactWidth = physicalNotch.width + (compactSideLaneWidth * 2)
+    return CGSize(
+      width: min(max(contentSize.width, compactWidth), availableWidth),
+      height: physicalNotch.height + contentSize.height
+    )
+  }
+
+  private var sizeForExpandedState: CGSize {
+    let taskCount = min(max(runStore.presentationRuns.count, 1), 5)
+    return CGSize(width: 560, height: min(340, 50 + CGFloat(taskCount) * 56))
+  }
+
+  /// The compact state must occupy the hardware cutout exactly. Using the
+  /// screen's safe-area height directly prevents the island from forming a
+  /// second black lobe below the real MacBook notch.
+  private func physicalNotchSize(for screen: NSScreen?) -> CGSize {
+    guard let screen, screen.safeAreaInsets.top > 0 else {
+      return CGSize(width: 460, height: 40)
+    }
+
+    let leftSafeAreaWidth = screen.auxiliaryTopLeftArea?.width ?? 0
+    let rightSafeAreaWidth = screen.auxiliaryTopRightArea?.width ?? 0
+    let measuredWidth = screen.frame.width - leftSafeAreaWidth - rightSafeAreaWidth + 4
+    // Some macOS configurations omit the auxiliary top-area rectangles. Do
+    // not mistake that for a notch spanning the entire display.
+    let hasReliableAuxiliaryAreas = leftSafeAreaWidth > 0 && rightSafeAreaWidth > 0
+    let isPlausibleNotchWidth = measuredWidth > 0 && measuredWidth < screen.frame.width * 0.5
+    let width = hasReliableAuxiliaryAreas && isPlausibleNotchWidth ? measuredWidth : 460
+    return CGSize(width: width, height: screen.safeAreaInsets.top)
+  }
+}

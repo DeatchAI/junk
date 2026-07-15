@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Detach Browser Agent</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">Detach</p>
+          <h1>Browser Agent</h1>
+        </div>
+        <span id="nativeState" class="pill">Checking</span>
+      </header>
+
+      <section class="status">
+        <p id="statusText">Checking Chrome connection...</p>
+        <p id="activeTab" class="muted"></p>
+      </section>
+
+      <div class="actions">
+        <button id="refreshButton" type="button">Refresh</button>
+        <button id="connectButton" type="button">Reconnect</button>
+      </div>
+
+      <button id="siteAccessButton" class="wide" type="button">
+        Allow automation on all sites
+      </button>
+
+      <section class="preview">
+        <div class="previewHeader">
+          <span>Active tab snapshot</span>
+          <button id="snapshotButton" type="button">Test</button>
+        </div>
+        <pre id="snapshotOutput">No snapshot yet.</pre>
+      </section>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

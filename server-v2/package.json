@@ -1,0 +1,20 @@
+{
+  "name": "detach-runtime",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build --compile --outfile detach-runtime src/index.ts && codesign --force --options runtime --entitlements ../server-deprecated-use-v2/entitlements.plist --sign - detach-runtime"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "module": "src/index.ts",
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@composio/core": "0.13.1"
+  }
+}

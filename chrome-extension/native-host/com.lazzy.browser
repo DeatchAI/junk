@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+WORKSPACE_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
+
+if [ -n "${DETACH_RUNTIME_PATH:-}" ] && [ -x "$DETACH_RUNTIME_PATH" ]; then
+  exec "$DETACH_RUNTIME_PATH" --native-browser-host
+fi
+
+if [ -x "$WORKSPACE_DIR/lazzy/detach-runtime" ]; then
+  exec "$WORKSPACE_DIR/lazzy/detach-runtime" --native-browser-host
+fi
+
+if [ -x "$WORKSPACE_DIR/server-v2/detach-runtime" ]; then
+  exec "$WORKSPACE_DIR/server-v2/detach-runtime" --native-browser-host
+fi
+
+exec /usr/bin/env bun "$WORKSPACE_DIR/server-v2/src/index.ts" --native-browser-host
