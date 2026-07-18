@@ -7,6 +7,8 @@ struct ChatRequest: Codable {
   var type: String = "chat"
   /// A client-generated ID that lets the detached island follow this run while the chat is hidden.
   let runId: String?
+  /// Only Debug app builds enable the runtime's exact-prompt demo scenarios.
+  let demoMode: Bool?
   let text: String
   let displayText: String?
   let files: [FileAttachmentRequest]?
@@ -38,6 +40,11 @@ struct ChatRequest: Codable {
     skills: [SkillAttachment]? = nil
   ) {
     self.runId = runId
+    #if DEBUG
+      self.demoMode = true
+    #else
+      self.demoMode = nil
+    #endif
     self.text = text
     self.displayText = displayText
     self.files = files

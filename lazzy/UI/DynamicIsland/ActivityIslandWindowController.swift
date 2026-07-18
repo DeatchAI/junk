@@ -26,7 +26,7 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
   private var physicalNotchHeight: CGFloat = 40
   /// The compact controls retain their existing 48pt inset, while this extra
   /// lane moves each one 16pt beyond the opaque camera cutout.
-  private let compactSideLaneWidth: CGFloat = 64
+  private let compactSideLaneWidth: CGFloat = 96
 
   init(runStore: DetachedRunStore) {
     self.runStore = runStore
@@ -232,7 +232,6 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
       controller: self,
       physicalNotchHeight: physicalNotchHeight,
       onToggle: { [weak self] in self?.toggleExpanded() },
-      onCollapse: { [weak self] in self?.collapse() },
       onDismiss: { [weak self] in self?.dismiss() },
       onOpenConversation: { [weak self] conversationId in
         self?.onOpenConversation?(conversationId)
@@ -282,7 +281,9 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
     guard expanded else {
       return CGSize(
         width: physicalNotch.width + (compactSideLaneWidth * 2),
-        height: physicalNotch.height
+        // The first notch-height is physically obscured by the camera. The
+        // second is the visible compact activity lane beneath it.
+        height: physicalNotch.height * 2
       )
     }
 
@@ -297,7 +298,7 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
 
   private var sizeForExpandedState: CGSize {
     let taskCount = min(max(runStore.presentationRuns.count, 1), 5)
-    return CGSize(width: 560, height: min(340, 50 + CGFloat(taskCount) * 56))
+    return CGSize(width: 560, height: min(380, 36 + CGFloat(taskCount) * 64))
   }
 
   /// The compact state must occupy the hardware cutout exactly. Using the

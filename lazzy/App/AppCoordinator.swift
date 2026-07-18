@@ -20,6 +20,7 @@ class AppCoordinator: ObservableObject {
   let hotkeyManager = HotkeyManager.shared
   let screenshotCapture = ScreenshotCaptureController()
   let onboardingWindow = OnboardingWindowController()
+  private let finderIntegration = FinderIntegration()
 
   // Pending content from hotkey trigger (for Finder files)
   private var pendingHotkeyContent: DetectedContent?
@@ -245,98 +246,35 @@ class AppCoordinator: ObservableObject {
 
   /// Called when user taps ⌥ in Finder - shows Quick Actions for any selected files
   private func handleFinderHotkeyTrigger() {
-    let location = NSEvent.mouseLocation
-
-    // Try to get selected files from Finder using alternative method
-    // Since AppleScript may not work, we'll create a placeholder content
-    // that indicates we should work with whatever the user has selected
-    let content = getFinderSelectionInfo()
-
-    if let content = content {
-      pendingHotkeyContent = content
-      pendingHotkeyLocation = location
-      quickActionsMenu.show(at: location)
-      print("📁 Hotkey triggered Quick Actions for Finder files")
-    } else {
+    let files = finderIntegration.getSelectedFinderFiles()
+    if files.isEmpty {
       print("📁 No files detected in Finder (select files first, then press ⌥)")
-    }
-  }
-
-  /// Gets information about the currently selected files in Finder
-  /// Uses a lightweight approach that doesn't require full automation permission
-  private func getFinderSelectionInfo() -> DetectedContent? {
-    // First, try the AppleScript method (may work if permissions were granted)
-    let script = """
-      tell application "Finder"
-          set selectedItems to selection
-          set fileList to {}
-          repeat with anItem in selectedItems
-              set end of fileList to POSIX path of (anItem as alias)
-          end repeat
-          return fileList
-      end tell
-      """
-
-    var error: NSDictionary?
-    if let appleScript = NSAppleScript(source: script) {
-      let result = appleScript.executeAndReturnError(&error)
-
-      if error == nil {
-        var files: [URL] = []
-        if let listDescriptor = result.coerce(toDescriptorType: typeAEList) {
-          for i in 1...listDescriptor.numberOfItems {
-            if let itemDescriptor = listDescriptor.atIndex(i),
-              let path = itemDescriptor.stringValue
-            {
-              files.append(URL(fileURLWithPath: path))
-            }
-          }
-        }
-
-        if !files.isEmpty {
-          let attachments = files.map { url in
-            FileAttachmentRequest(
-              path: url.path,
-              mimeType: getMimeType(for: url)
-            )
-          }
-          return DetectedContent(type: .files, text: nil, files: attachments)
-        }
-      }
+      return
     }
 
-    // Fallback: Create a generic "Finder context" content
-    // This allows the user to still trigger Quick Actions even without file details
-    // The chat window can then ask the user to paste/drag the files
-    return DetectedContent(
-      type: .files,
-      text: "[Finder files - paste or describe your files]",
-      files: nil
-    )
+    showQuickActions(forFinderItems: files)
+    print("📁 Hotkey triggered Quick Actions for Finder files")
   }
 
-  /// Get MIME type for a file URL
-  private func getMimeType(for url: URL) -> String {
-    let pathExtension = url.pathExtension.lowercased()
+  /// Opens the Quick Actions menu for paths supplied by Finder itself.
+  /// This avoids polling Finder and always preserves the actual selected items.
+  func showQuickActions(forFinderItems urls: [URL], at location: NSPoint = NSEvent.mouseLocation) {
+    var seenPaths = Set<String>()
+    let uniqueURLs = urls
+      .map(\.standardizedFileURL)
+      .filter { seenPaths.insert($0.path).inserted }
+    guard !uniqueURLs.isEmpty else { return }
 
-    let mimeTypes: [String: String] = [
-      "pdf": "application/pdf",
-      "png": "image/png",
-      "jpg": "image/jpeg",
-      "jpeg": "image/jpeg",
-      "gif": "image/gif",
-      "webp": "image/webp",
-      "txt": "text/plain",
-      "md": "text/markdown",
-      "swift": "text/x-swift",
-      "ts": "text/typescript",
-      "js": "text/javascript",
-      "html": "text/html",
-      "css": "text/css",
-      "json": "application/json",
-    ]
+    let attachments = uniqueURLs.map { url in
+      FileAttachmentRequest(
+        path: url.path,
+        mimeType: finderIntegration.getMimeType(for: url)
+      )
+    }
 
-    return mimeTypes[pathExtension] ?? "application/octet-stream"
+    pendingHotkeyContent = DetectedContent(type: .files, text: nil, files: attachments)
+    pendingHotkeyLocation = location
+    quickActionsMenu.show(at: location)
   }
 
   /// Save screenshot image to temp file and create DetectedContent

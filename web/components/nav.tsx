@@ -2,7 +2,7 @@ import Image from "next/image"
 
 export default function Navbar() {
     return (
-        <div className="fixed top-0 left-0 right-0 z-50 flex justify-center pointer-events-none font-sans">
+        <div className="fixed top-0 left-0 right-0 z-50 flex justify-center pointer-events-none ">
           <nav className="pointer-events-auto relative flex items-center justify-between gap-6 sm:gap-10 bg-black text-white px-5 py-3 rounded-b-2xl shadow-xl border-x border-b border-white/10 w-auto">
             {/* Left flare */}
             <svg
@@ -25,7 +25,7 @@ export default function Navbar() {
             </svg>
 
             {/* Logo */}
-            <a href="#" className="flex items-center gap-0 hover:opacity-90 transition-opacity">
+            <a href="#" className="flex items-center gap-0 hover:opacity-90 focus-visible:opacity-90 focus-visible:outline-none transition-opacity">
               <Image
                 src="/icon.svg"
                 alt="Detach Logo"
@@ -34,19 +34,19 @@ export default function Navbar() {
                 className="rounded-md"
                 priority
               />
-              <span className="sick text-2xl tracking-wide">Detach</span>
+              <span className="text-xl tracking-tight font-semibold">Detach</span>
             </a>
 
             {/* Nav Links */}
             <div className="hidden md:flex items-center gap-6">
-              <a href="#features" className="text-zinc-300 hover:text-white tracking-tight font-light transition-colors">
+              <a href="#features" className="text-zinc-300 hover:text-white focus-visible:text-white focus-visible:outline-none tracking-tight font-light transition-colors">
                 Features
               </a>
-              <a href="#faq" className="text-zinc-300 hover:text-white tracking-tight font-light transition-colors">
-                FAQ
+              <a href="#security" className="text-zinc-300 hover:text-white focus-visible:text-white focus-visible:outline-none tracking-tight font-light transition-colors">
+                Security
               </a>
-              <a href="#updates" className="text-zinc-300 hover:text-white tracking-tight font-light transition-colors">
-                Updates
+              <a href="#faq" className="text-zinc-300 hover:text-white focus-visible:text-white focus-visible:outline-none tracking-tight font-light transition-colors">
+                FAQ
               </a>
               {/* <a href="#pricing" className="text-zinc-300 hover:text-white tracking-tight font-light transition-colors">
                 Pricing
@@ -56,7 +56,7 @@ export default function Navbar() {
             {/* Download CTA */}
             <a
               href="#download"
-              className="bg-white text-black text-xs font-semibold px-3 py-1.5 rounded-full flex items-center gap-1.5 hover:bg-zinc-200 active:scale-95 transition-all"
+              className="bg-white text-black text-xs font-semibold px-3 py-1.5 rounded-full flex items-center gap-1.5 hover:bg-zinc-200 focus-visible:bg-zinc-200 focus-visible:outline-none active:scale-95 transition-all"
             >
               
               <span>Download</span>

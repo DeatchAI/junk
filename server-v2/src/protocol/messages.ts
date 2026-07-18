@@ -123,6 +123,8 @@ export interface ChatRequest {
   type: "chat";
   /** Stable client-generated identity for a detached agent run. */
   runId?: string;
+  /** Debug builds set this flag so exact demo prompts can bypass real agents. */
+  demoMode?: boolean;
   text: string;
   displayText?: string;
   files?: FileAttachmentRequest[];

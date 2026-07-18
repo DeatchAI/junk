@@ -78,24 +78,24 @@ struct FloatingChatToolbarView: View {
       Spacer()
 
       // Fast mode toggle
-      Button(action: {
-        fastMode.toggle()
-      }) {
-        Image(systemName: fastMode ? "bolt.fill" : "bolt")
-          .font(.appFont(size: 14, weight: .medium))
-          .foregroundColor(fastMode ? .orange : theme.accentColor)
-      }
-      .buttonStyle(.plain)
-      .help(
-        fastMode
-          ? "Fast Mode: ON (⚡ Faster responses, fewer features)"
-          : "Fast Mode: OFF (Full features)")
+      // Button(action: {
+      //   fastMode.toggle()
+      // }) {
+      //   Image(systemName: fastMode ? "bolt.fill" : "bolt")
+      //     .font(.appFont(size: 14, weight: .medium))
+      //     .foregroundColor(fastMode ? .orange : theme.accentColor)
+      // }
+      // .buttonStyle(.plain)
+      // .help(
+      //   fastMode
+      //     ? "Fast Mode: ON (⚡ Faster responses, fewer features)"
+      //     : "Fast Mode: OFF (Full features)")
 
       // File and folder attachment button
       Button(action: onAttach) {
         Image(systemName: "paperclip")
           .font(.appFont(size: 14, weight: .medium))
-          .foregroundColor(theme.accentColor)
+          .foregroundColor(theme.textColor)
       }
       .buttonStyle(.plain)
       .help("Attach files or folders")
@@ -106,7 +106,7 @@ struct FloatingChatToolbarView: View {
       }) {
         Image(systemName: "clock.arrow.circlepath")
           .font(.appFont(size: 14, weight: .medium))
-          .foregroundColor(theme.accentColor)
+          .foregroundColor(theme.textColor)
       }
       .buttonStyle(.plain)
       .help("Conversation History")
@@ -117,7 +117,7 @@ struct FloatingChatToolbarView: View {
       }) {
         Image(systemName: "plus.bubble")
           .font(.appFont(size: 14, weight: .medium))
-          .foregroundColor(theme.accentColor)
+          .foregroundColor(theme.textColor)
       }
       .buttonStyle(.plain)
       .help("New Chat")
@@ -133,7 +133,7 @@ struct FloatingChatToolbarView: View {
             ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"
         )
         .font(.appFont(size: 14, weight: .medium))
-        .foregroundColor(theme.accentColor)
+        .foregroundColor(theme.textColor)
       }
       .buttonStyle(.plain)
       .help(controller.isExpanded ? "Shrink to Float" : "Expand to Chat")

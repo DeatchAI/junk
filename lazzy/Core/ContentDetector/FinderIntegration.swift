@@ -51,11 +51,14 @@ class FinderIntegration: ObservableObject {
         var files: [URL] = []
         
         if let listDescriptor = result.coerce(toDescriptorType: typeAEList) {
-            for i in 1...listDescriptor.numberOfItems {
-                if let itemDescriptor = listDescriptor.atIndex(i),
-                   let path = itemDescriptor.stringValue {
-                    let url = URL(fileURLWithPath: path)
-                    files.append(url)
+            let itemCount = listDescriptor.numberOfItems
+            if itemCount > 0 {
+                for i in 1...itemCount {
+                    if let itemDescriptor = listDescriptor.atIndex(i),
+                       let path = itemDescriptor.stringValue {
+                        let url = URL(fileURLWithPath: path)
+                        files.append(url)
+                    }
                 }
             }
         }

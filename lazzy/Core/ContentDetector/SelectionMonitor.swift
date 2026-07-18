@@ -6,6 +6,9 @@ import Foundation
 /// Monitors for text selections using:
 /// 1. Mouse events + Accessibility API (for native apps)
 /// 2. Clipboard changes (fallback for browsers like Safari/Chrome)
+///
+/// Finder selections are intentionally excluded. Files are handed to Detach only
+/// through an explicit Finder command or keyboard shortcut.
 class SelectionMonitor: ObservableObject {
 
   @Published private(set) var hasActiveSelection = false
@@ -20,7 +23,6 @@ class SelectionMonitor: ObservableObject {
 
   private let finderIntegration = FinderIntegration()
   private let selectionDetector = SelectionDetector()
-  private var finderPollTimer: Timer?
 
   // Triple-click detection
   private var clickTimes: [Date] = []
@@ -62,7 +64,6 @@ class SelectionMonitor: ObservableObject {
     print("👁️ Selection monitor started")
     print("   🖱️ Mouse selection for native apps")
     print("   📋 Clipboard fallback for browsers (⌘+C)")
-    print("   📁 Finder file selection")
 
     // Monitor mouse down to track drag start and detect triple-clicks
     mouseDownMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) {
@@ -140,11 +141,6 @@ class SelectionMonitor: ObservableObject {
       self.isMouseDragging = false
     }
 
-    // Poll for Finder selections
-    finderPollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) {
-      [weak self] _ in
-      self?.checkFinderSelection()
-    }
   }
 
   func stopMonitoring() {
@@ -156,8 +152,6 @@ class SelectionMonitor: ObservableObject {
       NSEvent.removeMonitor(monitor)
       mouseDownMonitor = nil
     }
-    finderPollTimer?.invalidate()
-    finderPollTimer = nil
     print("🛑 Selection monitor stopped")
   }
 
@@ -197,24 +191,6 @@ class SelectionMonitor: ObservableObject {
         let content = DetectedContent(type: .text, text: clipboardText, files: nil)
         triggerSelection(content: content, at: location)
       }
-    }
-  }
-
-  private func checkFinderSelection() {
-    guard finderIntegration.isFinderFrontmost() else { return }
-
-    let files = finderIntegration.getSelectedFinderFiles()
-    if !files.isEmpty && !hasActiveSelection {
-      let attachments = files.map { url in
-        FileAttachmentRequest(
-          path: url.path,
-          mimeType: finderIntegration.getMimeType(for: url)
-        )
-      }
-
-      let content = DetectedContent(type: .files, text: nil, files: attachments)
-      let location = NSEvent.mouseLocation
-      triggerSelection(content: content, at: location)
     }
   }
 

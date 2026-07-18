@@ -14,6 +14,7 @@ import { ComposioSessionManager } from "./composio/ComposioSessionManager";
 import { composerModeSystemInstruction } from "./composer/composerModes";
 import { DesktopBridge } from "./desktop/DesktopBridge";
 import { MACOS_TOOL_NAMES, runDesktopMCPServer } from "./desktop/DesktopMCPServer";
+import { createDemoRun, matchDemoScenario } from "./demo/DemoScenarios";
 import { getCapabilities } from "./runtime/CapabilityDetector";
 import { SqliteHistory } from "./history/SqliteHistory";
 import { SqliteMCPServers, statusForServer } from "./history/SqliteMCPServers";
@@ -576,6 +577,7 @@ async function handleChat(ws: ServerWebSocket, message: ChatRequest) {
   const storedUserText = message.displayText?.trim() || message.text || "";
   const conversation = history.addUserMessage(message.conversationId, storedUserText);
   const agent = agents.get(message.agent);
+  const demoScenario = matchDemoScenario(storedUserText, message.demoMode === true);
   const action = message.actionId ? quickActions.get(message.actionId) : undefined;
   const slashCommand = message.slashCommandId ? slashCommands.get(message.slashCommandId) : undefined;
   const learnedSkill = action ? learnedActionSkillAttachment(action) : undefined;
@@ -617,7 +619,7 @@ async function handleChat(ws: ServerWebSocket, message: ChatRequest) {
     },
   });
 
-  const run = agent.run(agentRequest, {
+  const streamCallbacks = {
     onActivity(status, toolName, event) {
       if (action) {
         actionTrace.push({ status, toolName, event });
@@ -648,7 +650,13 @@ async function handleChat(ws: ServerWebSocket, message: ChatRequest) {
     onPermission(request) {
       return requestAgentPermission(ws, request, runId, conversation.conversation.id);
     },
-  });
+  } satisfies Parameters<typeof agent.run>[1];
+
+  // Exact demo prompts from Debug app builds exercise the real streaming/activity
+  // UI while deliberately bypassing every installed or hosted AI agent.
+  const run = demoScenario
+    ? createDemoRun(demoScenario, agent.id, streamCallbacks)
+    : agent.run(agentRequest, streamCallbacks);
 
   activeRuns.set(ws, run);
 

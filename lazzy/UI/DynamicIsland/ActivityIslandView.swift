@@ -7,7 +7,6 @@ struct ActivityIslandView: View {
   @ObservedObject var controller: ActivityIslandWindowController
   let physicalNotchHeight: CGFloat
   let onToggle: () -> Void
-  let onCollapse: () -> Void
   let onDismiss: () -> Void
   let onOpenConversation: (String) -> Void
   let onApprovalResponse: (String, Bool) -> Void
@@ -29,6 +28,9 @@ struct ActivityIslandView: View {
         Color.clear.frame(height: physicalNotchHeight)
         expandedTaskList
       } else {
+        // The hardware cutout occupies the first lane. Keep live text in a
+        // matching second lane so it is never covered by the camera housing.
+        Color.clear.frame(height: physicalNotchHeight)
         compactHeadline
       }
     }
@@ -36,35 +38,33 @@ struct ActivityIslandView: View {
     .background(
       islandSurfaceShape
         .fill(islandBackground)
-        .shadow(color: .black.opacity(0.45), radius: 18, x: 0, y: 9)
-        .overlay(islandSurfaceShape.stroke(.white.opacity(0.1), lineWidth: 0.8))
+        // .shadow(color: .black.opacity(0.45), radius: 18, x: 0, y: 9)
+        // .overlay(islandSurfaceShape.stroke(.white.opacity(0.1), lineWidth: 0.8))
     )
     .animation(.easeInOut(duration: 0.28), value: controller.isExpanded)
     .onHover { controller.setHovering($0) }
   }
 
-  /// The resting notch has just two pieces of information: how many agents
-  /// are still running, and the state of the most recent one. Hovering opens
-  /// the detailed task list without turning the notch into another chat view.
+  /// The compact treatment mirrors the original, readable activity-island
+  /// headline while the expanded task switcher carries the richer detail.
   private var compactHeadline: some View {
-    Button(action: openPrimaryRun) {
-      HStack {
-        Text("\(store.visibleActiveRuns.count)")
-          .font(.appFont(size: 13, weight: .bold))
-          .foregroundStyle(.white)
-          .frame(minWidth: 20, alignment: .leading)
-
-        Spacer(minLength: 20)
-
-        if let run = store.primaryRun {
-          taskStateIcon(for: run)
+    return Button(action: openPrimaryRun) {
+      HStack(spacing: 10) {
+        if let run = store.primaryRun, run.state == .completed {
+          completionMark
         } else {
-          DetachedMarkLoader(isLoading: false, size: 18)
+          DetachedMarkLoader(isLoading: store.primaryRun?.state == .running)
         }
+
+        MarqueeHeadline(text: headline(for: store.primaryRun))
+
+        Spacer(minLength: 12)
+
+        Image(systemName: "arrow.up.right")
+          .font(.system(size: 11, weight: .bold))
+          .foregroundStyle(.white.opacity(0.52))
       }
-      // Keep the original horizontal inset so the two compact controls sit
-      // at the left and right ends of the physical notch.
-      .padding(.horizontal, 48)
+      .padding(.horizontal, 28)
       .frame(height: physicalNotchHeight)
       .contentShape(Rectangle())
     }
@@ -94,43 +94,7 @@ struct ActivityIslandView: View {
     }
     .padding(.horizontal, 52)
     .frame(height: 52)
-  }
-
-  private var liveHeadline: some View {
-    HStack(spacing: 8) {
-      Button(action: openPrimaryRun) {
-        HStack(spacing: 10) {
-          if let run = store.primaryRun, run.state == .completed {
-            completionMark
-          } else {
-            DetachedMarkLoader(isLoading: store.primaryRun?.state == .running)
-          }
-
-          MarqueeHeadline(text: headline(for: store.primaryRun))
-
-          Spacer(minLength: 8)
-
-          if store.visibleActiveRuns.count > 1 {
-            Text("\(store.visibleActiveRuns.count)")
-              .font(.appFont(size: 10, weight: .bold))
-              .foregroundStyle(.black)
-              .frame(width: 18, height: 18)
-              .background(.white, in: Circle())
-          }
-
-          Image(systemName: store.visibleActiveRuns.count > 1 ? "chevron.down" : "arrow.up.right")
-            .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(.white.opacity(0.48))
-        }
-        .contentShape(Rectangle())
-      }
-      .buttonStyle(.plain)
-
-      dismissButton
-    }
-    .padding(.horizontal, 48)
-    .frame(height: 40)
-    .help("Open in Detach")
+    .padding(.bottom, 12)
   }
 
   private func approvalHeadline(_ approval: DetachedRunApproval) -> some View {
@@ -156,6 +120,7 @@ struct ActivityIslandView: View {
     }
     .padding(.horizontal, 52)
     .frame(height: 52)
+    .padding(.bottom, 12)
   }
 
   private func approvalButton(
@@ -190,58 +155,40 @@ struct ActivityIslandView: View {
     VStack(spacing: 0) {
       HStack(spacing: 8) {
         Text("TASKS")
-          .font(.appFont(size: 10, weight: .bold))
-          .foregroundStyle(.white.opacity(0.48))
+          .font(.appFont(size: 11, weight: .bold))
+          .foregroundStyle(.white.opacity(0.52))
           .tracking(0.8)
         Spacer()
-        Button(action: onCollapse) {
-          Image(systemName: "chevron.up")
-            .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(.white.opacity(0.6))
-            .frame(width: 26, height: 26)
-        }
-        .buttonStyle(IslandIconButtonStyle())
-        .help("Collapse active agents")
-
         dismissButton
       }
       .padding(.horizontal, 50)
       .frame(height: 20)
 
       ForEach(Array(store.presentationRuns.prefix(5).enumerated()), id: \.element.id) { index, run in
-        taskRow(run, number: index + 1)
+        taskRow(run)
         if index < min(store.presentationRuns.count, 5) - 1 {
-          Divider().overlay(.white.opacity(0.08)).padding(.leading, 78)
+          Divider().overlay(.white.opacity(0.08)).padding(.leading, 50)
         }
       }
     }
   }
 
-  private func taskRow(_ run: DetachedAgentRun, number: Int) -> some View {
-    HStack(alignment: .center, spacing: 10) {
-      Text("\(number)")
-        .font(.appFont(size: 13, weight: .bold))
-        .foregroundStyle(.white.opacity(0.42))
-        .frame(width: 16, height: 20, alignment: .leading)
-
+  private func taskRow(_ run: DetachedAgentRun) -> some View {
+    HStack(alignment: .center, spacing: 12) {
       Button {
         if let conversationId = run.conversationId {
           onOpenConversation(conversationId)
         }
       } label: {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 5) {
           Text(run.taskTitle)
-            .font(.appFont(size: 12, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.94))
+            .font(.appFont(size: 14, weight: .semibold))
+            .foregroundStyle(.white)
             .lineLimit(1)
-          HStack(spacing: 5) {
-            Image(systemName: "chevron.right")
-              .font(.system(size: 8, weight: .bold))
-            Text(run.currentActivity)
-              .lineLimit(1)
-          }
-          .font(.appFont(size: 10, weight: .regular))
-          .foregroundStyle(.white.opacity(0.5))
+          Text(run.currentActivity)
+            .font(.appFont(size: 12, weight: .regular))
+            .foregroundStyle(.white.opacity(0.56))
+            .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
@@ -260,15 +207,15 @@ struct ActivityIslandView: View {
         }
       }
     }
-    .padding(.horizontal, 46)
-    .frame(height: 56)
+    .padding(.horizontal, 50)
+    .frame(height: 64)
   }
 
   private func taskStateIcon(for run: DetachedAgentRun) -> some View {
     Group {
       switch run.state {
       case .running:
-        DetachedMarkLoader(isLoading: true, size: 18)
+        DetachedMarkLoader(isLoading: true, size: 24)
       case .awaitingApproval:
         Image(systemName: "questionmark.circle.fill")
           .foregroundStyle(.orange)
@@ -284,7 +231,7 @@ struct ActivityIslandView: View {
       }
     }
     .font(.system(size: 13, weight: .semibold))
-    .frame(width: 18, height: 18)
+    .frame(width: 24, height: 24)
   }
 
   private func headline(for run: DetachedAgentRun?) -> String {

@@ -6,6 +6,7 @@
 //
 
 import Combine
+import FinderSync
 import SDWebImageSVGCoder
 import SwiftUI
 
@@ -67,15 +68,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
   func application(_ application: NSApplication, open urls: [URL]) {
     for url in urls {
       print("🔗 AppDelegate Received URL: \(url)")
-      if url.scheme == "lazzy" || url.scheme == "detach" {
-        if let coordinator {
-          DispatchQueue.main.async {
-            MenuBarContentView.showSettings(
-              wsManager: coordinator.wsManager,
-              onRunWorkflow: coordinator.runWorkflow
-            )
-          }
+      guard url.scheme == "lazzy" || url.scheme == "detach", let coordinator else {
+        continue
+      }
+
+      if url.host?.lowercased() == "finder" {
+        let paths = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+          .queryItems?
+          .filter { $0.name == "path" }
+          .compactMap(\.value) ?? []
+        let fileURLs = paths.map { URL(fileURLWithPath: $0) }
+
+        DispatchQueue.main.async {
+          NSApp.setActivationPolicy(.accessory)
+          coordinator.showQuickActions(forFinderItems: fileURLs)
         }
+        continue
+      }
+
+      DispatchQueue.main.async {
+        MenuBarContentView.showSettings(
+          wsManager: coordinator.wsManager,
+          onRunWorkflow: coordinator.runWorkflow
+        )
       }
     }
   }
@@ -193,6 +208,13 @@ struct MenuBarContentView: View {
           wsManager: coordinator.wsManager,
           onRunWorkflow: coordinator.runWorkflow
         )
+      }
+
+      Button(
+        FIFinderSyncController.isExtensionEnabled
+          ? "Manage Finder Extension…" : "Enable Finder Extension…"
+      ) {
+        FIFinderSyncController.showExtensionManagementInterface()
       }
 
       Menu("Notch Debug") {

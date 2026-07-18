@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap');
 @import "tailwindcss";
 
 :root {
@@ -15,6 +16,10 @@
   src: url("./PPNeueMontreal-Regular.7a832673.woff");
 }
 
+.apple {
+  font-family: "Inter", sans-serif;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -22,19 +27,321 @@
   --font-mono: var(--font-geist-mono);
 }
 
-/* @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-} */
+html {
+  scroll-behavior: smooth;
+}
 
 body {
+  overflow-x: hidden;
   background: var(--background);
   color: var(--foreground);
   font-family: "normal", sans-serif;
 }
 
 .sick {
-   font-family: "genz", sans-serif;
+  font-family: "genz", sans-serif;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+@keyframes demo-window-enter {
+  from {
+    opacity: 0;
+    filter: blur(2px);
+    transform: translate3d(-50%, calc(-50% + 8px), 0) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: translate3d(-50%, -50%, 0) scale(1);
+  }
+}
+
+@keyframes demo-working-pulse {
+  50% { opacity: 0.35; transform: scaleX(0.72); }
+}
+
+@keyframes demo-caret-blink {
+  50% { opacity: 0; }
+}
+
+@keyframes demo-detached-left {
+  to { opacity: 0.78; transform: translateX(-9%); }
+}
+
+@keyframes demo-detached-right {
+  to { opacity: 0.78; transform: translateX(9%); }
+}
+
+@keyframes demo-attachment-trigger-pulse {
+  50% { color: #ff7900; transform: scale(1.16); }
+}
+
+/*
+ * Keep placement and visibility on separate animation tracks. Each task gets a
+ * stable desktop position, while phase changes only affect opacity and a few
+ * pixels of local motion. This prevents a new window from interpolating from
+ * the previous task's notch destination.
+ */
+.demo-frame {
+  --demo-chat-x: 50%;
+  --demo-chat-y: 52%;
+}
+
+.demo-chat-group {
+  top: var(--demo-chat-y);
+  left: var(--demo-chat-x);
+  opacity: 1;
+  filter: blur(0);
+  transform: translate3d(-50%, -50%, 0) scale(1);
+  transform-origin: center;
+  will-change: opacity, filter, transform;
+}
+
+.demo-frame[data-phase="enter"] .demo-chat-group {
+  visibility: visible;
+  pointer-events: auto;
+  animation: demo-window-enter 620ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.demo-frame[data-phase="typing"] .demo-chat-group,
+.demo-frame[data-phase="feature"] .demo-chat-group,
+.demo-frame[data-phase="working"] .demo-chat-group {
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.demo-frame[data-phase="merging"] .demo-chat-group {
+  visibility: visible;
+  pointer-events: none;
+  opacity: 0;
+  filter: blur(2px);
+  transform: translate3d(-50%, calc(-50% - 6px), 0) scale(1);
+  transition:
+    opacity 360ms ease,
+    filter 420ms ease,
+    transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.demo-frame[data-phase="notch"] .demo-chat-group {
+  visibility: hidden;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate3d(-50%, -50%, 0) scale(1);
+}
+
+.demo-task-number {
+  bottom: calc(100% + 0.75rem);
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 160ms ease, transform 220ms ease;
+}
+
+.demo-frame[data-phase="working"] .demo-task-number,
+.demo-frame[data-phase="merging"] .demo-task-number,
+.demo-frame[data-phase="notch"] .demo-task-number {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+.demo-working-window {
+  bottom: calc(100% + clamp(0.75rem, 1.6vw, 1.1rem));
+  visibility: hidden;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(8px);
+  transition:
+    opacity 240ms ease,
+    transform 360ms cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s linear 360ms;
+}
+
+.demo-feature-menu {
+  position: absolute;
+  z-index: 8;
+  top: clamp(1.75rem, 3.8vw, 2.6rem);
+  left: clamp(0.65rem, 1.25vw, 0.9rem);
+  width: min(78%, 20rem);
+  max-height: clamp(12rem, 27vw, 16.5rem);
+  padding: 0.375rem;
+  overflow: hidden;
+  border: 0.5px solid rgba(255, 255, 255, 0.1);
+  border-radius: clamp(0.7rem, 1.4vw, 1rem);
+  background: rgba(12, 12, 13, 0.985);
+  box-shadow: 0 0.5rem 1.75rem rgba(0, 0, 0, 0.28);
+  visibility: hidden;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-5px) scale(0.992);
+  transform-origin: top left;
+  transition:
+    opacity 150ms ease,
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s linear 220ms;
+}
+
+.demo-frame[data-phase="feature"] .demo-feature-menu {
+  visibility: visible;
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  transition-delay: 70ms, 70ms, 0s;
+}
+
+.demo-command-menu {
+  max-height: clamp(13rem, 29vw, 17.5rem);
+}
+
+.demo-feature-row {
+  display: grid;
+  grid-template-columns: clamp(0.85rem, 1.3vw, 1.05rem) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: clamp(0.45rem, 0.8vw, 0.65rem);
+  min-height: clamp(2rem, 3.5vw, 2.25rem);
+  padding: 0.3rem 0.5rem;
+  border-radius: 0.52rem;
+  color: rgba(242, 241, 244, 0.72);
+  text-align: left;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.demo-feature-row.is-highlighted {
+  color: #f7f6f8;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.demo-feature-row-icon {
+  width: 100%;
+  height: 100%;
+  stroke-width: 1.55;
+}
+
+.demo-feature-row-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.05rem;
+}
+
+.demo-feature-row-copy strong,
+.demo-feature-row-copy small {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.demo-feature-row-copy strong {
+  color: inherit;
+  font-size: clamp(0.55rem, 0.88vw, 0.7rem);
+  font-weight: 430;
+  line-height: 1.12;
+}
+
+.demo-feature-row-copy small {
+  color: rgba(234, 232, 236, 0.54);
+  font-size: clamp(0.46rem, 0.72vw, 0.58rem);
+  font-weight: 360;
+  line-height: 1.15;
+}
+
+.demo-feature-row-check {
+  width: clamp(0.72rem, 1.1vw, 0.9rem);
+  height: clamp(0.72rem, 1.1vw, 0.9rem);
+  color: #ff7900;
+  stroke-width: 2;
+}
+
+.demo-feature-section-label {
+  display: block;
+  padding: 0.34rem 0.5rem 0.2rem;
+  color: rgba(231, 229, 234, 0.58);
+  font-size: clamp(0.5rem, 0.76vw, 0.62rem);
+  font-weight: 430;
+  text-align: left;
+}
+
+.demo-frame[data-phase="feature"][data-feature="attachments"] .demo-attachment-trigger {
+  animation: demo-attachment-trigger-pulse 820ms ease-in-out infinite alternate;
+}
+
+.demo-detached-loader {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  place-items: center;
+  border-radius: 32%;
+  background: #000;
+  box-shadow: 0 0 0.24rem rgba(255, 255, 255, 0.12);
+}
+
+.demo-detached-loader svg {
+  width: 100%;
+  height: 100%;
+}
+
+.demo-detached-panel {
+  fill: #fff;
+  transform-box: view-box;
+  transform-origin: center;
+}
+
+.demo-detached-panel-left {
+  animation: demo-detached-left 820ms ease-in-out infinite alternate;
+}
+
+.demo-detached-panel-right {
+  animation: demo-detached-right 820ms ease-in-out infinite alternate;
+}
+
+.demo-frame[data-phase="working"] .demo-working-window,
+.demo-frame[data-phase="merging"] .demo-working-window {
+  visibility: visible;
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 70ms, 70ms, 0s;
+}
+
+.demo-notch-content {
+  box-sizing: border-box;
+}
+
+@media (min-width: 640px) {
+  .demo-frame[data-task="0"] {
+    --demo-chat-x: 34%;
+    --demo-chat-y: 48%;
+  }
+
+  .demo-frame[data-task="1"] {
+    --demo-chat-x: 67%;
+    --demo-chat-y: 55%;
+  }
+
+  .demo-frame[data-task="2"] {
+    --demo-chat-x: 48%;
+    --demo-chat-y: 64%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+
+  .demo-frame *,
+  .hero-cta {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .demo-detached-panel {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
 }
