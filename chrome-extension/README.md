@@ -1,6 +1,8 @@
 # Detach Browser Agent
 
-Chrome extension for letting Detach agents work inside the user's real logged-in Chrome profile.
+Chrome extension for the **Signed-in Chrome** browser mode. It lets Detach work inside the user's real logged-in Chrome profile and reuses the already-focused Chrome window by default.
+
+Detach's **Power Browser** mode does not require this extension. It launches an isolated Chromium session and controls it directly through CDP.
 
 This extension is intentionally dependency-free. Load it directly with Chrome's "Load unpacked" button.
 
@@ -19,6 +21,8 @@ gdobcabflbojkedmocahijccipghgoij
 3. Choose Load unpacked.
 4. Select this `chrome-extension/` folder.
 5. Pin "Detach Browser Agent" and open the popup once.
+
+After pulling an extension update, click **Reload** for Detach Browser Agent on `chrome://extensions`.
 
 The direct localhost bridge requires no additional installation. To keep native messaging available as a fallback, optionally run:
 
@@ -77,27 +81,46 @@ Errors are returned as:
 }
 ```
 
-## Commands
+## Runtime commands
+
+These commands are the private engine contract used by Detach itself. Agents no longer receive them as separate tools. They receive one `detach_browser_execute` MCP tool and write a Playwright-shaped program; the runtime translates that program into the commands below.
 
 - `browser.status`
 - `browser.list_tabs`
 - `browser.get_active_tab`
 - `browser.open_tab`
+- `browser.activate_tab`
+- `browser.close_tab`
 - `browser.navigate`
+- `browser.back`
+- `browser.forward`
+- `browser.refresh`
 - `browser.snapshot`
 - `browser.extract_text`
 - `browser.get_selection`
 - `browser.click`
+- `browser.hover`
 - `browser.type`
+- `browser.key`
+- `browser.dropdown_options`
 - `browser.select`
+- `browser.upload_file`
 - `browser.scroll`
+- `browser.wait`
 - `browser.screenshot`
+- `browser.events`
+- `browser.dialog` (Power Browser only)
+- `browser.begin_task` and `browser.end_task` (runtime-managed task scope; isolation is explicit)
 - `browser.request_all_sites_access`
 
-Targets can use `tabId`, `ref`, `selector`, or visible `targetText` depending on the command. `browser.snapshot` returns stable element refs such as `lz-1`, which later commands can use.
+Targets can use `tabId`, `ref`, `selector`, or visible `targetText` depending on the command. `browser.snapshot` returns collision-free refs such as `lz-a1b2c3d4-7`; refs remain bound to the same DOM element until it is removed or the page navigates.
+
+The code tool returns pruned semantic trees and automatically drains popup, new-tab, download, navigation, and failure events. Power Browser additionally reports and controls JavaScript dialogs through CDP.
 
 `browser.request_all_sites_access` is listed for protocol completeness, but Chrome normally requires permission prompts to start from a user gesture. In practice the popup button is the reliable way to grant all-sites access during development.
 
 ## Safety Notes
 
-This first extension build does not approve sensitive browser actions by itself. The next server-v2 step should add policy gates before allowing actions such as submit, purchase, delete, send, publish, or irreversible navigation.
+The extension never exposes saved password values to the agent. After Touch ID, the credential is bound directly to the previously verified DOM refs; when a validated submit ref is supplied, fill and submit happen atomically and Detach returns structured navigation state. URL/title navigation checks remain available while DOM inspection and screenshots are locked. Detach does not use global keyboard events that could reach Chrome's address bar, and existing Chrome windows are never closed.
+
+After a browser program returns explicit verified completion evidence, the runtime can learn domain-scoped semantic locators into the app's local `browser-skills` directory. These generated skills are attached on later visits and never record credentials, typed values, or per-run user content.

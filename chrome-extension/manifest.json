@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Detach Browser Agent",
   "description": "Lets Detach agents inspect and act on the current Chrome tab with user-approved access.",
-  "version": "0.1.2",
+  "version": "0.3.4",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuqmgjv4ejwwhBAoXXyh6zRhx0QsYH8ZtpDTS2OCfDXgpGvda2ZylkotyJhZvEYUUi2NtJLfJLmavpziivA6ai+TWT3UhbuAhst432KL2OgDPzOXj3oVnsnUhqgW2PZXQi0no/6wd1SAAfX64qCbxVxuSBlRfi1RcFswlY4q1YPL/yYc+XGyuYMgDPgocsdxzKDzAyQzsyvsKWcb3DO5MmWkJjeiNsRxa8DUuwJFFD8J2cT4DmgmSbzB94UJip9FNCv76QqZMN8M20Kt8w9bBfSlg7DRbG9+MgyBr6zc6NclBG9F1ukxzlPIwxBXgrpVqKfqiUIyQBAF9n9gSCpT3kQIDAQAB",
   "action": {
     "default_title": "Detach Browser Agent",
@@ -16,10 +16,12 @@
   },
   "permissions": [
     "activeTab",
+    "downloads",
     "nativeMessaging",
     "scripting",
     "storage",
-    "tabs"
+    "tabs",
+    "webNavigation"
   ],
   "optional_host_permissions": [
     "<all_urls>"
