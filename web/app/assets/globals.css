@@ -13,11 +13,22 @@
 
 @font-face {
   font-family: "normal";
-  src: url("./PPNeueMontreal-Regular.7a832673.woff");
+  src: url("./SF-Pro-Display-Regular.otf");
+}
+
+@font-face {
+  font-family: "apple";
+  src: url("./SF-Pro-Display-Bold.otf");
 }
 
 .apple {
-  font-family: "Inter", sans-serif;
+  font-family: "apple", sans-serif;
+  letter-spacing: -0.05em;
+  font-weight: bold;
+}
+
+.soft-bg {
+  background-color: #F0EFEB;
 }
 
 @theme inline {
@@ -25,6 +36,7 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --color-background-secondary: #f6f6f6;
 }
 
 html {
@@ -39,7 +51,65 @@ body {
 }
 
 .sick {
-  font-family: "genz", sans-serif;
+  /* font-family: "genz", sans-serif;
+  text-transform: capitalize; */
+  font-family: "apple", sans-serif;
+  letter-spacing: -0.05em;
+  font-weight: bold;
+  text-transform: capitalize;
+}
+
+.container {
+  max-width: 1300px;
+  width: 100%;
+  margin-inline: auto;
+}
+
+.rich-bg {
+  background-color: #F0EFEB;
+}
+
+.dark-rich-bg {
+  background-color: #FAFAFA;
+}
+
+.marketing-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  /* height: 400px; */
+  min-width: 0;
+  padding: var(--spacing-20);
+  overflow: hidden;
+  border: 1px solid var(--color-background-secondary);
+  border-radius: 4px;
+}
+
+@media (max-width: 767px) {
+  .marketing-card {
+    padding: 1rem;
+    overflow: visible;
+  }
+}
+
+.manifesto .doc .txt .ink {
+  color: #000;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  background: #feea3d59;
+  border-radius: 2px;
+  padding: 1px 2px;
+}
+
+.tile-ico {
+  margin-bottom: 16px;
+  width: 44px;
+  height: 44px;
+  border-radius: 11px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 button,
@@ -53,6 +123,7 @@ a {
     filter: blur(2px);
     transform: translate3d(-50%, calc(-50% + 8px), 0) scale(0.985);
   }
+
   to {
     opacity: 1;
     filter: blur(0);
@@ -61,23 +132,37 @@ a {
 }
 
 @keyframes demo-working-pulse {
-  50% { opacity: 0.35; transform: scaleX(0.72); }
+  50% {
+    opacity: 0.35;
+    transform: scaleX(0.72);
+  }
 }
 
 @keyframes demo-caret-blink {
-  50% { opacity: 0; }
+  50% {
+    opacity: 0;
+  }
 }
 
 @keyframes demo-detached-left {
-  to { opacity: 0.78; transform: translateX(-9%); }
+  to {
+    opacity: 0.78;
+    transform: translateX(-9%);
+  }
 }
 
 @keyframes demo-detached-right {
-  to { opacity: 0.78; transform: translateX(9%); }
+  to {
+    opacity: 0.78;
+    transform: translateX(9%);
+  }
 }
 
 @keyframes demo-attachment-trigger-pulse {
-  50% { color: #ff7900; transform: scale(1.16); }
+  50% {
+    color: #ff7900;
+    transform: scale(1.16);
+  }
 }
 
 /*
@@ -330,18 +415,13 @@ a {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  html { scroll-behavior: auto; }
+  html {
+    scroll-behavior: auto;
+  }
 
-  .demo-frame *,
   .hero-cta {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
-  }
-
-  .demo-detached-panel {
-    animation: none !important;
-    opacity: 1 !important;
-    transform: none !important;
   }
 }

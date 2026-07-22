@@ -403,16 +403,19 @@ export default function InteractiveDemo() {
     ${isWorking ? "fill-[#171012] stroke-0" : "[stroke-width:2.2]"}`;
 
   return (
-    <div className="">
+    <div className="z-50 mt-8">
       <div
-        className="demo-frame scale-80 relative overflow-hidden border border-black/16 bg-[#090909] shadow-[0_28px_80px_rgba(37,29,22,0.17),0_0_0_7px_rgba(255,255,255,0.5)] aspect-[3/4] sm:aspect-[16/9.6] rounded-[1.25rem] sm:rounded-[2rem]"
+        className="demo-frame relative overflow-hidden border-2 border-black/16 shadow-[0_28px_80px_rgba(37,29,22,0.17),0_0_0_7px_rgba(255,255,255,0.5)] aspect-[3/4] sm:aspect-[16/9.6] rounded-[1.25rem] sm:rounded-[2rem]"
         data-phase={phase}
         data-task={taskIndex}
         data-feature={task.feature ?? "none"}
       >
         <div className="absolute inset-0 overflow-hidden text-[#f7f7f7] text-left [font-synthesis:none]">
           <img
-            src="image1.png"
+            src="bg.jpg"
+            // src="https://www.natural.com/assets/images/products/flows-background.png"
+            // src="https://www.natural.com/assets/images/home/control-background.jpg"
+            // src="https://www.ditther.com/pixel_effects/ascii.jpg"
             alt="demo-Wallpaper"
             className="w-full h-full object-cover"
           />
@@ -586,8 +589,14 @@ bg-black overflow-hidden ${notchWidth} ${notchHeight} ${notchRadius}`}
 
           <div className="absolute bottom-0 left-0 right-0 z-[3] flex flex-col items-center gap-[10px] px-4 pt-0 pb-[9px] sm:pb-[18px]">
             <div className="w-full flex justify-center">
-              <div className="flex items-center relative border border-white/18 [backdrop-filter:blur(40px)_saturate(170%)] bg-gradient-to-b from-white/15 to-white/6 shadow-[0_8px_32px_rgba(0,0,0,0.25),inset_0_1px_0_rgba(255,255,255,0.15),inset_0_-1px_0_rgba(0,0,0,0.08)] gap-[4px] px-[7px] py-[5px] rounded-[15px] sm:gap-[clamp(5px,0.8vw,9px)] sm:pt-[clamp(6px,0.8vw,9px)] sm:pb-[clamp(6px,0.8vw,9px)] sm:px-[clamp(9px,1.2vw,14px)] sm:rounded-[22px]">
+              <div className="flex items-center relative border border-white/18 [backdrop-filter:blur(40px)_saturate(170%)] 
+              bg-gradient-to-b from-white/15 to-white/6
+              shadow-[0_8px_32px_rgba(0,0,0,0.25),inset_0_1px_0_rgba(255,255,255,0.15),inset_0_-1px_0_rgba(0,0,0,0.08)] 
+              gap-[4px] px-[7px] py-[5px] rounded-[15px] sm:gap-[clamp(5px,0.8vw,9px)] sm:pt-[clamp(6px,0.8vw,9px)] 
+              sm:pb-[clamp(6px,0.8vw,9px)] sm:px-[clamp(9px,1.2vw,14px)] sm:rounded-[22px]">
                 {[
+                  { src: "/icons/finder.png", alt: "Finder app icon", glow: 1 },
+                  { src: "/icons/settings.png", alt: "Settings app icon", glow: 1 },
                   { src: "/icons/githubApp.webp", alt: "Github app icon", glow: 0 },
                   { src: "/icons/googlecalendarApp.png", alt: "Google Calender app icon", glow: 0 },
                   { src: "/icons/diaApp.webp", alt: "Dia app icon", glow: 0 },
@@ -601,7 +610,8 @@ bg-black overflow-hidden ${notchWidth} ${notchHeight} ${notchRadius}`}
                 ].map((icon, i) => (
                   <div
                     key={i}
-                    className="relative flex flex-col items-center transition-transform duration-200 [transition-timing-function:cubic-bezier(0.34,1.56,0.64,1)]"
+                    className="relative flex flex-col items-center transition-transform duration-200 rounded-full
+                    [transition-timing-function:cubic-bezier(0.34,1.56,0.64,1)]"
                   >
                     <img
                       src={icon.src}
@@ -609,11 +619,11 @@ bg-black overflow-hidden ${notchWidth} ${notchHeight} ${notchRadius}`}
                       loading="lazy"
                       width={44}
                       height={44}
-                      className="object-contain w-[24px] h-[24px] sm:w-[clamp(27px,3.4vw,40px)] sm:h-[clamp(27px,3.4vw,40px)]"
+                      className="object-contain w-[24px] rounded-xl h-[24px] sm:w-[clamp(27px,3.4vw,40px)] sm:h-[clamp(27px,3.4vw,40px)]"
                     />
                     <div
                       style={{ opacity: icon.glow }}
-                      className="absolute -bottom-[5px] w-[3px] h-[3px] rounded-full bg-white/88"
+                      className="absolute -bottom-[5px] w-[3px] h-[3px] rounded-full bg-black"
                     />
                   </div>
                 ))}
