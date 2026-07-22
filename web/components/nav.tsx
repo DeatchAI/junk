@@ -55,7 +55,7 @@ export default function Navbar() {
 
             {/* Download CTA */}
             <a
-              href="#download"
+              href="https://qymrzmmsroxkteaxbgoo.supabase.co/storage/v1/object/public/updates/Detach-1.3.4.dmg"
               className="bg-white text-black text-xs font-semibold px-3 py-1.5 rounded-full flex items-center gap-1.5 hover:bg-zinc-200 focus-visible:bg-zinc-200 focus-visible:outline-none active:scale-95 transition-all"
             >
               

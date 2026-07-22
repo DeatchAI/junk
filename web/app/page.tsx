@@ -123,10 +123,10 @@ export default function Home() {
         <p className="text-gray-500 text-xl max-md:w-full w-1/2 text-center mx-auto">
           Lorem ipsum dolor sit amet, consectetur adipisicing elit. Ut asperiores suscipit maiores?
         </p>
-        <button className="px-4 py-2 bg-black text-white rounded-xl cursor-pointer">
+        <a href="https://qymrzmmsroxkteaxbgoo.supabase.co/storage/v1/object/public/updates/Detach-1.3.4.dmg" className="px-4 py-2 bg-black text-white rounded-xl cursor-pointer">
           <span className="mr-2"></span>
           Download for macOS
-        </button>
+        </a>
         <section className="w-full max-w-[1160px] mx-auto relative" aria-label="Detach workspace demo">
           <InteractiveDemo />
           {/* <img src="/wallpaper.webp" alt="demo-image" className="w-full h-full object-cover object-bottom
