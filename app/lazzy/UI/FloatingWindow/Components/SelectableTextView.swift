@@ -30,6 +30,7 @@ struct SelectableTextView: NSViewRepresentable {
     textView.isEditable = false
     textView.isSelectable = true
     textView.isRichText = true
+    textView.delegate = context.coordinator
     textView.drawsBackground = false
     textView.backgroundColor = .clear
     textView.textContainerInset = .zero
@@ -60,6 +61,11 @@ struct SelectableTextView: NSViewRepresentable {
     let selectionColor = NSColor(theme.accentColor).withAlphaComponent(0.3)
     textView.selectedTextAttributes = [
       .backgroundColor: selectionColor
+    ]
+    textView.linkTextAttributes = [
+      .foregroundColor: NSColor(theme.accentColor),
+      .underlineStyle: NSUnderlineStyle.single.rawValue,
+      .underlineColor: NSColor(theme.accentColor).withAlphaComponent(0.65),
     ]
 
     return textView
@@ -92,17 +98,24 @@ struct SelectableTextView: NSViewRepresentable {
       context.coordinator.blocks = blocks
       context.coordinator.themeFingerprint = theme.fingerprint
     }
+
+    textView.linkTextAttributes = [
+      .foregroundColor: NSColor(theme.accentColor),
+      .underlineStyle: NSUnderlineStyle.single.rawValue,
+      .underlineColor: NSColor(theme.accentColor).withAlphaComponent(0.65),
+    ]
   }
 
   // MARK: - Coordinator
 
-  class Coordinator {
+  class Coordinator: NSObject, NSTextViewDelegate {
     var parent: SelectableTextView
     var blocks: [SelectableTextBlock] = []
     var themeFingerprint: String = ""
 
     init(_ parent: SelectableTextView) {
       self.parent = parent
+      super.init()
     }
 
     func buildAttributedString(
@@ -192,17 +205,29 @@ struct SelectableTextView: NSViewRepresentable {
       return result
     }
 
+    func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+      guard let url = link as? URL else { return false }
+
+      if url.isFileURL {
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+      } else {
+        NSWorkspace.shared.open(url)
+      }
+      return true
+    }
+
     // Inline markdown parser - strips syntax and applies styles
     func renderMarkdownText(
       _ text: String, baseAttributes: [NSAttributedString.Key: Any], theme: ThemeManager
     ) -> NSAttributedString {
       let result = NSMutableAttributedString()
-      var remaining = text
+      let remaining = text
 
-      // Pattern to match: **bold**, *italic*, `code`, or plain text
-      let pattern = #"(\*\*(.+?)\*\*)|(\*(.+?)\*)|(`([^`]+)`)"#
+      // Links come first so labels are styled as one interactive reference
+      // instead of being split into plain brackets and inline styles.
+      let pattern = #"\[([^\]]+)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)|(\*\*(.+?)\*\*)|(\*(.+?)\*)|(`([^`]+)`)"#
       guard let regex = try? NSRegularExpression(pattern: pattern) else {
-        return NSAttributedString(string: text, attributes: baseAttributes)
+        return attributedPlainText(text, baseAttributes: baseAttributes, theme: theme)
       }
 
       var lastEnd = remaining.startIndex
@@ -216,12 +241,24 @@ struct SelectableTextView: NSViewRepresentable {
         // Append text before this match
         if lastEnd < matchRange.lowerBound {
           let plainText = String(remaining[lastEnd..<matchRange.lowerBound])
-          result.append(NSAttributedString(string: plainText, attributes: baseAttributes))
+          result.append(attributedPlainText(plainText, baseAttributes: baseAttributes, theme: theme))
         }
 
         // Determine which group matched and apply appropriate style
         if match.range(at: 1).location != NSNotFound,
           let innerRange = Range(match.range(at: 2), in: remaining)
+        {
+          let labelRange = Range(match.range(at: 1), in: remaining)!
+          result.append(
+            attributedReference(
+              label: String(remaining[labelRange]),
+              target: String(remaining[innerRange]),
+              baseAttributes: baseAttributes,
+              theme: theme
+            )
+          )
+        } else if match.range(at: 3).location != NSNotFound,
+          let innerRange = Range(match.range(at: 4), in: remaining)
         {
           // Bold: **text**
           let innerText = String(remaining[innerRange])
@@ -230,8 +267,8 @@ struct SelectableTextView: NSViewRepresentable {
             boldAttrs[.font] = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
           }
           result.append(NSAttributedString(string: innerText, attributes: boldAttrs))
-        } else if match.range(at: 3).location != NSNotFound,
-          let innerRange = Range(match.range(at: 4), in: remaining)
+        } else if match.range(at: 5).location != NSNotFound,
+          let innerRange = Range(match.range(at: 6), in: remaining)
         {
           // Italic: *text*
           let innerText = String(remaining[innerRange])
@@ -240,8 +277,8 @@ struct SelectableTextView: NSViewRepresentable {
             italicAttrs[.font] = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
           }
           result.append(NSAttributedString(string: innerText, attributes: italicAttrs))
-        } else if match.range(at: 5).location != NSNotFound,
-          let innerRange = Range(match.range(at: 6), in: remaining)
+        } else if match.range(at: 7).location != NSNotFound,
+          let innerRange = Range(match.range(at: 8), in: remaining)
         {
           // Code: `text`
           let innerText = String(remaining[innerRange])
@@ -257,10 +294,86 @@ struct SelectableTextView: NSViewRepresentable {
       // Append remaining text after last match
       if lastEnd < remaining.endIndex {
         let plainText = String(remaining[lastEnd...])
-        result.append(NSAttributedString(string: plainText, attributes: baseAttributes))
+        result.append(attributedPlainText(plainText, baseAttributes: baseAttributes, theme: theme))
       }
 
       return result
+    }
+
+    private func attributedPlainText(
+      _ text: String,
+      baseAttributes: [NSAttributedString.Key: Any],
+      theme: ThemeManager
+    ) -> NSAttributedString {
+      let result = NSMutableAttributedString()
+      let pattern = #"(?:(?:https?|file)://[^\s<>()]+)|(?:(?:(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9_-]+\.(?:swift|m|mm|h|ts|tsx|js|jsx|json|md|py|go|rs|java|kt|css|html|yaml|yml|sh|rb|sql|c|cpp|cc|hpp))(?:\s*\(line\s+\d+\)|:\d+)?)"#
+      guard let regex = try? NSRegularExpression(pattern: pattern) else {
+        return NSAttributedString(string: text, attributes: baseAttributes)
+      }
+
+      let fullRange = NSRange(location: 0, length: (text as NSString).length)
+      var cursor = 0
+      for match in regex.matches(in: text, range: fullRange) {
+        if cursor < match.range.location {
+          result.append(
+            NSAttributedString(
+              string: (text as NSString).substring(with: NSRange(location: cursor, length: match.range.location - cursor)),
+              attributes: baseAttributes
+            )
+          )
+        }
+
+        let rawReference = (text as NSString).substring(with: match.range)
+        let reference = rawReference.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:"))
+        result.append(
+          attributedReference(
+            label: reference,
+            target: reference,
+            baseAttributes: baseAttributes,
+            theme: theme
+          )
+        )
+        let trailing = String(rawReference.dropFirst(reference.count))
+        if !trailing.isEmpty {
+          result.append(NSAttributedString(string: trailing, attributes: baseAttributes))
+        }
+        cursor = NSMaxRange(match.range)
+      }
+
+      if cursor < fullRange.length {
+        result.append(
+          NSAttributedString(
+            string: (text as NSString).substring(from: cursor),
+            attributes: baseAttributes
+          )
+        )
+      }
+      return result
+    }
+
+    private func attributedReference(
+      label: String,
+      target: String,
+      baseAttributes: [NSAttributedString.Key: Any],
+      theme: ThemeManager
+    ) -> NSAttributedString {
+      var attributes = baseAttributes
+      let accent = NSColor(theme.accentColor)
+      attributes[.foregroundColor] = accent
+      attributes[.backgroundColor] = accent.withAlphaComponent(0.12)
+      attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+      attributes[.underlineColor] = accent.withAlphaComponent(0.65)
+      if let font = baseAttributes[.font] as? NSFont {
+        attributes[.font] = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+      }
+
+      if target.hasPrefix("/") {
+        let path = target.split(separator: "#", maxSplits: 1).first.map(String.init) ?? target
+        attributes[.link] = URL(fileURLWithPath: path)
+      } else if let url = URL(string: target), url.scheme != nil {
+        attributes[.link] = url
+      }
+      return NSAttributedString(string: label, attributes: attributes)
     }
   }
 }

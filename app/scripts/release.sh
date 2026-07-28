@@ -119,6 +119,8 @@ note "Building the v2 Detach runtime"
 ditto "$PROJECT_ROOT/server-v2/detach-runtime" "$PROJECT_ROOT/lazzy/detach-runtime"
 RUNTIME_HASHES="$(shasum -a 256 "$PROJECT_ROOT/server-v2/detach-runtime" "$PROJECT_ROOT/lazzy/detach-runtime" | awk '{print $1}' | uniq)"
 [[ "$(printf '%s\n' "$RUNTIME_HASHES" | wc -l | tr -d ' ')" == "1" ]] || fail "The bundled v2 runtime does not match the build output"
+[[ -x "$PROJECT_ROOT/lazzy/opencode" ]] || fail "The bundled OpenCode harness was not staged"
+codesign --force --options runtime --timestamp --sign "Developer ID Application" "$PROJECT_ROOT/lazzy/opencode"
 
 note "Archiving $APP_NAME $VERSION ($BUILD)"
 xcodebuild \

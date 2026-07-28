@@ -69,7 +69,7 @@ class BrowserMCPServer {
             },
             serverInfo: {
               name: "detach-browser",
-              version: "0.3.5",
+              version: "0.4.0",
             },
           },
         });
@@ -184,7 +184,7 @@ const TOOL_COMMANDS: Record<string, string> = {
 export const BROWSER_TOOLS = [
   tool(
     "detach_browser_execute",
-    "Run a safe Playwright-shaped JavaScript program against the task browser. Signed-in mode reuses the focused Chrome window. Page supports status/goto/open/url/title/snapshot/evaluate, waitForURL (safe during credential inspection lock), strict semantic and CSS locators, keyboard, waits, tabs, history, events, dialogs, and screenshots. Locators support label/role/placeholder targeting, describe() for live metadata and stable refs, first/last/nth disambiguation, and live count/text/value reads. Return { taskComplete: true, evidence: ... } only after direct verification so Detach can learn reusable site navigation. Multiple actions and local transforms run in one call without filesystem, process, imports, or general network access.",
+    "Run a safe Playwright-shaped JavaScript program in the user's focused signed-in Chrome window. Page supports status/goto/open/url/title/snapshot/evaluate, frameLocator, tables, task events, dialogs, visual screenshots, media captions/frames, and bounded document artifacts including PDF text. Locators support strict label/role/placeholder/CSS targeting, stable frame-scoped refs, live reads, validation, drag/range input, file uploads, bounding boxes, and element screenshots. Use page.artifact(urlOrLocator) for task-owned web documents and page.waitForEvent('download'|'popup'|'navigation') for asynchronous browser state. Return { taskComplete: true, evidence: ... } only after direct verification. Multiple actions and local transforms run in one call without filesystem, process, imports, or unrestricted network access.",
     {
       code: { type: "string", description: "Playwright-shaped JavaScript. Usually return the final verified value or snapshot." },
       timeoutMs: { type: "number", minimum: 1000, maximum: 300000 },

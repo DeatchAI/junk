@@ -5,16 +5,22 @@
   "private": true,
   "scripts": {
     "dev": "bun run src/index.ts",
-    "build": "bun build --compile --outfile detach-runtime src/index.ts && codesign --force --options runtime --entitlements ../server-deprecated-use-v2/entitlements.plist --sign - detach-runtime"
+    "sync:opencode": "bun run scripts/sync-opencode.ts",
+    "build": "bun run sync:opencode && bun build --compile --outfile detach-runtime src/index.ts && codesign --force --options runtime --entitlements entitlements.plist --sign - detach-runtime",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "check": "bun run test && bun run typecheck"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "^1.2.21"
   },
   "module": "src/index.ts",
   "peerDependencies": {
     "typescript": "^5"
   },
   "dependencies": {
-    "@composio/core": "0.13.1"
+    "@composio/core": "0.13.1",
+    "opencode-ai": "1.18.7",
+    "pdfjs-dist": "5.4.149"
   }
 }

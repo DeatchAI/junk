@@ -101,6 +101,7 @@ struct FloatingChatResponseView: View {
         contentHeight = height
       }
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   @ViewBuilder

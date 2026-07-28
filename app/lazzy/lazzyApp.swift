@@ -19,6 +19,7 @@ struct lazzyApp: App {
   init() {
     // Initialize SVGCoder for SVG support
     SDImageCodersManager.shared.addCoder(SDImageSVGCoder.shared)
+    AnalyticsManager.shared.configure()
   }
 
   var body: some Scene {
@@ -56,6 +57,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     NSApp.setActivationPolicy(.accessory)
 
     coordinator?.start()
+    AnalyticsManager.shared.trackAppLaunch()
     print("✅ AppDelegate started coordinator")
   }
 
@@ -77,6 +79,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     for url in urls {
       print("🔗 AppDelegate Received URL: \(url)")
       guard url.scheme == "lazzy" || url.scheme == "detach", let coordinator else {
+        continue
+      }
+
+      // Supabase returns both OAuth and magic-link sign-ins here. This must be
+      // handled before the onboarding gate: the account step is intentionally
+      // available before setup is complete, and it advances by observing the
+      // authenticated session that this callback establishes.
+      if url.host?.lowercased() == "login-callback" {
+        AuthManager.shared.handleDeeplink(url)
+        DispatchQueue.main.async {
+          coordinator.onboardingWindow.show()
+        }
+        continue
+      }
+
+      guard coordinator.hasCompletedOnboarding else {
+        DispatchQueue.main.async {
+          coordinator.onboardingWindow.show()
+        }
         continue
       }
 
@@ -104,23 +125,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
   }
 
-  private func trackAppLaunch() {
-    performLaunchLogging()
-  }
-
-  private func performLaunchLogging() {
-    // Check for update
-    let currentVersion =
-      Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
-    let previousVersion = UserDefaults.standard.string(forKey: "last_version")
-
-    if let previousVersion = previousVersion, previousVersion != currentVersion {
-      print("Detach updated from \(previousVersion) to \(currentVersion)")
-    }
-
-    // Update stored version
-    UserDefaults.standard.set(currentVersion, forKey: "last_version")
-  }
 }
 
 // CRITICAL: Re-assert menu bar only mode immediately
@@ -185,39 +189,7 @@ struct MenuBarContentView: View {
 
       // Divider()
 
-      // Permissions button
-      if !coordinator.permissionsManager.hasAccessibilityPermission {
-        Button("Grant Accessibility Permission") {
-          coordinator.permissionsManager.requestAccessibilityPermission()
-        }
-      }
-
-      if !coordinator.permissionsManager.hasScreenCapturePermission {
-        Button("Grant Screen Recording Permission") {
-          coordinator.permissionsManager.requestScreenCapturePermission()
-        }
-      }
-
-      // Start/Stop button
-      // if coordinator.isMonitoring {
-      //   Button("Stop Monitoring") {
-      //     coordinator.stop()
-      //   }
-      // } else {
-      //   Button("Start Monitoring") {
-      //     coordinator.start()
-      //   }
-      // }
-
-      Divider()
-
-      // MCP Settings button
-      Button("Settings") {
-        MenuBarContentView.showSettings(
-          wsManager: coordinator.wsManager,
-          onRunWorkflow: coordinator.runWorkflow
-        )
-      }
+      OnboardingMenuSection(coordinator: coordinator)
 
       // Button(
       //   FIFinderSyncController.isExtensionEnabled
@@ -321,5 +293,51 @@ struct MenuBarContentView: View {
 
     window.center()
     controller.showWindow(nil)
+  }
+}
+
+private struct PermissionMenuSection: View {
+  @ObservedObject var permissions: PermissionsManager
+
+  var body: some View {
+    Group {
+      if !permissions.hasAccessibilityPermission {
+        Button("Grant Accessibility Permission") {
+          permissions.requestAccessibilityPermission()
+        }
+      }
+
+      if !permissions.hasScreenCapturePermission {
+        Button("Grant Screen Recording Permission") {
+          permissions.requestScreenCapturePermission()
+        }
+      }
+    }
+    // MenuBarExtra content can remain alive while System Settings changes a
+    // TCC grant. Refresh every time this menu section is shown.
+    .onAppear { permissions.checkPermissions() }
+  }
+}
+
+private struct OnboardingMenuSection: View {
+  @ObservedObject var coordinator: AppCoordinator
+
+  var body: some View {
+    if !coordinator.hasCompletedOnboarding {
+      Button("Continue Setup") {
+        coordinator.onboardingWindow.show()
+      }
+    } else {
+      PermissionMenuSection(permissions: coordinator.permissionsManager)
+
+      Divider()
+
+      Button("Settings") {
+        MenuBarContentView.showSettings(
+          wsManager: coordinator.wsManager,
+          onRunWorkflow: coordinator.runWorkflow
+        )
+      }
+    }
   }
 }

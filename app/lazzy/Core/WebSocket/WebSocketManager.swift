@@ -49,6 +49,7 @@ class WebSocketManager: ObservableObject {
   private var agentActivityListeners: [(AgentActivityUpdate) -> Void] = []
   private var runCompletionListeners: [(String?, String) -> Void] = []
   private var runErrorListeners: [(String?, String) -> Void] = []
+  private var cancellables = Set<AnyCancellable>()
 
   // MARK: - Callbacks
 
@@ -97,6 +98,12 @@ class WebSocketManager: ObservableObject {
 
   init() {
     session = URLSession(configuration: .default)
+    NotificationCenter.default.publisher(for: .detachHostedProfileDidSync)
+      .receive(on: RunLoop.main)
+      .sink { [weak self] _ in
+        self?.requestCapabilities()
+      }
+      .store(in: &cancellables)
   }
 
   // MARK: - Multi-listener Hooks
@@ -172,7 +179,6 @@ class WebSocketManager: ObservableObject {
           self.isConnected = true
           self.lastError = nil
           self.startPingTimer()
-          self.syncBrowserSettings()
 
           // Fetch initial data
           self.listQuickActions()
@@ -191,26 +197,6 @@ class WebSocketManager: ObservableObject {
   func requestCapabilities() {
     guard isConnected else { return }
     sendRawRequest(["type": "capabilities"], label: "capabilities")
-  }
-
-  func syncBrowserSettings() {
-    let trimmedCdpUrl = BrowserSettings.cdpUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-    let resolvedCdpUrl = trimmedCdpUrl.isEmpty ? nil : trimmedCdpUrl
-    let resolvedUserDataDir: String?
-    if BrowserSettings.mode == .power && !BrowserSettings.userDataDir.isEmpty {
-      resolvedUserDataDir = BrowserSettings.userDataDir
-    } else {
-      resolvedUserDataDir = nil
-    }
-
-    updateBrowserSettings(
-      mode: BrowserSettings.mode.rawValue,
-      cdpUrl: resolvedCdpUrl,
-      headless: BrowserSettings.headless,
-      viewportWidth: BrowserSettings.viewportWidth,
-      viewportHeight: BrowserSettings.viewportHeight,
-      userDataDir: resolvedUserDataDir
-    )
   }
 
   func disconnect() {
@@ -451,25 +437,6 @@ class WebSocketManager: ObservableObject {
       zeroDataRetention: zeroDataRetention
     )
     sendRequest(request, label: "update_ai_settings")
-  }
-
-  // MARK: - Browser Settings Management
-
-  /// Update browser automation settings on the server
-  func updateBrowserSettings(
-    mode: String? = nil, cdpUrl: String?, headless: Bool?, viewportWidth: Int?, viewportHeight: Int?,
-    userDataDir: String? = nil
-  ) {
-    guard isConnected else { return }
-    let request = UpdateBrowserSettingsRequest(
-      mode: mode,
-      cdpUrl: cdpUrl,
-      headless: headless,
-      viewportWidth: viewportWidth,
-      viewportHeight: viewportHeight,
-      userDataDir: userDataDir
-    )
-    sendRequest(request, label: "update_browser_settings")
   }
 
   // MARK: - BYOK API Keys Management
@@ -872,12 +839,12 @@ class WebSocketManager: ObservableObject {
     }
 
     let lifecyclePatterns = [
-      #"^Using\s+(Codex|Claude|Grok|Agent)\b"#,
-      #"^Starting\s+(Codex|Claude|Grok)\b"#,
-      #"^(Codex|Claude|Grok)\s+is\s+thinking\b"#,
-      #"^(Codex|Claude|Grok)\s+is\s+still\s+working\b"#,
-      #"^(Codex|Claude|Grok)\s+(thread|session)\s+started\b"#,
-      #"^(Codex|Claude|Grok)\s+will\s+use\s+MCP\s+servers\b"#,
+      #"^Using\s+(Codex|Claude|Grok|Hosted AI|Agent)\b"#,
+      #"^Starting\s+(Codex|Claude|Grok|Hosted AI)\b"#,
+      #"^(Codex|Claude|Grok|Hosted AI)\s+is\s+thinking\b"#,
+      #"^(Codex|Claude|Grok|Hosted AI)\s+is\s+still\s+working\b"#,
+      #"^(Codex|Claude|Grok|Hosted AI)\s+(thread|session)\s+started\b"#,
+      #"^(Codex|Claude|Grok|Hosted AI)\s+will\s+use\s+MCP\s+servers\b"#,
       #"^Loaded\s+\d+\s+MCP\s+server"#,
       #"^Thinking:\s*"#,
     ]

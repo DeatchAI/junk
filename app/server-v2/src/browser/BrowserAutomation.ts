@@ -4,13 +4,9 @@ import { basename, delimiter, resolve, sep } from "node:path";
 import { BrowserBridge, type BrowserCommandEnvelope } from "./BrowserBridge";
 import { BrowserCodeExecutor } from "./BrowserCodeExecutor";
 import { compactBrowserSnapshot } from "./BrowserSnapshot";
-import { PowerBrowserActor, type PowerBrowserSettings } from "./PowerBrowserActor";
+import { DocumentArtifactService } from "./DocumentArtifactService";
 
-export type BrowserAutomationMode = "signed_in" | "power";
-
-export interface BrowserAutomationSettings extends PowerBrowserSettings {
-  mode: BrowserAutomationMode;
-}
+export type BrowserAutomationMode = "signed_in";
 
 export interface BrowserTraceEntry {
   id: string;
@@ -33,13 +29,7 @@ export interface BrowserArtifacts {
   completedAt?: number;
 }
 
-const DEFAULT_SETTINGS: BrowserAutomationSettings = {
-  mode: "signed_in",
-  headless: false,
-  viewportWidth: 1280,
-  viewportHeight: 800,
-};
-const BROWSER_HARNESS_VERSION = "0.3.5";
+const BROWSER_HARNESS_VERSION = "0.4.0";
 
 const ARTIFACT_SCREENSHOT_COMMANDS = new Set([
   "browser.open_tab",
@@ -52,80 +42,63 @@ const ARTIFACT_SCREENSHOT_COMMANDS = new Set([
   "browser.select",
   "browser.upload_file",
 ]);
-const CODE_SCREENSHOT_OPERATIONS = new Set(["navigate", "open_tab", "click", "key", "select", "upload_file"]);
+const CODE_SCREENSHOT_OPERATIONS = new Set([
+  "navigate",
+  "open_tab",
+  "click",
+  "key",
+  "check",
+  "drag",
+  "select",
+  "upload_file",
+  "media",
+]);
 const MAX_TRAJECTORY_SCREENSHOTS = 4;
 
 export class BrowserAutomation {
-  private settings = { ...DEFAULT_SETTINGS };
-  private readonly power = new PowerBrowserActor(DEFAULT_SETTINGS);
-  private readonly taskModes = new Map<string, BrowserAutomationMode>();
+  private readonly activeTasks = new Set<string>();
   private readonly taskUploadRoots = new Map<string, string[]>();
   private readonly artifacts = new Map<string, BrowserArtifacts>();
+  private readonly documents = new DocumentArtifactService();
 
   constructor(private readonly extension: BrowserBridge) {}
-
-  updateSettings(next: Partial<BrowserAutomationSettings>) {
-    const previousMode = this.settings.mode;
-    const sanitized: Partial<BrowserAutomationSettings> = {};
-    if (next.mode === "power" || next.mode === "signed_in") sanitized.mode = next.mode;
-    if (typeof next.cdpUrl === "string") sanitized.cdpUrl = next.cdpUrl.trim() || undefined;
-    if (typeof next.userDataDir === "string") sanitized.userDataDir = next.userDataDir.trim() || undefined;
-    if (typeof next.headless === "boolean") sanitized.headless = next.headless;
-    if (typeof next.viewportWidth === "number") sanitized.viewportWidth = next.viewportWidth;
-    if (typeof next.viewportHeight === "number") sanitized.viewportHeight = next.viewportHeight;
-    const mode = sanitized.mode ?? this.settings.mode;
-    this.settings = {
-      ...this.settings,
-      ...sanitized,
-      mode,
-      viewportWidth: clampNumber(sanitized.viewportWidth, 800, 3840, this.settings.viewportWidth),
-      viewportHeight: clampNumber(sanitized.viewportHeight, 600, 2160, this.settings.viewportHeight),
-    };
-    this.power.updateSettings(this.settings);
-    if (previousMode === "power" && mode === "signed_in" && ![...this.taskModes.values()].includes("power")) {
-      void this.power.stop();
-    }
-    return this.getSettings();
-  }
-
-  getSettings() {
-    return { ...this.settings };
-  }
 
   async getStatus() {
     const extension = this.extension.getStatus();
     return {
       harnessVersion: BROWSER_HARNESS_VERSION,
-      mode: this.settings.mode,
+      mode: "signed_in" as const,
       ...extension,
       extension,
-      power: await this.power.status(),
+      activeTasks: this.activeTasks.size,
     };
   }
 
   async beginTask(runId: string, allowedUploadPaths: string[] = []) {
-    const mode = this.settings.mode;
-    this.taskModes.set(runId, mode);
+    this.activeTasks.add(runId);
     this.artifacts.set(runId, { trace: [], screenshots: [] });
     this.taskUploadRoots.set(runId, uniqueResolvedPaths([
       ...allowedUploadPaths,
       ...(Bun.env.DETACH_BROWSER_UPLOAD_ROOTS?.split(delimiter) ?? []),
     ]));
-    if (mode === "power") {
-      await this.power.beginTask(runId);
-    } else {
-      const status = this.extension.getStatus();
-      if (!status.extensionConnected) {
-        throw new Error("Signed-in Chrome is selected, but the Detach Browser Agent extension is not connected. Open its popup or choose Power Browser in Settings.");
-      }
-      await this.extension.execute({ command: "browser.begin_task", payload: { runId, isolated: false } });
+    const status = this.extension.getStatus();
+    if (!status.extensionConnected) {
+      this.activeTasks.delete(runId);
+      throw new Error("The Detach Browser Agent extension is not connected. Open its popup in signed-in Chrome.");
+    }
+    try {
+      await this.extension.execute({ command: "browser.begin_task", payload: { runId } });
+    } catch (error) {
+      this.activeTasks.delete(runId);
+      this.artifacts.delete(runId);
+      this.taskUploadRoots.delete(runId);
+      throw error;
     }
   }
 
   async getTaskContext(runId: string) {
-    const mode = this.taskModes.get(runId);
-    if (!mode) return undefined;
-    const tab = asRecord(await this.executeUntraced({ command: "browser.get_active_tab", payload: {} }, runId, mode));
+    if (!this.activeTasks.has(runId)) return undefined;
+    const tab = asRecord(await this.executeUntraced({ command: "browser.get_active_tab", payload: {} }, runId));
     return {
       url: typeof tab.url === "string" ? tab.url : undefined,
       title: typeof tab.title === "string" ? tab.title : undefined,
@@ -134,15 +107,14 @@ export class BrowserAutomation {
   }
 
   async endTask(runId: string, captureFinal = true) {
-    const mode = this.taskModes.get(runId);
-    if (!mode) return;
+    if (!this.activeTasks.has(runId)) return;
     const artifacts = this.ensureArtifacts(runId);
     if (captureFinal) {
       try {
         const snapshot = await this.executeUntraced({
           command: "browser.snapshot",
           payload: { maxElements: 200, maxTextLength: 12_000 },
-        }, runId, mode);
+        }, runId);
         artifacts.finalState = compactBrowserSnapshot(snapshot, {
           includeText: true,
           includeTables: true,
@@ -153,7 +125,7 @@ export class BrowserAutomation {
         // A final screenshot can still provide evidence if semantic inspection is restricted.
       }
       try {
-        const screenshot = await this.executeUntraced({ command: "browser.screenshot", payload: { format: "jpeg", quality: 75 } }, runId, mode);
+        const screenshot = await this.executeUntraced({ command: "browser.screenshot", payload: { format: "jpeg", quality: 75 } }, runId);
         const data = screenshotData(screenshot);
         if (data) artifacts.finalScreenshot = data;
       } catch {
@@ -161,31 +133,26 @@ export class BrowserAutomation {
       }
     }
 
-    if (mode === "power") {
-      await this.power.endTask(runId);
-    } else if (this.extension.getStatus().extensionConnected) {
+    if (this.extension.getStatus().extensionConnected) {
       await this.extension.execute({ command: "browser.end_task", payload: { runId } }).catch(() => undefined);
     }
     artifacts.completedAt = Date.now();
-    this.taskModes.delete(runId);
+    this.activeTasks.delete(runId);
     this.taskUploadRoots.delete(runId);
-    if (mode === "power" && this.settings.mode === "signed_in" && ![...this.taskModes.values()].includes("power")) {
-      await this.power.stop();
-    }
+    this.documents.endTask(runId);
     this.pruneArtifacts();
   }
 
   async execute(envelope: BrowserCommandEnvelope, runId?: string) {
     const command = envelope.command?.trim();
     if (!command) throw new Error("Browser command is required");
-    const mode = runId ? this.taskModes.get(runId) ?? this.settings.mode : this.settings.mode;
     const startedAt = Date.now();
-    const args = await this.normalizePayload(command, envelope.payload ?? {}, mode, runId);
+    const args = await this.normalizePayload(command, envelope.payload ?? {}, runId);
     const trace: BrowserTraceEntry = {
       id: `browser_trace_${crypto.randomUUID()}`,
       runId,
       command,
-      engine: mode,
+      engine: "signed_in",
       startedAt,
       durationMs: 0,
       ok: false,
@@ -194,8 +161,8 @@ export class BrowserAutomation {
 
     try {
       const result = command === "browser.execute_code"
-        ? await this.executeCode(args, runId, mode)
-        : await this.executeUntraced({ command, payload: args }, runId, mode);
+        ? await this.executeCode(args, runId)
+        : await this.executeUntraced({ command, payload: args }, runId);
       trace.ok = true;
       trace.result = summarizeResult(result);
       const images = screenshotDataList(result);
@@ -203,11 +170,11 @@ export class BrowserAutomation {
         const artifacts = this.ensureArtifacts(runId);
         artifacts.screenshots.push(...images.slice(0, Math.max(0, MAX_TRAJECTORY_SCREENSHOTS - artifacts.screenshots.length)));
       } else if (runId && shouldCaptureAfter(command, result)) {
-        await this.captureArtifactScreenshot(runId, mode);
+        await this.captureArtifactScreenshot(runId);
       }
       return attachMetadata(result, {
         traceId: trace.id,
-        engine: mode,
+        engine: "signed_in",
         durationMs: Date.now() - startedAt,
       });
     } catch (error) {
@@ -235,31 +202,48 @@ export class BrowserAutomation {
   }
 
   async stop() {
-    for (const runId of [...this.taskModes.keys()]) {
+    for (const runId of [...this.activeTasks]) {
       await this.endTask(runId).catch(() => undefined);
     }
-    await this.power.stop();
+    this.documents.clear();
   }
 
-  private async executeUntraced(envelope: BrowserCommandEnvelope, runId: string | undefined, mode: BrowserAutomationMode) {
-    if (mode === "power") return await this.power.execute(envelope.command, envelope.payload, runId);
+  private async executeUntraced(envelope: BrowserCommandEnvelope, runId?: string) {
+    if (envelope.command === "browser.artifact") {
+      if (!runId) throw new Error("Document artifacts require an active browser task");
+      const fetched = asRecord(await this.extension.execute({
+        command: "browser.artifact_fetch",
+        payload: { ...(envelope.payload ?? {}), runId },
+      }));
+      return await this.documents.ingest(runId, {
+        url: stringValue(fetched.url) || stringValue(envelope.payload?.url) || "",
+        mimeType: stringValue(fetched.mimeType),
+        fileName: stringValue(fetched.fileName),
+        dataBase64: stringValue(fetched.dataBase64) || "",
+      });
+    }
+    if (envelope.command === "browser.artifacts") {
+      if (!runId) throw new Error("Document artifacts require an active browser task");
+      const artifactId = stringValue(envelope.payload?.artifactId);
+      return artifactId ? this.documents.get(runId, artifactId) : { artifacts: this.documents.list(runId) };
+    }
     return await this.extension.execute({
       command: envelope.command,
       payload: { ...(envelope.payload ?? {}), ...(runId ? { runId } : {}) },
     });
   }
 
-  private async executeCode(payload: Record<string, unknown>, runId: string | undefined, mode: BrowserAutomationMode) {
+  private async executeCode(payload: Record<string, unknown>, runId?: string) {
     const code = typeof payload.code === "string" ? payload.code : "";
     const timeoutMs = clampNumber(payload.timeoutMs, 1_000, 300_000, 60_000);
     const executor = new BrowserCodeExecutor(async (command, commandPayload) => {
-      const normalized = await this.normalizePayload(command, commandPayload, mode, runId);
-      return await this.executeUntraced({ command, payload: normalized }, runId, mode);
+      const normalized = await this.normalizePayload(command, commandPayload, runId);
+      return await this.executeUntraced({ command, payload: normalized }, runId);
     });
     return await executor.execute(code, timeoutMs);
   }
 
-  private async normalizePayload(command: string, payload: Record<string, unknown>, mode: BrowserAutomationMode, runId?: string) {
+  private async normalizePayload(command: string, payload: Record<string, unknown>, runId?: string) {
     if (command !== "browser.upload_file") return payload;
     const paths = Array.isArray(payload.paths)
       ? payload.paths.filter((value): value is string => typeof value === "string")
@@ -273,8 +257,6 @@ export class BrowserAutomation {
         throw new Error(`Upload path is not attached to this task or inside its workspace: ${basename(path)}`);
       }
     }
-    if (mode === "power") return payload;
-
     const files: Array<{ name: string; dataBase64: string; type: string }> = [];
     for (const requestedPath of paths) {
       const path = resolve(requestedPath);
@@ -299,14 +281,14 @@ export class BrowserAutomation {
     return artifacts;
   }
 
-  private async captureArtifactScreenshot(runId: string, mode: BrowserAutomationMode) {
+  private async captureArtifactScreenshot(runId: string) {
     const artifacts = this.ensureArtifacts(runId);
     if (artifacts.screenshots.length >= MAX_TRAJECTORY_SCREENSHOTS) return;
     try {
       const screenshot = await this.executeUntraced({
         command: "browser.screenshot",
         payload: { format: "jpeg", quality: 65 },
-      }, runId, mode);
+      }, runId);
       const image = screenshotData(screenshot);
       if (image) artifacts.screenshots.push(image);
     } catch {

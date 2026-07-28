@@ -19,10 +19,14 @@ let nativeFallbackTimer;
 let lastNativeError;
 const pendingCommands = new Map();
 const taskWindows = new Map();
-const ownedTaskWindows = new Set();
 const taskEvents = new Map();
 const downloadTasks = new Map();
+const downloadMetadata = new Map();
+const refTargets = new Map();
+const navigationRevisions = new Map();
+const activeFrameByTab = new Map();
 let recentInteraction;
+let creatingOffscreenDocument;
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.local.set({
@@ -61,12 +65,17 @@ function queueTabCreated(runId, tab) {
 
 chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
   sensitiveTabIds.delete(tabId);
+  clearTabRefs(tabId);
+  navigationRevisions.delete(tabId);
   const runId = runIdForWindow(removeInfo.windowId);
   if (runId) queueTaskEvent(runId, { type: "tab_closed", tabId });
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.url) sensitiveTabIds.delete(tabId);
+  if (changeInfo.url) {
+    sensitiveTabIds.delete(tabId);
+    clearTabRefs(tabId);
+  }
   const runId = runIdForWindow(tab.windowId);
   if (!runId || (!changeInfo.url && changeInfo.status !== "complete")) return;
   queueTaskEvent(runId, {
@@ -77,11 +86,30 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   });
 });
 
+for (const [event, phase] of [
+  [chrome.webNavigation.onBeforeNavigate, "before"],
+  [chrome.webNavigation.onCommitted, "committed"],
+  [chrome.webNavigation.onDOMContentLoaded, "dom_content_loaded"],
+  [chrome.webNavigation.onCompleted, "completed"],
+  [chrome.webNavigation.onHistoryStateUpdated, "history"],
+  [chrome.webNavigation.onReferenceFragmentUpdated, "fragment"],
+]) {
+  event.addListener((details) => recordNavigation(details, phase));
+}
+
 chrome.webNavigation.onErrorOccurred.addListener((details) => {
-  if (details.frameId !== 0) return;
+  recordNavigation(details, "error");
   tabsGet(details.tabId).then((tab) => {
     const runId = runIdForWindow(tab.windowId);
-    if (runId) queueTaskEvent(runId, { type: "failure", failureType: "navigation", tabId: details.tabId, url: details.url, error: details.error });
+    if (runId) queueTaskEvent(runId, {
+      type: "failure",
+      failureType: "navigation",
+      tabId: details.tabId,
+      frameId: details.frameId,
+      documentId: details.documentId,
+      url: details.url,
+      error: details.error
+    });
   }).catch(() => undefined);
 });
 
@@ -90,30 +118,42 @@ chrome.downloads.onCreated.addListener((item) => {
     ? [recentInteraction.runId]
     : taskWindows.size === 1 ? [...taskWindows.keys()] : [];
   for (const runId of taskIds) {
-    downloadTasks.set(`${runId}:${item.id}`, runId);
-    queueTaskEvent(runId, {
+    const key = `${runId}:${item.id}`;
+    const metadata = {
       type: "download",
       phase: "started",
       downloadId: item.id,
       url: item.finalUrl || item.url,
-      filename: item.filename
-    });
+      filename: item.filename,
+      mimeType: item.mime,
+      totalBytes: item.totalBytes,
+    };
+    downloadTasks.set(key, runId);
+    downloadMetadata.set(key, metadata);
+    queueTaskEvent(runId, metadata);
   }
 });
 
 chrome.downloads.onChanged.addListener((delta) => {
   for (const runId of taskWindows.keys()) {
-    if (!downloadTasks.has(`${runId}:${delta.id}`)) continue;
+    const key = `${runId}:${delta.id}`;
+    if (!downloadTasks.has(key)) continue;
+    const metadata = downloadMetadata.get(key) || {};
     const phase = delta.state?.current || (delta.error?.current ? "interrupted" : "progress");
     queueTaskEvent(runId, {
+      ...metadata,
       type: "download",
       phase,
       downloadId: delta.id,
+      filename: delta.filename?.current || metadata.filename,
       receivedBytes: delta.bytesReceived?.current,
-      totalBytes: delta.totalBytes?.current,
+      totalBytes: delta.totalBytes?.current ?? metadata.totalBytes,
       error: delta.error?.current
     });
-    if (phase === "complete" || phase === "interrupted") downloadTasks.delete(`${runId}:${delta.id}`);
+    if (phase === "complete" || phase === "interrupted") {
+      downloadTasks.delete(key);
+      downloadMetadata.delete(key);
+    }
   }
 });
 
@@ -130,7 +170,20 @@ chrome.runtime.onConnect.addListener((port) => {
   });
 });
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.target === "lazzy-dialog-event") {
+    const runId = sender.tab ? runIdForWindow(sender.tab.windowId) : undefined;
+    if (runId) queueTaskEvent(runId, {
+      type: "dialog",
+      tabId: sender.tab.id,
+      frameId: sender.frameId,
+      dialogType: message.dialogType,
+      message: message.message,
+      defaultValue: message.defaultValue,
+      action: message.action,
+    });
+    return false;
+  }
   if (!message || message.target !== "lazzy-service-worker") return false;
 
   handlePopupMessage(message)
@@ -348,7 +401,7 @@ async function handleNativeMessage(message) {
 
   try {
     if (typeof payload?.runId === "string" && [
-      "browser.click", "browser.key", "browser.select", "browser.upload_file"
+      "browser.click", "browser.key", "browser.select", "browser.upload_file", "browser.drag"
     ].includes(command)) {
       recentInteraction = { runId: payload.runId, timestamp: Date.now() };
     }
@@ -407,18 +460,28 @@ async function runBrowserCommand(command, payload) {
       return goHistory(payload, "forward");
     case "browser.refresh":
       return refresh(payload);
+    case "browser.frames":
+      return listFrames(payload);
+    case "browser.resolve_frame":
+      return resolveFrame(payload);
     case "browser.snapshot":
-      return sendContentCommand(await resolveTabId(payload), "snapshot", payload);
+      return snapshotAllFrames(payload);
     case "browser.extract_text":
-      return sendContentCommand(await resolveTabId(payload), "extractText", payload);
+      return extractTextAllFrames(payload);
     case "browser.query":
-      return sendContentCommand(await resolveTabId(payload), "query", payload);
+      return queryAllFrames(payload);
     case "browser.get_selection":
       return sendContentCommand(await resolveTabId(payload), "getSelection", payload);
     case "browser.click":
       return clickAndVerify(payload);
+    case "browser.focus":
+      return sendContentCommand(await resolveTabId(payload), "focus", payload);
+    case "browser.check":
+      return sendContentCommand(await resolveTabId(payload), "check", payload);
     case "browser.hover":
       return sendContentCommand(await resolveTabId(payload), "hover", payload);
+    case "browser.drag":
+      return dragAndVerify(payload);
     case "browser.type":
       return sendContentCommand(await resolveTabId(payload), "type", payload);
     case "browser.key":
@@ -443,6 +506,10 @@ async function runBrowserCommand(command, payload) {
       return sendContentCommand(await resolveTabId(payload), "scroll", payload);
     case "browser.wait":
       return sendContentCommand(await resolveTabId(payload), "wait", payload);
+    case "browser.media":
+      return sendContentCommand(await resolveTabId(payload), "media", payload);
+    case "browser.artifact_fetch":
+      return fetchArtifact(payload);
     case "browser.screenshot":
       {
         const tabId = await resolveTabId(payload);
@@ -452,7 +519,7 @@ async function runBrowserCommand(command, payload) {
     case "browser.events":
       return readTaskEvents(payload);
     case "browser.dialog":
-      throw new Error("JavaScript dialog control requires Power Browser mode");
+      return setDialogPolicy(payload);
     case "browser.request_all_sites_access":
       return requestAllSitesAccess();
     default:
@@ -473,7 +540,8 @@ async function buildStatus(payload = {}) {
     nativeError: lastNativeError,
     hasAllSitesAccess: hasAllSites,
     engine: "extension",
-    taskIsolated: typeof payload.runId === "string" && ownedTaskWindows.has(payload.runId),
+    profile: "signed_in",
+    taskIsolated: false,
     activeTab
   };
 }
@@ -499,32 +567,31 @@ async function beginTask(payload = {}) {
   const runId = requireString(payload.runId, "runId");
   const existingWindowId = taskWindows.get(runId);
   if (Number.isInteger(existingWindowId)) {
-    return { runId, windowId: existingWindowId, reused: true, isolated: ownedTaskWindows.has(runId) };
+    return { runId, windowId: existingWindowId, reused: true };
   }
-  if (payload.isolated !== true) {
-    const [activeTab] = await tabsQuery({ active: true, lastFocusedWindow: true });
-    if (!Number.isInteger(activeTab?.windowId)) throw new Error("Chrome has no focused normal window to reuse");
-    taskWindows.set(runId, activeTab.windowId);
-    taskEvents.set(runId, []);
-    return { runId, windowId: activeTab.windowId, tabId: activeTab.id, reused: true, isolated: false };
-  }
-  const window = await windowsCreate({ url: "about:blank", focused: true, type: "normal" });
-  if (!Number.isInteger(window?.id)) throw new Error("Chrome did not create the task window");
-  taskWindows.set(runId, window.id);
-  ownedTaskWindows.add(runId);
+  const [activeTab] = await tabsQuery({ active: true, lastFocusedWindow: true });
+  if (!Number.isInteger(activeTab?.windowId)) throw new Error("Chrome has no focused normal window to reuse");
+  taskWindows.set(runId, activeTab.windowId);
   taskEvents.set(runId, []);
-  return { runId, windowId: window.id, isolated: true };
+  await ensureContentScripts(activeTab.id).catch(() => undefined);
+  return { runId, windowId: activeTab.windowId, tabId: activeTab.id, reused: true };
 }
 
 async function endTask(payload = {}) {
   const runId = requireString(payload.runId, "runId");
   const windowId = taskWindows.get(runId);
-  const ownsWindow = ownedTaskWindows.delete(runId);
   taskWindows.delete(runId);
   taskEvents.delete(runId);
-  for (const key of downloadTasks.keys()) if (key.startsWith(`${runId}:`)) downloadTasks.delete(key);
-  if (ownsWindow && Number.isInteger(windowId)) await windowsRemove(windowId).catch(() => undefined);
-  return { runId, closed: ownsWindow && Number.isInteger(windowId), reusedWindow: !ownsWindow };
+  for (const key of downloadTasks.keys()) {
+    if (!key.startsWith(`${runId}:`)) continue;
+    downloadTasks.delete(key);
+    downloadMetadata.delete(key);
+  }
+  if (Number.isInteger(windowId)) {
+    const tabs = await tabsQuery({ windowId }).catch(() => []);
+    for (const tab of tabs) clearTabRefs(tab.id);
+  }
+  return { runId, closed: false, reusedWindow: true };
 }
 
 async function listTabs(payload = {}) {
@@ -621,12 +688,39 @@ async function captureVisibleTab(payload = {}) {
   }
   const format = payload.format === "jpeg" ? "jpeg" : "png";
   const quality = typeof payload.quality === "number" ? payload.quality : undefined;
-  const dataUrl = await tabsCaptureVisibleTab(tab.windowId, { format, quality });
+  let dataUrl = await tabsCaptureVisibleTab(tab.windowId, { format, quality });
+  let croppedDataUrl;
+  let crop;
+  if (payload.ref || payload.selector || payload.targetText || payload.role || payload.label) {
+    let elementResult = await queryAllFrames({ ...payload, tabId: tab.id, kind: "element" });
+    let element = elementResult.element;
+    if (!element?.rect) throw new Error("The screenshot target has no visible rectangle");
+    await sendContentCommand(tab.id, "scroll", {
+      ref: element.ref,
+      frameId: element.frameId,
+      documentId: element.documentId,
+      block: "center",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    dataUrl = await tabsCaptureVisibleTab(tab.windowId, { format, quality });
+    elementResult = await queryAllFrames({
+      ref: element.ref,
+      frameId: element.frameId,
+      documentId: element.documentId,
+      tabId: tab.id,
+      kind: "element",
+    });
+    element = elementResult.element;
+    crop = await absoluteElementRect(tab.id, element);
+    croppedDataUrl = await cropImageDataUrl(dataUrl, crop);
+  }
 
   return {
     tab: summarizeTab(tab),
     format,
-    dataUrl
+    dataUrl: croppedDataUrl || dataUrl,
+    cropped: Boolean(croppedDataUrl),
+    crop,
   };
 }
 
@@ -638,9 +732,14 @@ async function keyAndVerify(payload = {}) {
   return actionAndVerify(payload, "key");
 }
 
+async function dragAndVerify(payload = {}) {
+  return actionAndVerify(payload, "drag");
+}
+
 async function secureFillAndVerify(payload = {}) {
   const tabId = await resolveTabId(payload);
   const before = await tabsGet(tabId);
+  const beforeRevision = navigationRevisions.get(tabId) || 0;
   sensitiveTabIds.add(tabId);
   let fillResult;
   try {
@@ -652,7 +751,7 @@ async function secureFillAndVerify(payload = {}) {
   }
 
   const submitted = fillResult?.submitted === true || Boolean(payload.submitRef);
-  const after = submitted ? await settleAfterAction(tabId, before, payload.timeoutMs || 12_000) : await tabsGet(tabId);
+  const after = submitted ? await settleAfterAction(tabId, before, payload.timeoutMs || 12_000, beforeRevision) : await tabsGet(tabId);
   const navigationChanged = Boolean(after.url && after.url !== before.url);
   const documentReloaded = Boolean(after.detachSawNavigation);
   if (navigationChanged) {
@@ -683,6 +782,8 @@ async function secureFillAndVerify(payload = {}) {
 async function actionAndVerify(payload, command) {
   const tabId = await resolveTabId(payload);
   const before = await tabsGet(tabId);
+  const beforeRevision = navigationRevisions.get(tabId) || 0;
+  const actionStartedAt = Date.now();
   let actionResult;
   try {
     actionResult = await sendContentCommand(tabId, command, payload);
@@ -691,18 +792,26 @@ async function actionAndVerify(payload, command) {
     if (!/message port closed|receiving end does not exist|context invalidated|frame was removed/i.test(message)) throw error;
     actionResult = { dispatched: true, navigationInterruptedResponse: true };
   }
-  const after = await settleAfterAction(tabId, before, payload.timeoutMs);
-  return { ...actionResult, before: summarizeTab(before), after: summarizeTab(after), verified: true };
+  const after = await settleAfterAction(tabId, before, payload.timeoutMs, beforeRevision);
+  return {
+    ...actionResult,
+    before: summarizeTab(before),
+    after: summarizeTab(after),
+    events: taskEventsSince(payload.runId, actionStartedAt),
+    verified: true
+  };
 }
 
-async function settleAfterAction(tabId, before, requestedTimeout) {
+async function settleAfterAction(tabId, before, requestedTimeout, beforeRevision = navigationRevisions.get(tabId) || 0) {
   const timeoutMs = Math.max(500, Math.min(15_000, Number(requestedTimeout) || 5_000));
   const startedAt = Date.now();
   let sawNavigation = false;
   let tab = before;
   while (Date.now() - startedAt < timeoutMs) {
     tab = await tabsGet(tabId);
-    sawNavigation ||= tab.status === "loading" || tab.url !== before.url;
+    sawNavigation ||= tab.status === "loading"
+      || tab.url !== before.url
+      || (navigationRevisions.get(tabId) || 0) > beforeRevision;
     if (sawNavigation && tab.status === "complete") {
       if (/^https?:\/\//.test(tab.url || "")) {
         await ensureContentScript(tabId).catch(() => undefined);
@@ -759,6 +868,437 @@ async function waitForTabReady(tabId, requestedTimeout) {
   throw new Error(`NAVIGATION_TIMEOUT: Browser tab did not finish loading within ${timeoutMs}ms (${lastTab?.url || "unknown URL"})`);
 }
 
+async function listFrames(payload = {}) {
+  const tabId = await resolveTabId(payload);
+  await ensureSupportedTab(tabId);
+  await ensureContentScripts(tabId);
+  const frames = await webNavigationGetAllFrames({ tabId });
+  return {
+    tabId,
+    frames: frames.map((frame) => ({
+      frameId: frame.frameId,
+      parentFrameId: frame.parentFrameId,
+      documentId: frame.documentId,
+      documentLifecycle: frame.documentLifecycle,
+      url: frame.url,
+      main: frame.frameId === 0,
+    })),
+  };
+}
+
+async function snapshotAllFrames(payload = {}) {
+  const tabId = await resolveTabId(payload);
+  const framesResult = await listFrames({ ...payload, tabId });
+  const frameSnapshots = await collectFrameResults(tabId, framesResult.frames, "snapshot", payload);
+  if (frameSnapshots.length === 0) throw new Error("No inspectable browser frame was found");
+  const main = frameSnapshots.find((entry) => entry.frame.frameId === 0) || frameSnapshots[0];
+  const maxElements = Math.max(1, Math.min(500, Number(payload.maxElements) || 180));
+  const elements = [];
+  const tables = [];
+  const textParts = [];
+  const changed = [];
+  const removedRefs = [];
+  let unchangedCount = 0;
+  for (const { frame, result } of frameSnapshots) {
+    registerFrameRefs(tabId, frame, result);
+    const frameElements = Array.isArray(result.elements)
+      ? result.elements.map((element) => withFrame(element, frame))
+      : [];
+    elements.push(...frameElements);
+    if (typeof result.text === "string" && result.text.trim()) {
+      textParts.push(frame.frameId === 0 ? result.text : `[Frame ${frame.frameId}: ${frame.url}]\n${result.text}`);
+    }
+    if (Array.isArray(result.tables)) {
+      tables.push(...result.tables.map((table) => ({ ...table, frameId: frame.frameId, frameUrl: frame.url })));
+    }
+    const delta = result.delta || {};
+    if (Array.isArray(delta.changed)) changed.push(...delta.changed.map((element) => withFrame(element, frame)));
+    if (Array.isArray(delta.removedRefs)) removedRefs.push(...delta.removedRefs);
+    unchangedCount += Number(delta.unchangedCount) || 0;
+  }
+  return {
+    ...main.result,
+    engine: "extension",
+    url: main.result.url,
+    title: main.result.title,
+    frames: framesResult.frames,
+    text: textParts.join("\n\n").slice(0, Math.max(1_000, Math.min(80_000, Number(payload.maxTextLength) || 12_000))),
+    elements: elements.slice(0, maxElements),
+    tables: tables.slice(0, 20),
+    delta: {
+      changed: changed.slice(0, maxElements),
+      removedRefs: removedRefs.slice(0, maxElements),
+      unchangedCount,
+    },
+  };
+}
+
+async function extractTextAllFrames(payload = {}) {
+  const tabId = await resolveTabId(payload);
+  if (Number.isInteger(payload.frameId) || payload.ref) {
+    return await sendContentCommand(tabId, "extractText", payload);
+  }
+  const framesResult = await listFrames({ ...payload, tabId });
+  const results = await collectFrameResults(tabId, framesResult.frames, "extractText", payload);
+  const maxLength = Math.max(1_000, Math.min(80_000, Number(payload.maxLength) || 20_000));
+  const text = results.map(({ frame, result }) => {
+    const value = typeof result.text === "string" ? result.text : "";
+    return frame.frameId === 0 ? value : `[Frame ${frame.frameId}: ${frame.url}]\n${value}`;
+  }).filter(Boolean).join("\n\n");
+  return { text: text.slice(0, maxLength), truncated: text.length > maxLength, frames: results.length };
+}
+
+async function queryAllFrames(payload = {}) {
+  const tabId = await resolveTabId(payload);
+  const targetedFrame = await targetFrameForPayload(tabId, payload, false);
+  if (targetedFrame) {
+    const result = await sendFrameCommand(tabId, targetedFrame, "query", payload);
+    registerQueryRefs(tabId, targetedFrame, result);
+    return addFrameToQueryResult(result, targetedFrame);
+  }
+
+  const framesResult = await listFrames({ ...payload, tabId });
+  const results = await collectFrameResults(tabId, framesResult.frames, "query", payload);
+  for (const entry of results) registerQueryRefs(tabId, entry.frame, entry.result);
+  const kind = String(payload.kind || "all");
+  if (kind === "count") return { count: results.reduce((sum, entry) => sum + (Number(entry.result.count) || 0), 0) };
+  if (kind === "all") {
+    const elements = results.flatMap(({ frame, result }) => Array.isArray(result.elements)
+      ? result.elements.map((element) => withFrame(element, frame))
+      : []);
+    return { count: elements.length, elements: elements.slice(0, Number(payload.maxResults) || 250) };
+  }
+  const match = results.find((entry) => entry.result?.matched !== false && (
+    "value" in (entry.result || {}) || entry.result?.element || entry.result?.valid !== undefined
+  ));
+  if (!match) {
+    if (kind === "textContent" || kind === "innerText") return { value: null, matched: false };
+    throw new Error(`No page element matched the live ${kind} query in any frame`);
+  }
+  return addFrameToQueryResult(match.result, match.frame);
+}
+
+async function resolveFrame(payload = {}) {
+  const tabId = await resolveTabId(payload);
+  if (Number.isInteger(payload.frameId)) {
+    const frame = (await listFrames({ tabId })).frames.find((candidate) => candidate.frameId === payload.frameId);
+    if (!frame) throw new Error(`No browser frame found: ${payload.frameId}`);
+    return frame;
+  }
+  const selector = requireString(payload.selector, "selector");
+  const frames = (await listFrames({ tabId })).frames;
+  const candidates = [];
+  for (const parent of frames) {
+    try {
+      const result = await sendFrameCommand(tabId, parent, "query", { selector, kind: "all", maxResults: 20 });
+      for (const element of result.elements || []) {
+        if (String(element.tagName || "").toLowerCase() !== "iframe") continue;
+        const src = element.attributes?.src || element.src || "";
+        const child = frames.find((frame) => frame.parentFrameId === parent.frameId && urlsEquivalent(frame.url, src, parent.url));
+        if (child) candidates.push({ ...child, owner: withFrame(element, parent) });
+      }
+    } catch {
+      // This parent frame may not be inspectable.
+    }
+  }
+  if (candidates.length === 0) throw new Error(`No iframe matched selector: ${selector}`);
+  if (candidates.length > 1) throw new Error(`Frame selector matched ${candidates.length} iframes; use a more specific selector`);
+  return candidates[0];
+}
+
+async function collectFrameResults(tabId, frames, command, payload) {
+  const results = [];
+  for (const frame of frames) {
+    try {
+      const result = await sendFrameCommand(tabId, frame, command, payload);
+      results.push({ frame, result });
+    } catch {
+      // Chrome may deny injection in a restricted child origin. Other frames remain useful.
+    }
+  }
+  return results;
+}
+
+function registerFrameRefs(tabId, frame, result) {
+  for (const element of result.elements || []) registerRef(tabId, frame, element.ref);
+  for (const element of result.delta?.changed || []) registerRef(tabId, frame, element.ref);
+}
+
+function registerQueryRefs(tabId, frame, result) {
+  if (result.element?.ref) registerRef(tabId, frame, result.element.ref);
+  for (const element of result.elements || []) registerRef(tabId, frame, element.ref);
+}
+
+function registerRef(tabId, frame, ref) {
+  if (!ref) return;
+  refTargets.set(`${tabId}:${ref}`, {
+    frameId: frame.frameId,
+    documentId: frame.documentId,
+    frameUrl: frame.url,
+  });
+}
+
+function clearTabRefs(tabId) {
+  for (const key of refTargets.keys()) {
+    if (key.startsWith(`${tabId}:`)) refTargets.delete(key);
+  }
+  activeFrameByTab.delete(tabId);
+}
+
+function withFrame(element, frame) {
+  return {
+    ...element,
+    frameId: frame.frameId,
+    documentId: frame.documentId,
+    frameUrl: frame.url,
+  };
+}
+
+function addFrameToQueryResult(result, frame) {
+  return {
+    ...result,
+    frameId: frame.frameId,
+    documentId: frame.documentId,
+    frameUrl: frame.url,
+    ...(result.element ? { element: withFrame(result.element, frame) } : {}),
+    ...(Array.isArray(result.elements) ? { elements: result.elements.map((element) => withFrame(element, frame)) } : {}),
+  };
+}
+
+async function targetFrameForPayload(tabId, payload, discover = true) {
+  const frames = (await listFrames({ tabId })).frames;
+  if (Number.isInteger(payload.frameId)) {
+    const frame = frames.find((candidate) => candidate.frameId === payload.frameId);
+    if (!frame) throw new Error(`Browser frame is stale or missing: ${payload.frameId}`);
+    if (payload.documentId && frame.documentId && payload.documentId !== frame.documentId) {
+      throw new Error("STALE_REF: Browser frame navigated. Take a new snapshot.");
+    }
+    return frame;
+  }
+  if (payload.ref) {
+    const stored = refTargets.get(`${tabId}:${payload.ref}`);
+    if (!stored) throw new Error(`STALE_REF: Browser ref has no live frame: ${payload.ref}. Take a new snapshot.`);
+    const frame = frames.find((candidate) => candidate.frameId === stored.frameId);
+    if (!frame || (stored.documentId && frame.documentId && stored.documentId !== frame.documentId)) {
+      refTargets.delete(`${tabId}:${payload.ref}`);
+      throw new Error(`STALE_REF: Browser ref belongs to an earlier document: ${payload.ref}. Take a new snapshot.`);
+    }
+    return frame;
+  }
+  if (!discover) return undefined;
+  if (!payload.selector && !payload.targetText && !payload.text && !payload.role && !payload.label) {
+    return frames.find((candidate) => candidate.frameId === activeFrameByTab.get(tabId))
+      || frames.find((candidate) => candidate.frameId === 0);
+  }
+  const matching = [];
+  for (const frame of frames) {
+    try {
+      const result = await sendFrameCommand(tabId, frame, "query", { ...payload, kind: "count" });
+      if ((Number(result.count) || 0) > 0) matching.push(frame);
+    } catch {
+      // Ignore inaccessible frames.
+    }
+  }
+  if (matching.length === 0) throw new Error("No page element matched in any browser frame");
+  if (matching.length > 1) throw new Error(`Target matched elements in ${matching.length} frames; use frameLocator() or a stable ref`);
+  return matching[0];
+}
+
+async function fetchArtifact(payload = {}) {
+  const tabId = await resolveTabId(payload);
+  try {
+    return await sendContentCommand(tabId, "fetchArtifact", payload);
+  } catch (contentError) {
+    const url = typeof payload.url === "string" ? payload.url : "";
+    if (!/^https?:\/\//.test(url)) throw contentError;
+    const response = await fetch(url, { credentials: "include" });
+    if (!response.ok) throw new Error(`Document fetch failed with HTTP ${response.status}`);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > 25 * 1024 * 1024) throw new Error("Document is larger than 25 MB");
+    return {
+      url: response.url || url,
+      mimeType: response.headers.get("content-type") || "application/octet-stream",
+      fileName: fileNameFromResponse(response, url),
+      dataBase64: bytesToBase64(bytes),
+    };
+  }
+}
+
+async function setDialogPolicy(payload = {}) {
+  const tabId = await resolveTabId(payload);
+  const frame = await targetFrameForPayload(tabId, payload);
+  const action = payload.action === "dismiss" ? "dismiss" : "accept";
+  const promptText = typeof payload.promptText === "string" ? payload.promptText : "";
+  await scriptingExecuteScript({
+    target: { tabId, frameIds: [frame.frameId] },
+    world: "MAIN",
+    func: (policy) => {
+      const state = window.__detachDialogState || { installed: false };
+      state.action = policy.action;
+      state.promptText = policy.promptText;
+      if (!state.installed) {
+        const notify = (dialogType, message, defaultValue, resultAction) => {
+          window.postMessage({
+            source: "detach-dialog-bridge",
+            dialogType,
+            message: String(message || ""),
+            defaultValue: String(defaultValue || ""),
+            action: resultAction,
+          }, "*");
+        };
+        window.alert = (message) => notify("alert", message, "", "accept");
+        window.confirm = (message) => {
+          const accepted = state.action !== "dismiss";
+          notify("confirm", message, "", accepted ? "accept" : "dismiss");
+          return accepted;
+        };
+        window.prompt = (message, defaultValue = "") => {
+          const accepted = state.action !== "dismiss";
+          notify("prompt", message, defaultValue, accepted ? "accept" : "dismiss");
+          return accepted ? state.promptText || String(defaultValue || "") : null;
+        };
+        state.installed = true;
+      }
+      window.__detachDialogState = state;
+      return { installed: true, action: state.action };
+    },
+    args: [{ action, promptText }],
+  });
+  return { installed: true, action, frameId: frame.frameId, appliesTo: "next_and_future_page_dialogs_in_document" };
+}
+
+function recordNavigation(details, phase) {
+  if (phase === "committed") {
+    navigationRevisions.set(details.tabId, (navigationRevisions.get(details.tabId) || 0) + 1);
+    if (details.frameId === 0) clearTabRefs(details.tabId);
+  }
+  tabsGet(details.tabId).then((tab) => {
+    const runId = runIdForWindow(tab.windowId);
+    if (!runId) return;
+    queueTaskEvent(runId, {
+      type: "navigation",
+      phase,
+      tabId: details.tabId,
+      frameId: details.frameId,
+      parentFrameId: details.parentFrameId,
+      documentId: details.documentId,
+      documentLifecycle: details.documentLifecycle,
+      url: details.url,
+      transitionType: details.transitionType,
+      transitionQualifiers: details.transitionQualifiers,
+      error: details.error,
+    });
+  }).catch(() => undefined);
+}
+
+function taskEventsSince(runId, timestamp) {
+  if (typeof runId !== "string") return [];
+  return (taskEvents.get(runId) || []).filter((event) => event.timestamp >= timestamp).slice(-20);
+}
+
+async function absoluteElementRect(tabId, element) {
+  let x = Number(element.rect.x) || 0;
+  let y = Number(element.rect.y) || 0;
+  const width = Math.max(1, Number(element.rect.width) || 1);
+  const height = Math.max(1, Number(element.rect.height) || 1);
+  let frameId = Number(element.frameId) || 0;
+  const frames = (await listFrames({ tabId })).frames;
+  const seen = new Set();
+  while (frameId !== 0 && !seen.has(frameId)) {
+    seen.add(frameId);
+    const frame = frames.find((candidate) => candidate.frameId === frameId);
+    if (!frame) break;
+    const parent = frames.find((candidate) => candidate.frameId === frame.parentFrameId);
+    if (!parent) break;
+    const owner = await findFrameOwner(tabId, parent, frame);
+    if (!owner?.rect) break;
+    x += Number(owner.rect.x) || 0;
+    y += Number(owner.rect.y) || 0;
+    frameId = parent.frameId;
+  }
+  const mainViewport = await sendFrameCommand(
+    tabId,
+    frames.find((candidate) => candidate.frameId === 0) || frames[0],
+    "query",
+    { selector: "html", kind: "element" }
+  ).catch(() => ({}));
+  const devicePixelRatio = Number(mainViewport.element?.devicePixelRatio || element.devicePixelRatio) || 1;
+  return { x, y, width, height, devicePixelRatio };
+}
+
+async function findFrameOwner(tabId, parent, child) {
+  const result = await sendFrameCommand(tabId, parent, "query", { selector: "iframe,frame", kind: "all", maxResults: 100 });
+  const candidates = result.elements || [];
+  const exact = candidates.find((element) => urlsEquivalent(child.url, element.attributes?.src || element.src || "", parent.url));
+  if (exact) return exact;
+  if (candidates.length === 1) return candidates[0];
+  throw new Error(`Could not map frame ${child.frameId} to a unique iframe element for screenshot cropping`);
+}
+
+async function cropImageDataUrl(dataUrl, crop) {
+  await ensureOffscreenDocument();
+  const response = await runtimeSendMessage({
+    target: "lazzy-offscreen",
+    command: "crop",
+    dataUrl,
+    crop,
+  });
+  if (!response?.ok || !response.dataUrl) throw new Error(response?.error || "Could not crop browser screenshot");
+  return response.dataUrl;
+}
+
+async function ensureOffscreenDocument() {
+  const offscreenUrl = chrome.runtime.getURL("offscreen.html");
+  const contexts = await runtimeGetContexts({
+    contextTypes: ["OFFSCREEN_DOCUMENT"],
+    documentUrls: [offscreenUrl],
+  }).catch(() => []);
+  if (contexts.length > 0) return;
+  if (!creatingOffscreenDocument) {
+    creatingOffscreenDocument = chrome.offscreen.createDocument({
+      url: "offscreen.html",
+      reasons: ["BLOBS", "DOM_PARSER"],
+      justification: "Crop browser screenshots and inspect task-owned document blobs",
+    }).finally(() => {
+      creatingOffscreenDocument = undefined;
+    });
+  }
+  await creatingOffscreenDocument;
+}
+
+function fileNameFromResponse(response, fallbackUrl) {
+  const disposition = response.headers.get("content-disposition") || "";
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  const plain = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+  if (encoded) {
+    try { return decodeURIComponent(encoded); } catch {}
+  }
+  if (plain) return plain;
+  try {
+    return decodeURIComponent(new URL(response.url || fallbackUrl).pathname.split("/").pop() || "document");
+  } catch {
+    return "document";
+  }
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, Math.min(bytes.length, offset + chunkSize)));
+  }
+  return btoa(binary);
+}
+
+function urlsEquivalent(actual, candidate, parentUrl) {
+  if (!candidate) return false;
+  try {
+    return new URL(actual).href === new URL(candidate, parentUrl).href;
+  } catch {
+    return actual === candidate;
+  }
+}
+
 function resolveTaskWindowId(payload = {}) {
   const runId = typeof payload.runId === "string" ? payload.runId : "";
   return runId ? taskWindows.get(runId) : undefined;
@@ -808,13 +1348,20 @@ async function requestAllSitesAccess() {
 
 async function sendContentCommand(tabId, command, payload) {
   await ensureSupportedTab(tabId);
-  await ensureContentScript(tabId);
+  await ensureContentScripts(tabId);
+  const frame = await targetFrameForPayload(tabId, payload);
+  activeFrameByTab.set(tabId, frame.frameId);
+  return sendFrameCommand(tabId, frame, command, payload);
+}
 
-  return sendMessageToTab(tabId, {
+async function sendFrameCommand(tabId, frame, command, payload) {
+  const result = await sendMessageToTab(tabId, {
     target: CONTENT_TARGET,
     command,
     payload
-  });
+  }, COMMAND_TIMEOUT_MS, frame.frameId);
+  registerQueryRefs(tabId, frame, result || {});
+  return result;
 }
 
 async function ensureSupportedTab(tabId) {
@@ -830,22 +1377,38 @@ async function ensureSupportedTab(tabId) {
 }
 
 async function ensureContentScript(tabId) {
-  try {
-    await sendMessageToTab(tabId, {
-      target: CONTENT_TARGET,
-      command: "ping",
-      payload: {}
-    }, 1_000);
-    return;
-  } catch {
-    await scriptingExecuteScript({
-      target: { tabId },
-      files: ["content-script.js"]
-    });
-  }
+  await ensureContentScripts(tabId);
 }
 
-function sendMessageToTab(tabId, message, timeoutMs = COMMAND_TIMEOUT_MS) {
+async function ensureContentScripts(tabId) {
+  await ensureSupportedTab(tabId);
+  try {
+    await scriptingExecuteScript({
+      target: { tabId, allFrames: true },
+      files: ["content-script.js"]
+    });
+  } catch {
+    // Existing scripts can still respond even when one restricted frame rejects injection.
+  }
+  const frames = await webNavigationGetAllFrames({ tabId }).catch(() => [{ frameId: 0, parentFrameId: -1, url: "" }]);
+  const responsive = [];
+  for (const frame of frames) {
+    try {
+      await sendMessageToTab(tabId, {
+        target: CONTENT_TARGET,
+        command: "ping",
+        payload: {}
+      }, 1_000, frame.frameId);
+      responsive.push(frame);
+    } catch {
+      // The extension has no host access to this frame.
+    }
+  }
+  if (responsive.length === 0) throw new Error("The Detach extension cannot inspect this page. Grant site access and retry.");
+  return responsive;
+}
+
+function sendMessageToTab(tabId, message, timeoutMs = COMMAND_TIMEOUT_MS, frameId) {
   const requestId = crypto.randomUUID();
   const payload = { ...message, requestId };
 
@@ -857,7 +1420,7 @@ function sendMessageToTab(tabId, message, timeoutMs = COMMAND_TIMEOUT_MS) {
 
     pendingCommands.set(requestId, { resolve, reject, timeout });
 
-    chrome.tabs.sendMessage(tabId, payload, (response) => {
+    const callback = (response) => {
       const pending = pendingCommands.get(requestId);
       if (!pending) return;
 
@@ -876,7 +1439,9 @@ function sendMessageToTab(tabId, message, timeoutMs = COMMAND_TIMEOUT_MS) {
       }
 
       pending.resolve(response.result);
-    });
+    };
+    if (Number.isInteger(frameId)) chrome.tabs.sendMessage(tabId, payload, { frameId }, callback);
+    else chrome.tabs.sendMessage(tabId, payload, callback);
   });
 }
 
@@ -1014,21 +1579,9 @@ function tabsCaptureVisibleTab(windowId, options) {
   });
 }
 
-function windowsCreate(createData) {
-  return new Promise((resolve, reject) => {
-    chrome.windows.create(createData, withLastError(resolve, reject));
-  });
-}
-
 function windowsUpdate(windowId, updateInfo) {
   return new Promise((resolve, reject) => {
     chrome.windows.update(windowId, updateInfo, withLastError(resolve, reject));
-  });
-}
-
-function windowsRemove(windowId) {
-  return new Promise((resolve, reject) => {
-    chrome.windows.remove(windowId, withLastError(resolve, reject));
   });
 }
 
@@ -1047,6 +1600,22 @@ function permissionsRequest(permissions) {
 function containsPermission(permissions) {
   return new Promise((resolve, reject) => {
     chrome.permissions.contains(permissions, withLastError(resolve, reject));
+  });
+}
+
+function webNavigationGetAllFrames(details) {
+  return new Promise((resolve, reject) => {
+    chrome.webNavigation.getAllFrames(details, withLastError((frames) => resolve(frames || []), reject));
+  });
+}
+
+function runtimeGetContexts(filter) {
+  return chrome.runtime.getContexts(filter);
+}
+
+function runtimeSendMessage(message) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(message, withLastError(resolve, reject));
   });
 }
 

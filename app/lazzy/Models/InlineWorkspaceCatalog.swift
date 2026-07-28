@@ -37,70 +37,32 @@ nonisolated struct InlineWorkspaceItem: Identifiable, Hashable, Codable, Sendabl
   }
 }
 
-/// Keeps a small, cached filename index for the home directory. The first use
-/// loads the previous snapshot immediately and refreshes it in the background;
-/// later `@` searches are only in-memory filtering.
+/// Provides an explicit, privacy-respecting file browser for the composer.
+///
+/// Do not crawl the user's home directory here. On modern macOS, recursively
+/// touching Desktop, Downloads, Music, and similar folders can produce a run of
+/// TCC prompts before the user has asked to attach anything.
 @MainActor
 final class InlineWorkspaceCatalog {
   static let shared = InlineWorkspaceCatalog()
 
   private var items: [InlineWorkspaceItem] = []
   private var hasLoadedCache = false
-  private var indexTask: Task<Void, Never>?
-  private var latestQuery = ""
-  private var latestCompletion: (([InlineWorkspaceItem], Bool) -> Void)?
-
-  deinit {
-    indexTask?.cancel()
-  }
 
   func search(
     query: String,
     completion: @escaping ([InlineWorkspaceItem], Bool) -> Void
   ) {
     loadCachedIndexIfNeeded()
-    latestQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-    latestCompletion = completion
-    startIndexingIfNeeded()
-
-    completion(matches(for: latestQuery), indexTask != nil)
+    completion(matches(for: query.trimmingCharacters(in: .whitespacesAndNewlines)), false)
   }
 
-  func warm() {
-    loadCachedIndexIfNeeded()
-    startIndexingIfNeeded()
-  }
-
-  /// Stops delivery to a view that has disappeared; the background index can
-  /// still finish and populate the on-disk cache for the next composer use.
-  func cancel() {
-    latestCompletion = nil
-  }
+  func cancel() {}
 
   private func loadCachedIndexIfNeeded() {
     guard !hasLoadedCache else { return }
     hasLoadedCache = true
     items = HomeFileIndexStore.load()
-  }
-
-  private func startIndexingIfNeeded() {
-    guard indexTask == nil else { return }
-
-    indexTask = Task { [weak self] in
-      let snapshot = await Task.detached(priority: .utility) {
-        HomeFileIndexer.buildSnapshot()
-      }.value
-
-      guard !Task.isCancelled else { return }
-      HomeFileIndexStore.save(snapshot)
-      self?.replaceIndex(with: snapshot)
-    }
-  }
-
-  private func replaceIndex(with snapshot: [InlineWorkspaceItem]) {
-    items = snapshot
-    indexTask = nil
-    latestCompletion?(matches(for: latestQuery), false)
   }
 
   private func matches(for query: String) -> [InlineWorkspaceItem] {
@@ -137,53 +99,13 @@ nonisolated private enum HomeFileIndexer {
     "Library", ".Trash", ".git", ".svn", ".hg", "node_modules", "DerivedData",
     ".build", "Pods", ".cache", "venv", "dist", "build",
   ]
-  private static let maximumItemCount = 250_000
-
-  static func buildSnapshot() -> [InlineWorkspaceItem] {
-    let fileManager = FileManager.default
-    let home = fileManager.homeDirectoryForCurrentUser
-    guard let enumerator = fileManager.enumerator(
-      at: home,
-      includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
-      options: [.skipsHiddenFiles, .skipsPackageDescendants]
-    ) else {
-      return []
-    }
-
-    var snapshot: [InlineWorkspaceItem] = []
-    while let url = enumerator.nextObject() as? URL, snapshot.count < maximumItemCount {
-      if skippedDirectoryNames.contains(url.lastPathComponent) {
-        enumerator.skipDescendants()
-        continue
-      }
-
-      guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey]) else {
-        continue
-      }
-      let isDirectory = values.isDirectory == true
-      guard isDirectory || values.isRegularFile == true else { continue }
-
-      snapshot.append(InlineWorkspaceItem(url: url, isDirectory: isDirectory))
-    }
-    return snapshot
-  }
-
   static func homeDirectories() -> [InlineWorkspaceItem] {
     let fileManager = FileManager.default
     let home = fileManager.homeDirectoryForCurrentUser
-    guard let children = try? fileManager.contentsOfDirectory(
-      at: home,
-      includingPropertiesForKeys: [.isDirectoryKey],
-      options: [.skipsHiddenFiles, .skipsPackageDescendants]
-    ) else {
-      return []
-    }
-
-    return children.compactMap { url in
-      guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { return nil }
-      return InlineWorkspaceItem(url: url, isDirectory: true)
-    }
-    .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    // These URLs are presented without reading their contents. macOS only asks
+    // for a protected folder when the user explicitly opens or attaches it.
+    return ["Desktop", "Documents", "Downloads", "Movies", "Music", "Pictures"]
+      .map { InlineWorkspaceItem(url: home.appendingPathComponent($0, isDirectory: true), isDirectory: true) }
   }
 
   static func pathScopedMatches(for query: String) -> [InlineWorkspaceItem]? {

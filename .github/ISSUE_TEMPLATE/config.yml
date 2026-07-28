@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/DeatchAI/App/security/advisories/new
+    about: Report security vulnerabilities privately. Do not use public issues.
+  - name: Support and questions
+    url: https://github.com/DeatchAI/App/discussions
+    about: Ask how-to questions in Discussions after it is enabled.

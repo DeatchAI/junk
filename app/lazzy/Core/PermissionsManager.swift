@@ -9,6 +9,7 @@ class PermissionsManager: ObservableObject {
     @Published private(set) var hasAutomationPermission = false
     @Published private(set) var hasScreenCapturePermission = false
     private var lastLoggedAccessibilityPermission: Bool?
+    private var screenCapturePollTimer: Timer?
     
     init() {
         checkPermissions()
@@ -45,7 +46,11 @@ class PermissionsManager: ObservableObject {
     }
 
     func requestScreenCapturePermission() {
+        checkPermissions()
+        guard !hasScreenCapturePermission else { return }
+
         hasScreenCapturePermission = CGRequestScreenCaptureAccess()
+        startScreenCapturePermissionPolling()
         if !hasScreenCapturePermission {
             openScreenCaptureSystemPreferences()
         }
@@ -81,6 +86,22 @@ class PermissionsManager: ObservableObject {
                 self?.pollTimer?.invalidate()
                 self?.pollTimer = nil
                 print("⚠️ Accessibility still not available. If it looks enabled, toggle Detach off and on in System Settings.")
+            }
+        }
+    }
+
+    /// Screen-recording access changes outside the app in System Settings. Keep
+    /// this value fresh while the user completes that handoff so menu-bar and
+    /// onboarding UI do not continue to report a permission that is now granted.
+    private func startScreenCapturePermissionPolling() {
+        screenCapturePollTimer?.invalidate()
+        var attempts = 0
+        screenCapturePollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            attempts += 1
+            self?.checkPermissions()
+            if self?.hasScreenCapturePermission == true || attempts >= 30 {
+                self?.screenCapturePollTimer?.invalidate()
+                self?.screenCapturePollTimer = nil
             }
         }
     }

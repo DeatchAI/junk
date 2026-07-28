@@ -160,7 +160,9 @@ struct FloatingChatView: View {
             onRemoveFile: removeAttachment,
             onRemoveSkill: removeSkillAttachment,
             onRemoveMCP: removeMCPAttachment,
-            onRemoveCommand: removeCommandAlias
+            onRemoveCommand: removeCommandAlias,
+            voiceDictationState: controller.voiceDictationState,
+            voicePartialTranscript: controller.voicePartialTranscript
           )
 
           // Bottom toolbar
@@ -227,7 +229,11 @@ struct FloatingChatView: View {
       }
     }
     .padding(.top, 15)  // Add top space for the detached button
-    .padding(.trailing, 8)
+    // Keep the conversation and composer centered within the borderless panel.
+    // A trailing-only inset made the whole surface appear to drift left whenever
+    // the response or composer changed its intrinsic width.
+    .padding(.horizontal, 8)
+    .frame(maxWidth: .infinity, alignment: .leading)
     .background(
       GeometryReader { geo in
         Color.clear
@@ -236,6 +242,10 @@ struct FloatingChatView: View {
     )
     .onPreferenceChange(WindowHeightKey.self) { height in
       controller.updateWindowHeight(height)
+    }
+    .onChange(of: controller.dictationInsertion) { _, insertion in
+      guard let insertion else { return }
+      appendVoiceTranscription(insertion.text)
     }
   }
 
@@ -325,6 +335,20 @@ struct FloatingChatView: View {
     return true
   }
 
+  private func appendVoiceTranscription(_ transcript: String) {
+    let cleaned = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !cleaned.isEmpty else { return }
+
+    if inputText.isEmpty {
+      inputText = cleaned
+    } else if inputText.last?.isWhitespace == true {
+      inputText += cleaned
+    } else {
+      inputText += " \(cleaned)"
+    }
+    isInputFocused = true
+  }
+
   private func addContextIfNeeded(_ content: DetectedContent) {
     if !sessionContexts.contains(content) {
       sessionContexts.append(content)
@@ -407,7 +431,6 @@ struct FloatingChatView: View {
     wsManager.listQuickActions()
     wsManager.listWorkflows()
     installedSkills = InstalledSkillCatalog.discover()
-    InlineWorkspaceCatalog.shared.warm()
   }
 
   private func addSkillAttachment(_ skill: SkillAttachment) {

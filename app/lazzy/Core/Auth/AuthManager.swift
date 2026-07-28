@@ -9,8 +9,8 @@ class AuthManager: ObservableObject {
   static let shared = AuthManager()
 
   let supabase = SupabaseClient(
-    supabaseURL: URL(string: APISecrets.supabaseURL)!,
-    supabaseKey: APISecrets.supabaseKey,
+    supabaseURL: URL(string: AppConfiguration.supabaseURL)!,
+    supabaseKey: AppConfiguration.supabasePublishableKey,
     options: SupabaseClientOptions(
       auth: .init(
         emitLocalSessionAsInitialSession: true
@@ -203,6 +203,11 @@ class AuthManager: ObservableObject {
       "userId": profile.id.uuidString,
       "email": profile.email ?? "",
       "planType": profile.planType.rawValue,
+      "distributionMode": DistributionConfiguration.mode.rawValue,
+      "hostedControlPlaneURL": DistributionConfiguration.hostedControlPlaneURL?.absoluteString ?? "",
+      // This token is sent only over localhost to the child runtime. The
+      // runtime forwards it only when the signed app is a hosted build.
+      "accessToken": DistributionConfiguration.mode == .hosted ? (session?.accessToken ?? "") : "",
     ]
 
     do {
@@ -211,6 +216,9 @@ class AuthManager: ObservableObject {
 
       if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
         print("✅ User profile synced to local server via HTTP")
+        await MainActor.run {
+          NotificationCenter.default.post(name: .detachHostedProfileDidSync, object: nil)
+        }
       } else {
         print("⚠️ Failed to sync profile to local server")
       }
@@ -299,4 +307,8 @@ class AuthManager: ObservableObject {
       print("❌ Error fetching usage from local server: \(error)")
     }
   }
+}
+
+extension Notification.Name {
+  static let detachHostedProfileDidSync = Notification.Name("detach.hostedProfileDidSync")
 }

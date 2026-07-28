@@ -3,6 +3,12 @@ import Combine
 import Foundation
 import SwiftUI
 
+private enum OnboardingState {
+  // Increment only when a new first-run flow must be shown to existing installs.
+  static let currentVersion = 1
+  static let completionVersionKey = "onboarding_completion_version"
+}
+
 /// Main coordinator that ties together all components
 class AppCoordinator: ObservableObject {
 
@@ -18,6 +24,7 @@ class AppCoordinator: ObservableObject {
   let wsManager = WebSocketManager()
   let permissionsManager = PermissionsManager()
   let hotkeyManager = HotkeyManager.shared
+  let voiceDictation = VoiceDictationController()
   let screenshotCapture = ScreenshotCaptureController()
   let onboardingWindow = OnboardingWindowController()
   private let finderIntegration = FinderIntegration()
@@ -29,13 +36,18 @@ class AppCoordinator: ObservableObject {
   // MARK: - State
 
   @Published private(set) var isMonitoring = false
+  @Published private(set) var hasCompletedOnboarding: Bool
 
   private var cancellables = Set<AnyCancellable>()
   private var approvalManagers: [String: WebSocketManager] = [:]
+  private var hasStartedCoreServices = false
+  private var isObservingShortcutChanges = false
+  private weak var voiceTargetController: FloatingWindowController?
 
   static var shared: AppCoordinator?
 
   init() {
+    hasCompletedOnboarding = UserDefaults.standard.integer(forKey: OnboardingState.completionVersionKey) >= OnboardingState.currentVersion
     Self.shared = self
     setupBindings()
     historyWindow.wsManager = wsManager
@@ -43,13 +55,12 @@ class AppCoordinator: ObservableObject {
     quickActionsMenu.observeCustomActions()
     observeFinderQuickActions()
     configureFloatingWorkspace()
+    setupVoiceDictation()
     setupActivityIslandCallbacks()
 
     setupHistoryCallbacks()
     setupOnboardingCallbacks()
     setupPermissionCallbacks()
-    registerAllShortcuts()
-    observeShortcutChanges()
   }
 
   // MARK: - Setup
@@ -151,6 +162,25 @@ class AppCoordinator: ObservableObject {
     }
   }
 
+  private func setupVoiceDictation() {
+    voiceDictation.onHoldBegan = { [weak self] in
+      guard let self else { return }
+      let task = self.floatingWorkspace.prepareForVoiceInput(at: NSEvent.mouseLocation)
+      self.voiceTargetController = task.controller
+    }
+
+    voiceDictation.onStateChanged = { [weak self] state, partialTranscript in
+      self?.voiceTargetController?.updateVoiceDictation(
+        state: state,
+        partialTranscript: partialTranscript
+      )
+    }
+
+    voiceDictation.onTranscription = { [weak self] transcript in
+      self?.voiceTargetController?.insertVoiceTranscription(transcript)
+    }
+  }
+
   private func observeRunEvents(on manager: WebSocketManager) {
     manager.addChatSentListener { [weak self] request in
       guard let self else { return }
@@ -216,10 +246,14 @@ class AppCoordinator: ObservableObject {
   }
 
   private func observeShortcutChanges() {
+    guard !isObservingShortcutChanges else { return }
+    isObservingShortcutChanges = true
+
     // Observe UserDefaults for shortcut changes
     NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
       .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
       .sink { [weak self] _ in
+        guard self?.hasCompletedOnboarding == true else { return }
         print("🔄 Shortcut settings changed - updating hotkeys")
         self?.registerAllShortcuts()
       }
@@ -231,8 +265,9 @@ class AppCoordinator: ObservableObject {
       .removeDuplicates()
       .receive(on: RunLoop.main)
       .sink { [weak self] isGranted in
-        guard let self, isGranted else { return }
+        guard let self, self.hasCompletedOnboarding, isGranted else { return }
         self.selectionMonitor.startMonitoring()
+        self.voiceDictation.restartMonitoring()
         self.isMonitoring = true
       }
       .store(in: &cancellables)
@@ -526,8 +561,7 @@ class AppCoordinator: ObservableObject {
 
   /// Start coordinating (call on app launch)
   func start() {
-    let completed = UserDefaults.standard.bool(forKey: "isOnboardingCompleted")
-    if !completed {
+    if !hasCompletedOnboarding {
       onboardingWindow.show()
     } else {
       performCoreStart()
@@ -535,7 +569,11 @@ class AppCoordinator: ObservableObject {
   }
 
   func resetOnboarding() {
-    UserDefaults.standard.set(false, forKey: "isOnboardingCompleted")
+    UserDefaults.standard.removeObject(forKey: OnboardingState.completionVersionKey)
+    hasCompletedOnboarding = false
+    hotkeyManager.deactivateAllShortcuts()
+    stop()
+    hasStartedCoreServices = false
     DispatchQueue.main.async {
       MenuBarContentView.settingsWindowController?.window?.close()
       MenuBarContentView.settingsWindowController = nil
@@ -545,6 +583,12 @@ class AppCoordinator: ObservableObject {
 
   /// The original core start logic (permissions, monitoring, server connection)
   private func performCoreStart() {
+    guard hasCompletedOnboarding else { return }
+    guard !hasStartedCoreServices else { return }
+    hasStartedCoreServices = true
+    registerAllShortcuts()
+    observeShortcutChanges()
+    voiceDictation.startMonitoring()
     permissionsManager.checkPermissions()
 
     if permissionsManager.hasAccessibilityPermission {
@@ -571,7 +615,8 @@ class AppCoordinator: ObservableObject {
   }
 
   private func completeOnboarding() {
-    UserDefaults.standard.set(true, forKey: "isOnboardingCompleted")
+    UserDefaults.standard.set(OnboardingState.currentVersion, forKey: OnboardingState.completionVersionKey)
+    hasCompletedOnboarding = true
     onboardingWindow.close()
 
     // Show settings as requested
@@ -592,6 +637,7 @@ class AppCoordinator: ObservableObject {
     wsManager.disconnect()
     serverLauncher.stop()
     quickActionsMenu.hide()
+    voiceDictation.stopMonitoring()
     isMonitoring = false
     print("🛑 App coordinator stopped")
   }

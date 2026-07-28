@@ -47,6 +47,7 @@ export function compactBrowserSnapshot(value: unknown, options: CompactSnapshotO
     title: stringValue(snapshot.title),
     readyState: stringValue(snapshot.readyState),
     snapshotVersion: numberValue(snapshot.snapshotVersion),
+    frames: compactFrames(snapshot.frames),
     tree: lines.join("\n"),
     text,
     tables,
@@ -68,6 +69,7 @@ function semanticLine(element: Record<string, unknown>) {
   const state: string[] = [];
 
   if (ref) state.push(`ref=${ref}`);
+  if (Number.isInteger(element.frameId) && Number(element.frameId) !== 0) state.push(`frame=${element.frameId}`);
   if (value && value !== name && value !== "[password]") state.push(`value=${quoted(value)}`);
   if (value === "[password]") state.push("value=[password]");
   if (element.checked === true) state.push("checked");
@@ -106,13 +108,35 @@ function compactTables(value: unknown, maxTables: number, maxRows: number, maxCo
         ? row.slice(0, maxColumns).map((cell) => truncate(clean(cell), 240))
         : [])
       : [];
-    return removeUndefined({ caption: clean(record.caption) || undefined, rows });
+    return removeUndefined({
+      caption: clean(record.caption) || undefined,
+      frameId: Number.isInteger(record.frameId) ? record.frameId : undefined,
+      rows,
+    });
   }).filter((table) => Array.isArray(table.rows) && table.rows.length > 0);
   return tables.length ? tables : undefined;
 }
 
+function compactFrames(value: unknown) {
+  if (!Array.isArray(value)) return undefined;
+  const frames = value.slice(0, 50).map((frame) => {
+    const record = asRecord(frame);
+    return removeUndefined({
+      frameId: Number.isInteger(record.frameId) ? record.frameId : undefined,
+      parentFrameId: Number.isInteger(record.parentFrameId) ? record.parentFrameId : undefined,
+      url: truncate(clean(record.url), 500) || undefined,
+      main: record.main === true || undefined,
+    });
+  }).filter((frame) => frame.frameId !== undefined);
+  return frames.length > 1 ? frames : undefined;
+}
+
 function appendUnique(lines: string[], seen: Set<string>, line: string, maxLines: number) {
-  const signature = line.replace(/\s*\[ref=[^\]]+\]/, "").trim().toLocaleLowerCase();
+  const signature = line
+    .replace(/\bref=[^\s\]]+\s*/g, "")
+    .replace(/\[\s*\]/g, "")
+    .trim()
+    .toLocaleLowerCase();
   if (!signature || seen.has(signature) || lines.length >= maxLines) return;
   seen.add(signature);
   lines.push(line);

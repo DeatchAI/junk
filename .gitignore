@@ -1,10 +1,18 @@
 # User request: ignore the server-deprecated dir
 server-deprecated-use-v2/
 
+# Generated runtime binaries are built locally and in release CI. They are not
+# source artifacts and must not be committed.
+app/lazzy/detach-runtime
+app/server-v2/detach-runtime
+app/lazzy/opencode
+
 # Xcode specific ignores
 xcuserdata/
 *.xcuserdatad
 buildServer.json
+DerivedData/
+*.xcresult
 
 # Node dependencies and build folders
 node_modules/
@@ -25,6 +33,4 @@ build/
 .Spotlight-V100
 .Trashes
 ehthumbs.db
-# Nested web repo
-web/
-
+Thumbs.db

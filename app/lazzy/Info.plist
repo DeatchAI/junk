@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>DETACH_DISTRIBUTION_MODE</key>
+	<string>$(DETACH_DISTRIBUTION_MODE)</string>
+	<key>DETACH_HOSTED_CONTROL_PLANE_URL</key>
+	<string>$(DETACH_HOSTED_CONTROL_PLANE_URL)</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -23,6 +27,10 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Detach uses the microphone only while you hold Fn to dictate text into the composer.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Detach transcribes speech you record while holding Fn and inserts the text into the composer.</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUAutomaticallyUpdate</key>

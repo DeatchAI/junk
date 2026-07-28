@@ -13,19 +13,9 @@ class MockSocket {
 describe("shared P0 browser routing", () => {
   test("reports the browser harness version for benchmark preflight", async () => {
     const browser = new BrowserAutomation(new BrowserBridge());
-    expect(await browser.getStatus()).toMatchObject({ harnessVersion: "0.3.5" });
-  });
-
-  test("partial mode changes preserve Power browser options", () => {
-    const browser = new BrowserAutomation(new BrowserBridge());
-    browser.updateSettings({ mode: "power", headless: true, viewportWidth: 1440, cdpUrl: " ws://localhost:9222/devtools/browser/test " });
-    browser.updateSettings({ mode: "signed_in" });
-
-    expect(browser.getSettings()).toMatchObject({
+    expect(await browser.getStatus()).toMatchObject({
+      harnessVersion: "0.4.0",
       mode: "signed_in",
-      headless: true,
-      viewportWidth: 1440,
-      cdpUrl: "ws://localhost:9222/devtools/browser/test",
     });
   });
 
@@ -39,9 +29,9 @@ describe("shared P0 browser routing", () => {
     const begin = browser.beginTask("run-1");
     expect(JSON.parse(socket.messages[0] ?? "{}")).toMatchObject({
       command: "browser.begin_task",
-      payload: { runId: "run-1", isolated: false },
+      payload: { runId: "run-1" },
     });
-    respond(bridge, socket.messages[0], { isolated: true, windowId: 7 });
+    respond(bridge, socket.messages[0], { windowId: 7, reused: true });
     await begin;
 
     const command = browser.execute({ command: "browser.navigate", payload: { url: "https://example.com" } }, "run-1");
@@ -74,7 +64,7 @@ describe("shared P0 browser routing", () => {
 
     const begin = browser.beginTask("run-code");
     await waitForMessages(socket, 1);
-    respond(bridge, socket.messages[0], { isolated: true, windowId: 9 });
+    respond(bridge, socket.messages[0], { windowId: 9, reused: true });
     await begin;
 
     const execution = browser.execute({
@@ -110,7 +100,7 @@ describe("shared P0 browser routing", () => {
 
     const begin = browser.beginTask("run-live-query");
     await waitForMessages(socket, 1);
-    respond(bridge, socket.messages[0], { isolated: true, windowId: 11 });
+    respond(bridge, socket.messages[0], { windowId: 11, reused: true });
     await begin;
 
     const execution = browser.execute({
@@ -143,7 +133,7 @@ describe("shared P0 browser routing", () => {
 
     const begin = browser.beginTask("run-final-state");
     await waitForMessages(socket, 1);
-    respond(bridge, socket.messages[0], { isolated: true, windowId: 12 });
+    respond(bridge, socket.messages[0], { windowId: 12, reused: true });
     await begin;
 
     const ending = browser.endTask("run-final-state");

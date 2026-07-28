@@ -28,6 +28,8 @@ struct FloatingChatInputView: View {
   var onRemoveMCP: (ComposerMCPAttachment) -> Void
   var onRemoveCommand: (SlashCommandAlias) -> Void
   var selectedAction: String = "Anything .."
+  let voiceDictationState: VoiceDictationState
+  let voicePartialTranscript: String
 
   @ObservedObject private var theme = ThemeManager.shared
   @State private var isAttachmentMenuPresented = false
@@ -38,6 +40,10 @@ struct FloatingChatInputView: View {
 
   var body: some View {
     VStack(spacing: 8) {
+        if voiceDictationState != .idle {
+          voiceStatus
+        }
+
         HStack(alignment: .top, spacing: 8) {
           ZStack(alignment: .topLeading) {
             if inputText.isEmpty {
@@ -128,6 +134,65 @@ struct FloatingChatInputView: View {
       isAttachmentMenuActive = false
       isCommandMenuActive = false
     }
+  }
+
+  private var voiceStatus: some View {
+    HStack(spacing: 8) {
+      Image(systemName: voiceStatusIcon)
+        .font(.appFont(size: 12, weight: .semibold))
+        .foregroundColor(voiceStatusColor)
+
+      Text(voiceStatusText)
+        .font(.appFont(size: 12, weight: .medium))
+        .foregroundColor(theme.textColor.opacity(0.72))
+        .lineLimit(2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+
+      if voiceDictationState == .listening {
+        Text("Release Fn to attach")
+          .font(.appFont(size: 10, weight: .medium))
+          .foregroundColor(theme.secondaryTextColor)
+      }
+    }
+    .padding(.horizontal, 8)
+    .padding(.vertical, 7)
+    .background(theme.accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 9))
+  }
+
+  private var voiceStatusText: String {
+    switch voiceDictationState {
+    case .idle:
+      return ""
+    case .requestingPermission:
+      return "Preparing voice input…"
+    case .listening:
+      let partial = voicePartialTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+      return partial.isEmpty ? "Listening…" : partial
+    case .processing:
+      return "Finishing transcription…"
+    case .failed(let message):
+      return message
+    }
+  }
+
+  private var voiceStatusIcon: String {
+    switch voiceDictationState {
+    case .idle, .requestingPermission:
+      return "mic"
+    case .listening:
+      return "waveform"
+    case .processing:
+      return "ellipsis"
+    case .failed:
+      return "exclamationmark.triangle"
+    }
+  }
+
+  private var voiceStatusColor: Color {
+    if case .failed = voiceDictationState {
+      return .red
+    }
+    return theme.accentColor
   }
 
   private var hasAttachments: Bool {
@@ -565,14 +630,16 @@ private final class ComposerNSTextView: NSTextView {
       .font: baseFont,
     ], range: fullRange)
 
-    let pattern = #"(^|\s)([@/][^\s]+)"#
+    let pattern = #"(^|\s)((?:[@/][^\s]+)|(?:(?:https?|file)://[^\s<>()]+)|(?:(?:(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9_-]+\.(?:swift|m|mm|h|ts|tsx|js|jsx|json|md|py|go|rs|java|kt|css|html|yaml|yml|sh|rb|sql|c|cpp|cc|hpp))(?:\s*\(line\s+\d+\)|:\d+)?))"#
     if let regex = try? NSRegularExpression(pattern: pattern) {
-      let text = storage.string as NSString
       regex.enumerateMatches(in: storage.string, range: fullRange) { match, _, _ in
         guard let tokenRange = match?.range(at: 2), tokenRange.location != NSNotFound else { return }
         storage.addAttributes([
           .foregroundColor: tokenColor,
           .font: baseFont,
+          .backgroundColor: tokenColor.withAlphaComponent(0.14),
+          .underlineStyle: NSUnderlineStyle.single.rawValue,
+          .underlineColor: tokenColor.withAlphaComponent(0.55),
         ], range: tokenRange)
       }
     }
@@ -1595,8 +1662,13 @@ private struct InlineFileBrowser: View {
         if isSearching {
           ProgressView()
             .controlSize(.mini)
-            .help("Indexing your home directory")
+            .help("Loading files")
         }
+
+        Button("Choose from Mac…", action: chooseFromMac)
+          .font(.appFont(size: 11, weight: .medium))
+          .buttonStyle(.plain)
+          .foregroundColor(theme.accentColor)
       }
       .foregroundColor(theme.textColor)
       .padding(.horizontal, 4)
@@ -1621,7 +1693,7 @@ private struct InlineFileBrowser: View {
       ContentUnavailableView(
         "No matching files",
         systemImage: "doc.text.magnifyingglass",
-        description: Text(query.isEmpty ? "Browse folders in your home directory." : "The home directory is still being indexed, or try a shorter name.")
+        description: Text(query.isEmpty ? "Choose from your Mac or open a folder below." : "Try a folder path such as Desktop/ or choose from your Mac.")
       )
       .frame(height: 294)
     } else {
@@ -1737,6 +1809,18 @@ private struct InlineFileBrowser: View {
     }
 
     onUpdateQuery(components.dropLast().joined(separator: "/") + "/")
+  }
+
+  private func chooseFromMac() {
+    let panel = NSOpenPanel()
+    panel.canChooseFiles = true
+    panel.canChooseDirectories = true
+    panel.allowsMultipleSelection = false
+    panel.prompt = "Attach"
+    panel.begin { response in
+      guard response == .OK, let url = panel.url else { return }
+      onSelect(url)
+    }
   }
 }
 

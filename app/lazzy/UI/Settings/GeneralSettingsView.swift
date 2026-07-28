@@ -19,7 +19,7 @@ struct GeneralSettingsView: View {
   private var agentOptions: [(model: String, isAvailable: Bool)] {
     let capabilities = wsManager.agentCapabilities
     if capabilities.isEmpty {
-      return [("Codex", true), ("Claude", false), ("Grok", false)]
+      return [("Codex", true), ("Claude", false), ("Grok", false), ("Hosted AI", false)]
     }
     return capabilities.map { ($0.displayName, $0.installed) }
   }
@@ -37,7 +37,7 @@ struct GeneralSettingsView: View {
       VStack(alignment: .leading, spacing: 26) {
         SettingsPageHeader(
           title: "General",
-          subtitle: "Choose the local agent Detach uses and configure its everyday behavior."
+          subtitle: "Choose the agent Detach uses and configure its everyday behavior."
         )
         runtimeSection
         appBehaviorSection
@@ -83,8 +83,8 @@ struct GeneralSettingsView: View {
   private var runtimeSection: some View {
     VStack(alignment: .leading, spacing: 10) {
       SettingsSectionHeader(
-        title: "Local runtime",
-        subtitle: "Detach uses agents already signed in on this Mac—no hosted keys, credits, or billing."
+        title: "Agent runtime",
+        subtitle: "Use an agent already signed in on this Mac or Detach-hosted models through OpenCode."
       )
 
       SettingsCard {
@@ -108,7 +108,7 @@ struct GeneralSettingsView: View {
 
         SettingsRow(
           title: "Active agent",
-          subtitle: "The CLI Detach uses for new conversations"
+          subtitle: "The coding harness Detach uses for new conversations"
         ) {
           ModelMenu(
             modelsWithAvailability: agentOptions,
@@ -137,7 +137,7 @@ struct GeneralSettingsView: View {
 
           SettingsRow(
             title: "Model",
-            subtitle: "Saved separately for each local agent"
+            subtitle: "Saved separately for each agent"
           ) {
             ModelMenu(
               modelsWithAvailability: modelOptions,
@@ -231,6 +231,7 @@ struct GeneralSettingsView: View {
     switch id {
     case "claude": return "Claude"
     case "grok": return "Grok"
+    case "opencode": return "Hosted AI"
     default: return "Codex"
     }
   }

@@ -102,6 +102,13 @@ class HotkeyManager: ObservableObject {
     registeredHotkeys.removeAll()
   }
 
+  /// Onboarding must be able to leave the app completely inert until the user
+  /// has finished setup, including after a developer resets onboarding.
+  func deactivateAllShortcuts() {
+    unregisterAllHotkeys()
+    currentShortcuts.removeAll()
+  }
+
   // MARK: - Carbon Event Handler
 
   private func setupEventHandler() {

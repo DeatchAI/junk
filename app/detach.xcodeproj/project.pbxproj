@@ -171,6 +171,7 @@
 				F036A8ED2EE2E5BA008B2707 /* Sources */,
 				F036A8EE2EE2E5BA008B2707 /* Frameworks */,
 				F036A8EF2EE2E5BA008B2707 /* Resources */,
+				A20000000000000000000001 /* Sign Bundled OpenCode */,
 				F0A5CDC72EEAF33100EDCCE8 /* Embed App Extensions */,
 			);
 			buildRules = (
@@ -257,6 +258,24 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		A20000000000000000000001 /* Sign Bundled OpenCode */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Sign Bundled OpenCode";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "OPENCODE_PATH=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/opencode\"\nif [ -f \"$OPENCODE_PATH\" ] && [ \"${CODE_SIGNING_ALLOWED:-YES}\" != \"NO\" ] && [ -n \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" ]; then\n  /bin/chmod 755 \"$OPENCODE_PATH\"\n  /usr/bin/codesign --force --options runtime --timestamp --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" \"$OPENCODE_PATH\"\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		A1000000000000000000000D /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -294,6 +313,8 @@
 				CODE_SIGN_ENTITLEMENTS = FinderExtension/FinderExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 7;
+				DETACH_DISTRIBUTION_MODE = self_hosted;
+				DETACH_HOSTED_CONTROL_PLANE_URL = "";
 				DEVELOPMENT_TEAM = RZJT39VU7M;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -335,6 +356,8 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 7;
+				DETACH_DISTRIBUTION_MODE = self_hosted;
+				DETACH_HOSTED_CONTROL_PLANE_URL = "";
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = RZJT39VU7M;
 				ENABLE_APP_SANDBOX = YES;
@@ -504,7 +527,7 @@
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
 				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
 				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
 				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
@@ -557,7 +580,7 @@
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
 				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
 				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
 				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;

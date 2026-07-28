@@ -35,7 +35,6 @@ struct OnboardingView: View {
   @State private var isRecordingShortcut = false
   @State private var showImporter = false
   @State private var importStatus = ""
-  @AppStorage("browser_automation_mode") private var browserModeRaw = BrowserSettings.defaultMode
 
   var onComplete: () -> Void
 
@@ -75,6 +74,9 @@ struct OnboardingView: View {
     .onAppear {
       permissions.checkPermissions()
       detectedAgents = LocalAgentDetector.detect()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+      permissions.checkPermissions()
     }
     .onChange(of: auth.isAuthenticated) { _, authenticated in
       if authenticated && step == .account { goForward() }
@@ -260,7 +262,9 @@ struct OnboardingView: View {
   private var agentsSetup: some View {
     OnboardingStepLayout(
       title: "Your subscriptions,\nyour agents.",
-      subtitle: "Detach connects to the CLI agents already installed on your Mac. Nothing is routed through a hosted Detach model."
+      subtitle: DistributionConfiguration.mode == .hosted
+        ? "Use CLI agents already on your Mac or Detach-hosted models through the bundled OpenCode harness."
+        : "Detach connects to the CLI agents already installed on your Mac. Nothing is routed through a hosted Detach model."
     ) {
       VStack(alignment: .leading, spacing: 10) {
         ForEach(LocalAgentDetector.Agent.allCases) { agent in
@@ -302,56 +306,24 @@ struct OnboardingView: View {
 
   private var browserSetup: some View {
     OnboardingStepLayout(
-      title: "Choose where agents\nwork on the web.",
-      subtitle: "Use your signed-in Chrome when existing logins matter, or choose a separate Power Browser for deeper, isolated automation."
+      title: "Agents work in your\nsigned-in Chrome.",
+      subtitle: "The Detach Browser Agent extension lets agents use the Chrome profile where you are already logged in."
     ) {
       VStack(alignment: .leading, spacing: 14) {
+        setupInstruction(number: 1, "Open Chrome Extensions")
+        setupInstruction(number: 2, "Enable Developer mode and choose Load unpacked")
+        setupInstruction(number: 3, "Select Detach’s chrome-extension folder, then pin it")
         HStack(spacing: 10) {
-          onboardingBrowserMode(.signedIn, icon: "person.crop.circle.badge.checkmark")
-          onboardingBrowserMode(.power, icon: "bolt.shield.fill")
+          Button("Open Chrome Extensions") { NSWorkspace.shared.open(URL(string: "chrome://extensions")!) }
+            .buttonStyle(OnboardingPrimaryButtonStyle())
+          Button("Show extension folder") { showBrowserExtensionFolder() }
+            .buttonStyle(OnboardingSecondaryButtonStyle())
         }
-
-        if browserModeRaw == BrowserAutomationMode.signedIn.rawValue {
-          setupInstruction(number: 1, "Open Chrome Extensions")
-          setupInstruction(number: 2, "Enable Developer mode and choose Load unpacked")
-          setupInstruction(number: 3, "Select Detach’s chrome-extension folder, then pin it")
-          HStack(spacing: 10) {
-            Button("Open Chrome Extensions") { NSWorkspace.shared.open(URL(string: "chrome://extensions")!) }
-              .buttonStyle(OnboardingPrimaryButtonStyle())
-            Button("Show extension folder") { showBrowserExtensionFolder() }
-              .buttonStyle(OnboardingSecondaryButtonStyle())
-          }
-          Text("Open the extension popup once after installing to connect it to Detach.")
-            .font(.system(size: 12))
-            .foregroundStyle(.secondary)
-        } else {
-          Label("No extension required", systemImage: "checkmark.circle.fill")
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.primary)
-          Text("Detach will use a separate persistent Chrome profile that becomes more established over time. Task tabs are isolated and automatically cleaned up.")
-            .font(.system(size: 12))
-            .foregroundStyle(.secondary)
-        }
+        Text("Open the extension popup once after installing. Detach will reuse the focused Chrome window and will not launch a separate browser profile.")
+          .font(.system(size: 12))
+          .foregroundStyle(.secondary)
       }
     }
-  }
-
-  private func onboardingBrowserMode(_ mode: BrowserAutomationMode, icon: String) -> some View {
-    let selected = browserModeRaw == mode.rawValue
-    return Button {
-      browserModeRaw = mode.rawValue
-      AppCoordinator.shared?.wsManager.syncBrowserSettings()
-    } label: {
-      HStack(spacing: 8) {
-        Image(systemName: icon)
-        Text(mode.title).font(.system(size: 12, weight: .semibold))
-      }
-      .frame(maxWidth: .infinity)
-      .padding(.vertical, 10)
-      .background(.primary.opacity(selected ? 0.1 : 0.035), in: RoundedRectangle(cornerRadius: 10))
-      .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? Color.primary.opacity(0.45) : .clear))
-    }
-    .buttonStyle(.plain)
   }
 
   private func setupInstruction(number: Int, _ text: String) -> some View {

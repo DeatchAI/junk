@@ -126,6 +126,17 @@ extension ServerLauncher {
 
     var environment = ProcessInfo.processInfo.environment
     environment["PORT"] = "\(port)"
+    environment["DETACH_DISTRIBUTION_MODE"] = DistributionConfiguration.mode.rawValue
+    if let hostedControlPlaneURL = DistributionConfiguration.hostedControlPlaneURL {
+      environment["DETACH_HOSTED_CONTROL_PLANE_URL"] = hostedControlPlaneURL.absoluteString
+    } else {
+      environment.removeValue(forKey: "DETACH_HOSTED_CONTROL_PLANE_URL")
+    }
+    if let openCodeURL = Bundle.main.url(forResource: "opencode", withExtension: nil) {
+      environment["DETACH_OPENCODE_PATH"] = openCodeURL.path
+    } else {
+      environment.removeValue(forKey: "DETACH_OPENCODE_PATH")
+    }
     process.environment = environment
 
     process.terminationHandler = { [weak self] _ in

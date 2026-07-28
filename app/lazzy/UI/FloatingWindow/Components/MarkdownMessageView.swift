@@ -14,7 +14,10 @@ struct MarkdownMessageView: View {
   @ObservedObject private var theme = ThemeManager.shared
 
   @State private var segments: [ContentSegment] = []
-  @State private var viewWidth: CGFloat = 400  // Default fallback
+  // The floating panel is 520pt wide. Start close to its usable text width so
+  // the first render does not lay out at 400pt and then visibly reflow once
+  // AppKit reports the actual width.
+  @State private var viewWidth: CGFloat = 468
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {

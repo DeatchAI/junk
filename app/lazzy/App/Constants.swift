@@ -44,20 +44,10 @@ enum ServerConfig {
     return Bundle.main.path(forResource: "lazzy-server", ofType: nil)
   }
 
-  static func launchArguments(for serverPath: String) -> [String] {
-    let binaryName = URL(fileURLWithPath: serverPath).lastPathComponent
-    guard binaryName == "lazzy-server" else {
-      return []
-    }
-
-    return [
-      "--google-key=\(APISecrets.googleAPIKey)",
-      "--openai-key=\(APISecrets.openAIKey)",
-      "--composio-key=\(APISecrets.composioKey)",
-      "--aigateway-key=\(APISecrets.aigatewayKey)",
-      "--supabase-url=\(APISecrets.supabaseURL)",
-      "--supabase-key=\(APISecrets.supabaseKey)",
-    ]
+  /// Runtime arguments must never smuggle provider credentials out of the app.
+  /// The legacy server receives no secret-bearing compatibility arguments.
+  static func launchArguments(for _: String) -> [String] {
+    []
   }
 
   private static func developmentRuntimePath() -> String? {

@@ -25,6 +25,9 @@ interface LocatorSpec {
   exact?: boolean;
   many?: boolean;
   index?: number;
+  frameSelector?: string;
+  frameId?: number;
+  documentId?: string;
 }
 
 interface SafeFunction {
@@ -65,8 +68,20 @@ class Environment {
 
 class PageHandle {
   readonly keyboard = new KeyboardHandle(this);
+  readonly media = new MediaHandle(this);
 
   constructor(readonly executor: BrowserCodeExecutor) {}
+}
+
+class MediaHandle {
+  constructor(readonly page: PageHandle) {}
+}
+
+class FrameLocatorHandle {
+  frameId?: number;
+  documentId?: string;
+
+  constructor(readonly page: PageHandle, readonly selector: string) {}
 }
 
 class KeyboardHandle {
@@ -104,7 +119,8 @@ class BuiltinHandle {
 const BLOCKED_PROPERTIES = new Set(["__proto__", "prototype", "constructor", "caller", "callee"]);
 const PAGE_METHODS = new Set([
   "status", "goto", "open", "snapshot", "text", "tabs", "activeTab", "activateTab", "closeTab",
-  "back", "forward", "reload", "waitFor", "waitForURL", "events", "screenshot", "acceptDialog", "dismissDialog",
+  "back", "forward", "reload", "waitFor", "waitForURL", "waitForEvent", "events", "screenshot", "acceptDialog", "dismissDialog",
+  "frames", "frameLocator", "table", "artifact", "artifacts",
   "getByRole", "getByText", "getByLabel", "getByPlaceholder", "locator", "ref", "url", "title", "evaluate",
 ]);
 const MAX_CODE_LENGTH = 20_000;
@@ -121,6 +137,7 @@ export class BrowserCodeExecutor {
   private readonly images: Array<{ data: string; mimeType: string }> = [];
   private readonly consoleOutput: unknown[] = [];
   private deadline = 0;
+  private executionStartedAt = 0;
 
   constructor(private readonly runPrimitive: BrowserPrimitiveRunner) {}
 
@@ -135,7 +152,8 @@ export class BrowserCodeExecutor {
       throw new Error(`Browser code syntax error: ${ts.flattenDiagnosticMessageText(diagnostics[0]!.messageText, " ")}`);
     }
 
-    this.deadline = Date.now() + clampNumber(timeoutMs, 1_000, 300_000, 60_000);
+    this.executionStartedAt = Date.now();
+    this.deadline = this.executionStartedAt + clampNumber(timeoutMs, 1_000, 300_000, 60_000);
     const environment = new Environment();
     const page = new PageHandle(this);
     environment.declare("page", page);
@@ -368,6 +386,8 @@ export class BrowserCodeExecutor {
     if (BLOCKED_PROPERTIES.has(method)) throw new Error(`Browser code property is blocked: ${method}`);
     if (receiver instanceof PageHandle) return await this.callPage(receiver, method, args);
     if (receiver instanceof LocatorHandle) return await this.callLocator(receiver, method, args);
+    if (receiver instanceof FrameLocatorHandle) return await this.callFrameLocator(receiver, method, args);
+    if (receiver instanceof MediaHandle) return await this.callMedia(receiver, method, args);
     if (receiver instanceof DocumentHandle) return this.callDocument(receiver, method, args);
     if (receiver instanceof DOMElementHandle) return this.callDOMElement(receiver, method, args);
     if (receiver instanceof KeyboardHandle && method === "press") {
@@ -410,10 +430,26 @@ export class BrowserCodeExecutor {
       case "reload": return await this.primitive("browser.refresh", asRecord(args[0]));
       case "waitFor": return await this.waitFor(args);
       case "waitForURL": return await this.waitForURL(args);
+      case "waitForEvent": return await this.waitForEvent(args);
       case "events": return await this.primitive("browser.events", { drain: asRecord(args[0]).drain !== false }, false);
       case "screenshot": return await this.captureScreenshot(asRecord(args[0]));
       case "acceptDialog": return await this.primitive("browser.dialog", { action: "accept", promptText: stringValue(args[0]) });
       case "dismissDialog": return await this.primitive("browser.dialog", { action: "dismiss" });
+      case "frames": return await this.primitive("browser.frames", {});
+      case "frameLocator": return new FrameLocatorHandle(page, requireString(args[0], "frame selector"));
+      case "table": {
+        const snapshot = asRecord(await this.primitive("browser.snapshot", {
+          maxElements: 40,
+          maxTextLength: 1_000,
+        }));
+        const tables = Array.isArray(snapshot.tables) ? snapshot.tables : [];
+        if (typeof args[0] === "number") return tables[args[0]];
+        return tables;
+      }
+      case "artifact": return await this.captureArtifact(args[0]);
+      case "artifacts": return await this.primitive("browser.artifacts", isPlainRecord(args[0]) ? args[0] : (
+        typeof args[0] === "string" ? { artifactId: args[0] } : {}
+      ));
       case "url": return stringValue(asRecord(await this.primitive("browser.get_active_tab", {})).url) ?? "";
       case "title": return stringValue(asRecord(await this.primitive("browser.get_active_tab", {})).title) ?? "";
       case "evaluate": {
@@ -440,6 +476,82 @@ export class BrowserCodeExecutor {
     }
   }
 
+  private async callFrameLocator(frame: FrameLocatorHandle, method: string, args: unknown[]) {
+    const options = asRecord(args[1]);
+    const base = { frameSelector: frame.selector, frameId: frame.frameId, documentId: frame.documentId };
+    if (method === "getByRole") return new LocatorHandle(frame.page, {
+      ...base,
+      kind: "role",
+      value: requireString(args[0], "role"),
+      name: stringValue(options.name),
+      exact: Boolean(options.exact),
+    });
+    if (method === "getByText") return new LocatorHandle(frame.page, {
+      ...base,
+      kind: "text",
+      value: requireString(args[0], "text"),
+      exact: Boolean(options.exact),
+    });
+    if (method === "getByLabel") return new LocatorHandle(frame.page, {
+      ...base,
+      kind: "label",
+      value: requireString(args[0], "label"),
+      exact: Boolean(options.exact),
+    });
+    if (method === "getByPlaceholder") return new LocatorHandle(frame.page, {
+      ...base,
+      kind: "placeholder",
+      value: requireString(args[0], "placeholder"),
+      exact: Boolean(options.exact),
+    });
+    if (method === "locator") return new LocatorHandle(frame.page, {
+      ...base,
+      kind: "selector",
+      value: requireString(args[0], "selector"),
+    });
+    if (method === "ref") return new LocatorHandle(frame.page, {
+      ...base,
+      kind: "ref",
+      value: requireString(args[0], "ref"),
+    });
+    throw new Error(`Unsupported frameLocator method: ${method}`);
+  }
+
+  private async callMedia(media: MediaHandle, method: string, args: unknown[]) {
+    const options = asRecord(args[1] ?? args[0]);
+    const selector = stringValue(options.selector) || "video,audio";
+    if (method === "inspect" || method === "captions") {
+      const result = asRecord(await this.primitive("browser.media", { action: "inspect", selector }));
+      return method === "captions" ? result.captions || "" : result;
+    }
+    if (method === "seek") {
+      return await this.primitive("browser.media", {
+        action: "seek",
+        selector,
+        seconds: numberOr(args[0], 0),
+      });
+    }
+    if (method === "frame") {
+      const seconds = numberOr(args[0], 0);
+      await this.primitive("browser.media", { action: "frame", selector, seconds });
+      return await this.captureScreenshot({ selector });
+    }
+    throw new Error(`Unsupported page.media method: ${method}`);
+  }
+
+  private async captureArtifact(input: unknown) {
+    let payload: Record<string, unknown>;
+    if (input instanceof LocatorHandle) payload = await this.liveLocatorPayload(input);
+    else if (typeof input === "string") payload = { url: input };
+    else payload = asRecord(input);
+    const result = asRecord(await this.primitive("browser.artifact", payload));
+    const image = asRecord(result.image);
+    if (typeof image.data === "string" && typeof image.mimeType === "string") {
+      this.images.push({ data: image.data, mimeType: image.mimeType });
+    }
+    return result;
+  }
+
   private async callLocator(locator: LocatorHandle, method: string, args: unknown[]) {
     if (method === "first") return new LocatorHandle(locator.page, { ...locator.spec, index: 0 });
     if (method === "last") return new LocatorHandle(locator.page, { ...locator.spec, index: -1 });
@@ -452,6 +564,13 @@ export class BrowserCodeExecutor {
     if (method === "innerText") return await this.readLocator(locator, "innerText");
     if (method === "inputValue") return await this.readLocator(locator, "inputValue");
     if (method === "describe") return await this.readLocatorElement(locator);
+    if (method === "boundingBox") {
+      const element = await this.readLocatorElement(locator);
+      return element.data.rect ?? null;
+    }
+    if (method === "screenshot") {
+      return await this.captureScreenshot({ ...await this.liveLocatorPayload(locator), ...asRecord(args[0]) });
+    }
     if (method === "checkValidity") {
       const result = asRecord(await this.primitive("browser.query", { ...await this.liveLocatorPayload(locator), kind: "checkValidity" }));
       if (typeof result.valid !== "boolean") throw new Error("Browser validity query returned no result");
@@ -465,13 +584,36 @@ export class BrowserCodeExecutor {
     const target = resolved.target;
     switch (method) {
       case "click": return await this.primitive("browser.click", { ...target, ...asRecord(args[0]) });
+      case "dblclick": return await this.primitive("browser.click", { ...target, ...asRecord(args[0]), clickCount: 2 });
+      case "tap": return await this.primitive("browser.click", { ...target, ...asRecord(args[0]) });
       case "hover": return await this.primitive("browser.hover", target);
+      case "focus": return await this.primitive("browser.focus", target);
+      case "check": return await this.primitive("browser.check", { ...target, checked: true });
+      case "uncheck": return await this.primitive("browser.check", { ...target, checked: false });
+      case "clear": return await this.verifiedType(target, "", false);
       case "fill": return await this.verifiedType(target, stringValue(args[0]) ?? "", false);
       case "type": return await this.verifiedType(target, stringValue(args[0]) ?? "", true);
       case "press": {
         await this.primitive("browser.click", target);
-        return await this.primitive("browser.key", { key: requireString(args[0], "key") });
+        return await this.primitive("browser.key", { ...target, key: requireString(args[0], "key") });
       }
+      case "dragTo": {
+        const destination = args[0];
+        if (destination instanceof LocatorHandle) {
+          const resolvedDestination = await this.resolveLocator(destination);
+          if (
+            Number.isInteger(target.frameId)
+            && Number.isInteger(resolvedDestination.target.frameId)
+            && target.frameId !== resolvedDestination.target.frameId
+          ) {
+            throw new Error("Dragging across browser frames is not supported");
+          }
+          return await this.primitive("browser.drag", { ...target, target: resolvedDestination.target });
+        }
+        const options = asRecord(destination);
+        return await this.primitive("browser.drag", { ...target, ...options });
+      }
+      case "setRange": return await this.primitive("browser.drag", { ...target, value: Number(args[0]) });
       case "selectOption": {
         const choice = isPlainRecord(args[0]) ? args[0] : { value: requireString(args[0], "option") };
         return await this.primitive("browser.select", { ...target, ...choice });
@@ -552,18 +694,40 @@ export class BrowserCodeExecutor {
     throw new Error(`NAVIGATION_TIMEOUT: URL did not match ${JSON.stringify(expected)} within ${timeoutMs}ms. Last URL: ${lastUrl || "unknown"}`);
   }
 
+  private async waitForEvent(args: unknown[]) {
+    const expected = requireString(args[0], "event type");
+    const timeoutMs = waitTimeout(asRecord(args[1]));
+    const deadline = Date.now() + timeoutMs;
+    let observed: unknown[] = [];
+    while (Date.now() < deadline) {
+      const result = asRecord(await this.primitive("browser.events", { drain: false }, false));
+      observed = Array.isArray(result.events) ? result.events : [];
+      const match = [...observed].reverse().find((event) => {
+        const record = asRecord(event);
+        const timestamp = Number(record.timestamp);
+        return String(record.type || "") === expected
+          && (!Number.isFinite(timestamp) || timestamp >= this.executionStartedAt);
+      });
+      if (match) return match;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error(`EVENT_TIMEOUT: Browser event ${JSON.stringify(expected)} did not occur within ${timeoutMs}ms. Recent events: ${JSON.stringify(observed.slice(-10))}`);
+  }
+
   private locatorPayload(locator: LocatorHandle) {
     if (locator.resolvedTarget) return locator.resolvedTarget;
     const spec = locator.spec;
-    if (spec.kind === "selector") return { selector: spec.value };
-    if (spec.kind === "ref") return { ref: spec.value };
-    if (spec.kind === "text") return { targetText: spec.value, exact: Boolean(spec.exact) };
-    if (spec.kind === "role") return { role: spec.value, name: spec.name, exact: Boolean(spec.exact) };
-    if (spec.kind === "placeholder") return { selector: `[placeholder="${cssAttributeEscape(spec.value)}"]` };
-    return { label: spec.value, exact: Boolean(spec.exact) };
+    const frame = spec.frameId === undefined ? {} : { frameId: spec.frameId, documentId: spec.documentId };
+    if (spec.kind === "selector") return { ...frame, selector: spec.value };
+    if (spec.kind === "ref") return { ...frame, ref: spec.value };
+    if (spec.kind === "text") return { ...frame, targetText: spec.value, exact: Boolean(spec.exact) };
+    if (spec.kind === "role") return { ...frame, role: spec.value, name: spec.name, exact: Boolean(spec.exact) };
+    if (spec.kind === "placeholder") return { ...frame, selector: `[placeholder="${cssAttributeEscape(spec.value)}"]` };
+    return { ...frame, label: spec.value, exact: Boolean(spec.exact) };
   }
 
   private async liveLocatorPayload(locator: LocatorHandle) {
+    await this.resolveLocatorFrame(locator);
     if (locator.resolvedTarget || locator.spec.kind === "selector" || locator.spec.kind === "ref" || locator.spec.kind === "text") {
       return this.locatorPayload(locator);
     }
@@ -594,18 +758,19 @@ export class BrowserCodeExecutor {
   }
 
   private async resolveLocator(locator: LocatorHandle) {
+    await this.resolveLocatorFrame(locator);
     if (locator.resolvedTarget) return { target: locator.resolvedTarget, element: undefined };
     const spec = locator.spec;
     if (spec.kind === "selector") {
-      locator.resolvedTarget = { selector: spec.value };
+      locator.resolvedTarget = this.locatorPayload(locator);
       return { target: locator.resolvedTarget, element: undefined };
     }
     if (spec.kind === "ref") {
-      locator.resolvedTarget = { ref: spec.value };
+      locator.resolvedTarget = this.locatorPayload(locator);
       return { target: locator.resolvedTarget, element: undefined };
     }
     if (spec.kind === "text") {
-      locator.resolvedTarget = { targetText: spec.value };
+      locator.resolvedTarget = this.locatorPayload(locator);
       return { target: locator.resolvedTarget, element: { name: spec.value } };
     }
 
@@ -614,6 +779,7 @@ export class BrowserCodeExecutor {
     const wantedRole = spec.kind === "role" ? normalize(spec.value) : undefined;
     const wantedName = spec.kind === "role" ? normalize(spec.name) : normalize(spec.value);
     const matches = elements.filter((element) => {
+      if (spec.frameId !== undefined && Number(element.frameId) !== spec.frameId) return false;
       const roleMatches = !wantedRole || normalize(element.role || element.tag) === wantedRole;
       const candidateNames = spec.kind === "placeholder"
         ? [element.placeholder]
@@ -642,8 +808,20 @@ export class BrowserCodeExecutor {
     const element = matches[selectedIndex];
     if (!element) throw new Error(`Locator index ${spec.index} is outside ${matches.length} matched elements`);
     if (typeof element.ref !== "string" || !element.ref) throw new Error("Matched semantic node is not actionable");
-    locator.resolvedTarget = { ref: element.ref };
+    locator.resolvedTarget = {
+      ref: element.ref,
+      ...(Number.isInteger(element.frameId) ? { frameId: element.frameId } : {}),
+      ...(typeof element.documentId === "string" ? { documentId: element.documentId } : {}),
+    };
     return { target: locator.resolvedTarget, element };
+  }
+
+  private async resolveLocatorFrame(locator: LocatorHandle) {
+    if (!locator.spec.frameSelector || locator.spec.frameId !== undefined) return;
+    const frame = asRecord(await this.primitive("browser.resolve_frame", { selector: locator.spec.frameSelector }));
+    if (!Number.isInteger(frame.frameId)) throw new Error(`Frame selector did not resolve: ${locator.spec.frameSelector}`);
+    locator.spec.frameId = frame.frameId;
+    locator.spec.documentId = stringValue(frame.documentId);
   }
 
   private async captureScreenshot(options: Record<string, unknown>) {
@@ -802,6 +980,7 @@ export class BrowserCodeExecutor {
   private async getProperty(receiver: unknown, property: string): Promise<unknown> {
     if (BLOCKED_PROPERTIES.has(property)) throw new Error(`Browser code property is blocked: ${property}`);
     if (receiver instanceof PageHandle && property === "keyboard") return receiver.keyboard;
+    if (receiver instanceof PageHandle && property === "media") return receiver.media;
     if (receiver instanceof PageHandle && PAGE_METHODS.has(property)) return true;
     if (receiver instanceof DocumentHandle) {
       if (property === "body") return new LocatorHandle(receiver.page, { kind: "selector", value: "body" });
@@ -823,7 +1002,7 @@ export class BrowserCodeExecutor {
       if (property === "value") return await this.readLocator(receiver, "inputValue");
       if ([
         "ref", "href", "tagName", "id", "name", "type", "accept", "placeholder", "autocomplete", "checked", "selected",
-        "disabled", "required", "multiple", "files", "options", "validity",
+        "disabled", "required", "multiple", "files", "options", "validity", "rect", "frameId", "documentId", "frameUrl", "src",
       ].includes(property)) {
         const element = await this.readLocatorElement(receiver);
         return await this.getProperty(element, property);
@@ -834,10 +1013,11 @@ export class BrowserCodeExecutor {
       if (property === "innerText") return receiver.data.innerText ?? receiver.data.textContent ?? "";
       if (property === "value") return receiver.data.value ?? "";
       if (property === "href") return receiver.data.href ?? "";
+      if (property === "src") return receiver.data.src ?? "";
       if (property === "tagName") return String(receiver.data.tagName ?? "").toUpperCase();
       if ([
         "ref", "id", "name", "type", "accept", "placeholder", "autocomplete", "checked", "selected", "disabled", "required",
-        "multiple", "files", "options", "validity",
+        "multiple", "files", "options", "validity", "rect", "frameId", "documentId", "frameUrl",
       ].includes(property)) return receiver.data[property];
     }
     if (Array.isArray(receiver) && property === "length") return receiver.length;
@@ -859,6 +1039,8 @@ function sanitizeResult(value: unknown, depth = 0): unknown {
   if (value instanceof LocatorHandle) return { locator: value.spec };
   if (value instanceof PageHandle) return { page: true };
   if (value instanceof KeyboardHandle) return { keyboard: true };
+  if (value instanceof MediaHandle) return { media: true };
+  if (value instanceof FrameLocatorHandle) return { frameLocator: value.selector };
   if (value instanceof DOMElementHandle) return sanitizeResult(value.data, depth + 1);
   if (
     value instanceof DocumentHandle

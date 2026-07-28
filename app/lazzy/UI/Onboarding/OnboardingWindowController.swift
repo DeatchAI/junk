@@ -29,7 +29,6 @@ class OnboardingWindowController: NSObject, ObservableObject, NSWindowDelegate {
   func windowWillClose(_ notification: Notification) {
     window = nil
     isVisible = false
-    onComplete?()
   }
 
   private func createWindow() {

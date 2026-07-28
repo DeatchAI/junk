@@ -13,6 +13,17 @@
   let previousElementSignatures = new Map();
   let secretDocumentLocked = false;
 
+  window.addEventListener("message", (event) => {
+    if (event.source !== window || event.data?.source !== "detach-dialog-bridge") return;
+    chrome.runtime.sendMessage({
+      target: "lazzy-dialog-event",
+      dialogType: event.data.dialogType,
+      message: event.data.message,
+      defaultValue: event.data.defaultValue,
+      action: event.data.action
+    }).catch(() => undefined);
+  });
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message || message.target !== "lazzy-content") return false;
 
@@ -36,8 +47,14 @@
         return getSelectionInfo();
       case "click":
         return clickTarget(payload);
+      case "focus":
+        return focusTarget(payload);
+      case "check":
+        return checkTarget(payload);
       case "hover":
         return hoverTarget(payload);
+      case "drag":
+        return dragTarget(payload);
       case "type":
         return typeIntoTarget(payload);
       case "prepareSecretFill":
@@ -61,6 +78,10 @@
         return scrollPage(payload);
       case "wait":
         return waitForPage(payload);
+      case "media":
+        return mediaCommand(payload);
+      case "fetchArtifact":
+        return fetchArtifact(payload);
       default:
         throw new Error(`Unsupported page command: ${command}`);
     }
@@ -198,9 +219,6 @@
       roots.push(root);
       for (const element of root.querySelectorAll?.("*") || []) {
         if (element.shadowRoot) visit(element.shadowRoot);
-        if (element instanceof HTMLIFrameElement) {
-          try { if (element.contentDocument) visit(element.contentDocument); } catch {}
-        }
       }
     };
     visit(document);
@@ -239,13 +257,16 @@
     const files = element instanceof HTMLInputElement && element.type.toLowerCase() === "file"
       ? Array.from(element.files || []).slice(0, 100).map((file) => ({ name: file.name, type: file.type, size: file.size }))
       : [];
+    const rect = element.getBoundingClientRect();
     return {
       ref: refForElement(element),
       tagName: element.tagName.toLowerCase(),
+      role: element.getAttribute("role") || implicitRole(element),
       textContent: truncate(String(element.textContent ?? ""), 20_000),
       innerText: truncate(String(element.innerText ?? element.textContent ?? ""), 20_000),
       value: isPassword ? "[password]" : liveElementValue(element),
       href: element.href || element.getAttribute("href") || "",
+      src: element.src || element.getAttribute("src") || "",
       id: element.id || "",
       name: String(element.name || ""),
       type: String(element.type || ""),
@@ -262,6 +283,13 @@
       options,
       valid: typeof element.checkValidity === "function" ? element.checkValidity() : true,
       validity: serializeElementValidity(element),
+      rect: {
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      },
+      devicePixelRatio: window.devicePixelRatio,
       attributes: Object.fromEntries(Array.from(element.attributes || [])
         .filter((attribute) => attribute.name !== "value" && attribute.name !== REF_ATTR)
         .slice(0, 40)
@@ -315,8 +343,23 @@
     scrollIntoView(element);
     const before = pageState();
     assertUnoccluded(element);
-    simulatePointer(element);
-    element.click();
+    const clickCount = clampNumber(payload.clickCount, 1, 3, 1);
+    const rect = element.getBoundingClientRect();
+    const position = payload.position && typeof payload.position === "object"
+      ? {
+          x: rect.left + clampNumber(payload.position.x, 0, rect.width, rect.width / 2),
+          y: rect.top + clampNumber(payload.position.y, 0, rect.height, rect.height / 2),
+        }
+      : undefined;
+    simulatePointer(element, position, clickCount);
+    if (position || clickCount > 1) {
+      for (let count = 1; count <= clickCount; count += 1) {
+        element.dispatchEvent(new MouseEvent("click", pointerEventInit(element, position, count)));
+      }
+      if (clickCount === 2) element.dispatchEvent(new MouseEvent("dblclick", pointerEventInit(element, position, 2)));
+    } else {
+      element.click();
+    }
     await afterPaint();
 
     return {
@@ -325,6 +368,35 @@
       before,
       after: pageState()
     };
+  }
+
+  async function focusTarget(payload = {}) {
+    const element = resolveElement(payload);
+    scrollIntoView(element);
+    element.focus({ preventScroll: true });
+    await afterPaint();
+    const verified = document.activeElement === element || element.contains(document.activeElement);
+    if (!verified) throw new Error("The target did not retain browser focus");
+    return { focused: describeElement(element), verified: true };
+  }
+
+  async function checkTarget(payload = {}) {
+    const element = resolveElement(payload);
+    if (!(element instanceof HTMLInputElement) || !["checkbox", "radio"].includes(element.type.toLowerCase())) {
+      throw new Error("Target is not a checkbox or radio input");
+    }
+    const checked = payload.checked !== false;
+    if (!checked && element.type.toLowerCase() === "radio") throw new Error("Radio inputs cannot be unchecked directly");
+    if (element.checked !== checked) {
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "checked");
+      if (descriptor?.set) descriptor.set.call(element, checked);
+      else element.checked = checked;
+      element.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    await afterPaint();
+    if (element.checked !== checked) throw new Error(`Target did not become ${checked ? "checked" : "unchecked"}`);
+    return { target: describeElement(element), checked: element.checked, verified: true };
   }
 
   async function hoverTarget(payload = {}) {
@@ -344,6 +416,54 @@
     element.dispatchEvent(new MouseEvent("mousemove", eventInit));
     await afterPaint();
     return { hovered: describeElement(element), trusted: false };
+  }
+
+  async function dragTarget(payload = {}) {
+    const source = resolveElement(payload);
+    scrollIntoView(source);
+    if (source instanceof HTMLInputElement && source.type.toLowerCase() === "range") {
+      const min = Number.isFinite(Number(source.min)) ? Number(source.min) : 0;
+      const max = Number.isFinite(Number(source.max)) ? Number(source.max) : 100;
+      const requested = Number(payload.value ?? payload.toValue ?? max);
+      const value = Math.min(max, Math.max(min, Number.isFinite(requested) ? requested : max));
+      setNativeValue(source, String(value));
+      dispatchInputEvents(source);
+      await afterPaint();
+      return { dragged: describeElement(source), mode: "range", value: source.value, verified: Number(source.value) === value };
+    }
+
+    const targetPayload = payload.target && typeof payload.target === "object"
+      ? payload.target
+      : {
+          ref: payload.targetRef,
+          selector: payload.targetSelector,
+          targetText: payload.targetText
+        };
+    const target = resolveElement(targetPayload);
+    scrollIntoView(target);
+    const sourceRect = source.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const transfer = new DataTransfer();
+    const event = (type, element, rect) => element.dispatchEvent(new DragEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: transfer,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2
+    }));
+    event("dragstart", source, sourceRect);
+    event("dragenter", target, targetRect);
+    event("dragover", target, targetRect);
+    event("drop", target, targetRect);
+    event("dragend", source, targetRect);
+    await afterPaint();
+    return {
+      dragged: describeElement(source),
+      target: describeElement(target),
+      mode: "html5",
+      trusted: false,
+      verified: true
+    };
   }
 
   function typeIntoTarget(payload = {}) {
@@ -595,6 +715,73 @@
     throw new Error(`WAIT_TIMEOUT: Browser wait timed out after ${timeoutMs}ms`);
   }
 
+  async function mediaCommand(payload = {}) {
+    const action = String(payload.action || "inspect");
+    const selector = typeof payload.selector === "string" ? payload.selector : "video,audio";
+    const media = findQueryElements({ selector })[0];
+    if (!(media instanceof HTMLMediaElement)) throw new Error(`No media element matched: ${selector}`);
+    if (action === "seek" || action === "frame") {
+      const seconds = Number(payload.seconds ?? payload.time ?? 0);
+      if (!Number.isFinite(seconds) || seconds < 0) throw new Error("Media seek needs a non-negative time in seconds");
+      if (Number.isFinite(media.duration) && seconds > media.duration) {
+        throw new Error(`Media time ${seconds} exceeds duration ${media.duration}`);
+      }
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("Media seek timed out")), 10_000);
+        const done = () => {
+          clearTimeout(timeout);
+          media.removeEventListener("seeked", done);
+          resolve();
+        };
+        media.addEventListener("seeked", done, { once: true });
+        media.currentTime = seconds;
+        if (Math.abs(media.currentTime - seconds) < 0.05 && media.readyState >= 2) done();
+      });
+    }
+    const textTracks = Array.from(media.textTracks || []).map((track) => ({
+      kind: track.kind,
+      label: track.label,
+      language: track.language,
+      mode: track.mode,
+      cues: Array.from(track.cues || []).slice(0, 5_000).map((cue) => ({
+        startTime: cue.startTime,
+        endTime: cue.endTime,
+        text: String(cue.text || "")
+      }))
+    }));
+    const captions = textTracks.flatMap((track) => track.cues).map((cue) => cue.text).filter(Boolean).join("\n");
+    return {
+      action,
+      media: describeElement(media),
+      currentTime: media.currentTime,
+      duration: Number.isFinite(media.duration) ? media.duration : undefined,
+      paused: media.paused,
+      readyState: media.readyState,
+      textTracks,
+      captions: truncate(captions, 200_000)
+    };
+  }
+
+  async function fetchArtifact(payload = {}) {
+    let url = typeof payload.url === "string" ? payload.url : "";
+    if (!url && (payload.ref || payload.selector || payload.targetText)) {
+      const element = resolveElement(payload);
+      url = element.href || element.src || element.getAttribute("href") || element.getAttribute("src") || "";
+    }
+    if (!url) url = location.href;
+    const absoluteUrl = new URL(url, location.href).href;
+    const response = await fetch(absoluteUrl, { credentials: "include" });
+    if (!response.ok) throw new Error(`Document fetch failed with HTTP ${response.status}`);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > 25 * 1024 * 1024) throw new Error("Document is larger than 25 MB");
+    return {
+      url: response.url || absoluteUrl,
+      mimeType: response.headers.get("content-type") || "application/octet-stream",
+      fileName: artifactFileName(response, absoluteUrl),
+      dataBase64: base64FromBytes(bytes)
+    };
+  }
+
   function scrollPage(payload = {}) {
     const behavior = payload.smooth ? "smooth" : "auto";
 
@@ -625,9 +812,11 @@
     for (const [ref, element] of refElements) {
       if (!element.isConnected) refElements.delete(ref);
     }
-    for (const element of document.querySelectorAll(interactiveSelector())) {
-      if (!isVisible(element)) continue;
-      refForElement(element);
+    for (const root of collectQueryRoots()) {
+      for (const element of root.querySelectorAll(interactiveSelector())) {
+        if (!isVisible(element)) continue;
+        refForElement(element);
+      }
     }
   }
 
@@ -645,10 +834,12 @@
   function collectInteractiveElements(maxElements) {
     const elements = [];
 
-    for (const element of document.querySelectorAll(interactiveSelector())) {
-      if (!isVisible(element)) continue;
-      elements.push(describeElement(element));
-      if (elements.length >= maxElements) break;
+    for (const root of collectQueryRoots()) {
+      for (const element of root.querySelectorAll(interactiveSelector())) {
+        if (!isVisible(element)) continue;
+        elements.push(describeElement(element));
+        if (elements.length >= maxElements) return elements;
+      }
     }
 
     return elements;
@@ -692,7 +883,7 @@
     }
 
     if (payload.selector) {
-      const element = document.querySelector(String(payload.selector));
+      const element = findQueryElements({ selector: String(payload.selector) })[0];
       if (element) return element;
       throw new Error(`No page element found for selector: ${payload.selector}`);
     }
@@ -711,10 +902,12 @@
     const needle = normalizeWhitespace(text).toLowerCase();
     if (!needle) return undefined;
 
-    for (const element of document.querySelectorAll(interactiveSelector())) {
-      if (!isVisible(element)) continue;
-      const haystack = normalizeWhitespace(element.innerText || element.textContent || element.getAttribute("aria-label") || "").toLowerCase();
-      if (haystack.includes(needle)) return element;
+    for (const root of collectQueryRoots()) {
+      for (const element of root.querySelectorAll(interactiveSelector())) {
+        if (!isVisible(element)) continue;
+        const haystack = normalizeWhitespace(element.innerText || element.textContent || element.getAttribute("aria-label") || "").toLowerCase();
+        if (haystack.includes(needle)) return element;
+      }
     }
 
     return undefined;
@@ -727,7 +920,7 @@
     const isPassword = tag === "input" && type.toLowerCase() === "password";
 
     return {
-      ref: element.getAttribute(REF_ATTR) || "",
+      ref: refForElement(element),
       tag,
       type,
       role: element.getAttribute("role") || implicitRole(element),
@@ -746,7 +939,8 @@
         y: Math.round(rect.y),
         width: Math.round(rect.width),
         height: Math.round(rect.height)
-      }
+      },
+      devicePixelRatio: window.devicePixelRatio
     };
   }
 
@@ -756,6 +950,10 @@
     if (tag === "button") return "button";
     if (tag === "select") return "combobox";
     if (tag === "textarea") return "textbox";
+    if (tag === "canvas") return "canvas";
+    if (tag === "svg") return "img";
+    if (tag === "video" || tag === "audio") return "media";
+    if (tag === "iframe" || tag === "frame") return "iframe";
     if (tag === "input") {
       const type = (element.getAttribute("type") || "text").toLowerCase();
       if (["button", "submit", "reset"].includes(type)) return "button";
@@ -773,6 +971,12 @@
       "input",
       "textarea",
       "select",
+      "canvas",
+      "svg",
+      "video",
+      "audio",
+      "iframe",
+      "frame",
       "[contenteditable='true']",
       "[role='button']",
       "[role='link']",
@@ -796,18 +1000,23 @@
     element.scrollIntoView({ behavior: "auto", block: "center", inline: "center" });
   }
 
-  function simulatePointer(element) {
-    const rect = element.getBoundingClientRect();
-    const eventInit = {
-      bubbles: true,
-      cancelable: true,
-      view: window,
-      clientX: rect.left + rect.width / 2,
-      clientY: rect.top + rect.height / 2
-    };
+  function simulatePointer(element, position, clickCount = 1) {
+    const eventInit = pointerEventInit(element, position, clickCount);
     for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup"]) {
       element.dispatchEvent(new MouseEvent(type, eventInit));
     }
+  }
+
+  function pointerEventInit(element, position, clickCount = 1) {
+    const rect = element.getBoundingClientRect();
+    return {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: position?.x ?? rect.left + rect.width / 2,
+      clientY: position?.y ?? rect.top + rect.height / 2,
+      detail: clickCount,
+    };
   }
 
   function assertUnoccluded(element) {
@@ -815,9 +1024,19 @@
     const x = Math.min(window.innerWidth - 1, Math.max(0, rect.left + rect.width / 2));
     const y = Math.min(window.innerHeight - 1, Math.max(0, rect.top + rect.height / 2));
     const top = document.elementFromPoint(x, y);
-    if (top && top !== element && !element.contains(top) && !top.contains(element)) {
+    if (top && top !== element && !element.contains(top) && !composedContains(top, element)) {
       throw new Error(`Target is covered by ${describeElement(top).tag || "another element"}; take a new snapshot or scroll before clicking.`);
     }
+  }
+
+  function composedContains(container, element) {
+    let current = element;
+    while (current) {
+      if (current === container || container.contains?.(current)) return true;
+      const root = current.getRootNode?.();
+      current = root instanceof ShadowRoot ? root.host : current.parentElement;
+    }
+    return false;
   }
 
   function dispatchInputEvents(element) {
@@ -893,6 +1112,30 @@
     const bytes = new Uint8Array(binary.length);
     for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
     return bytes;
+  }
+
+  function base64FromBytes(bytes) {
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(offset, Math.min(bytes.length, offset + chunkSize)));
+    }
+    return btoa(binary);
+  }
+
+  function artifactFileName(response, fallbackUrl) {
+    const disposition = response.headers.get("content-disposition") || "";
+    const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    const plain = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+    if (encoded) {
+      try { return safeFilename(decodeURIComponent(encoded)); } catch {}
+    }
+    if (plain) return safeFilename(plain);
+    try {
+      return safeFilename(decodeURIComponent(new URL(response.url || fallbackUrl).pathname.split("/").pop() || "document"));
+    } catch {
+      return "document";
+    }
   }
 
   function safeFilename(value) {

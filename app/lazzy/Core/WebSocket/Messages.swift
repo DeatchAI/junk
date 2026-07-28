@@ -231,18 +231,6 @@ struct UpdateAISettingsRequest: Codable {
   let zeroDataRetention: Bool?
 }
 
-// MARK: - Browser Settings Messages
-
-struct UpdateBrowserSettingsRequest: Codable {
-  var type: String = "update_browser_settings"
-  let mode: String?
-  let cdpUrl: String?
-  let headless: Bool?
-  let viewportWidth: Int?
-  let viewportHeight: Int?
-  let userDataDir: String?  // Path to Lazzy Debug profile for daily driver mode
-}
-
 // MARK: - Quick Actions Messages
 
 struct ListQuickActionsRequest: Codable {

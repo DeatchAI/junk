@@ -3,6 +3,11 @@ import Combine
 import Foundation
 import SwiftUI
 
+struct VoiceDictationInsertion: Equatable {
+  let id = UUID()
+  let text: String
+}
+
 /// Controller for the floating AI chat window
 class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
 
@@ -13,6 +18,9 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
   @Published var isExpanded = false
   @Published var selectedAgent: String
   @Published var selectedModel: String?
+  @Published private(set) var voiceDictationState: VoiceDictationState = .idle
+  @Published private(set) var voicePartialTranscript = ""
+  @Published private(set) var dictationInsertion: VoiceDictationInsertion?
 
   // Stable anchor to prevent drifting during resize
   private var stableTopVisibleY: CGFloat?
@@ -111,6 +119,15 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
     onVisibilityChanged?()
     updateFrontmostState()
     print("💬 Existing chat window restored")
+  }
+
+  func updateVoiceDictation(state: VoiceDictationState, partialTranscript: String) {
+    voiceDictationState = state
+    voicePartialTranscript = partialTranscript
+  }
+
+  func insertVoiceTranscription(_ transcript: String) {
+    dictationInsertion = VoiceDictationInsertion(text: transcript)
   }
 
   /// Hide the chat window
@@ -292,7 +309,10 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
     guard !isWindowHeightUpdateScheduled else { return }
     isWindowHeightUpdateScheduled = true
 
-    DispatchQueue.main.async { [weak self] in
+    // Streaming can update the response dozens of times per second. Coalesce
+    // those measurements so the panel grows smoothly instead of relocating on
+    // every token.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
       guard let self else { return }
       self.isWindowHeightUpdateScheduled = false
       guard let height = self.pendingWindowHeight else { return }
@@ -316,7 +336,7 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
     }
 
     // If change is negligible, skip to avoid jitter
-    if abs(currentFrame.height - newHeight) < 0.1 { return }
+    if abs(currentFrame.height - newHeight) < 2 { return }
 
     // Calculate new origin based on ACTIVE anchor
     var newOriginY: CGFloat

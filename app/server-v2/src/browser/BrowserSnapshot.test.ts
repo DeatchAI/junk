@@ -24,4 +24,23 @@ describe("compact browser snapshots", () => {
     expect(tree).toContain("textbox \"Email\" [ref=e3 value=\"a@example.com\" required]");
     expect(snapshot.changes).toEqual({ changed: ['- textbox "Email" [ref=e3]'], removedRefs: ["e0"] });
   });
+
+  test("keeps identical controls distinct when they belong to different frames", () => {
+    const snapshot = compactBrowserSnapshot({
+      frames: [
+        { frameId: 0, parentFrameId: -1, url: "https://example.com", main: true },
+        { frameId: 7, parentFrameId: 0, url: "https://pay.example.com" },
+      ],
+      elements: [
+        { ref: "main-submit", frameId: 0, role: "button", name: "Submit" },
+        { ref: "frame-submit", frameId: 7, role: "button", name: "Submit" },
+      ],
+      tables: [{ frameId: 7, rows: [["Plan", "Pro"]] }],
+    });
+
+    expect(String(snapshot.tree).match(/button "Submit"/g)).toHaveLength(2);
+    expect(snapshot.tree).toContain("[ref=frame-submit frame=7]");
+    expect(snapshot.frames).toHaveLength(2);
+    expect(snapshot.tables).toEqual([{ frameId: 7, rows: [["Plan", "Pro"]] }]);
+  });
 });

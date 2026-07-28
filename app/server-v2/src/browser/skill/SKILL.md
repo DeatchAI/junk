@@ -1,6 +1,6 @@
 ---
 name: detach-browser
-description: Fast, reliable web automation in the user's active Signed-in Chrome window or Power Browser.
+description: Fast, reliable web automation in the user's active Signed-in Chrome window.
 ---
 
 # Detach Browser
@@ -16,7 +16,11 @@ Use `detach_browser_execute` for webpage work. Never use macOS typing or clicks 
 
 Do not use an unnamed `getByRole("textbox")` on pages with multiple textboxes. Detach enforces strict semantic locators and returns candidates when a locator is ambiguous. Use `first()`, `last()`, or `nth(index)` only when position is genuinely the intended selector.
 
-`locator.describe()` returns the live element metadata and stable `ref`. Live reads include `inputValue`, `textContent`, `innerText`, `count`, `allTextContents`, and `checkValidity`. Actions include `click`, `fill`, `type`, `press`, `selectOption`, `setInputFiles`, and `scrollIntoView`.
+`locator.describe()` returns live metadata and a stable frame-scoped `ref`. Live reads include `inputValue`, `textContent`, `innerText`, `count`, `allTextContents`, `boundingBox`, and `checkValidity`. Actions include `click` (with optional relative `position`), `dblclick`, `focus`, `check`, `uncheck`, `clear`, `fill`, `type`, `press`, `selectOption`, `setInputFiles`, `dragTo`, `setRange`, `scrollIntoView`, and `screenshot`.
+
+Use `page.frameLocator("iframe selector")` for embedded third-party forms. Use `page.table()` for structured table rows, `page.artifact(urlOrLocator)` for a bounded task-owned document or PDF, and `page.media.captions()` / `page.media.frame(seconds)` for media evidence. Use screenshots only when the DOM or extracted document text cannot represent the requested state.
+
+For a map, chart, canvas, or other visual widget, take an element screenshot first, then use `click({ position: { x, y } })` with coordinates relative to that element. For JavaScript dialogs, call `page.acceptDialog()` or `page.dismissDialog()` before the action that opens the dialog so the page-level handler is installed in advance.
 
 Use `page.open(url)` to open a new tab in the user's current Chrome window. Use `page.goto(url)` only when replacing the current tab is intended. Never create or switch to a separate browser process.
 

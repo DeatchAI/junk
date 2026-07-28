@@ -5,8 +5,15 @@
       "layers" : [
         {
           "glass" : false,
+          "hidden" : true,
           "image-name" : "grok-image-db0ecb1c-5d31-4cac-b674-e93fc115557f.jpg",
           "name" : "grok-image-db0ecb1c-5d31-4cac-b674-e93fc115557f"
+        },
+        {
+          "fill" : "none",
+          "glass" : false,
+          "image-name" : "image (1).jpg",
+          "name" : "image (1)"
         }
       ],
       "shadow" : {

@@ -1,8 +1,6 @@
 # Detach Browser Agent
 
-Chrome extension for the **Signed-in Chrome** browser mode. It lets Detach work inside the user's real logged-in Chrome profile and reuses the already-focused Chrome window by default.
-
-Detach's **Power Browser** mode does not require this extension. It launches an isolated Chromium session and controls it directly through CDP.
+Chrome extension for Detach browser automation. It works inside the user's real logged-in Chrome profile and reuses the already-focused Chrome window.
 
 This extension is intentionally dependency-free. Load it directly with Chrome's "Load unpacked" button.
 
@@ -95,11 +93,14 @@ These commands are the private engine contract used by Detach itself. Agents no 
 - `browser.back`
 - `browser.forward`
 - `browser.refresh`
+- `browser.frames`
+- `browser.resolve_frame`
 - `browser.snapshot`
 - `browser.extract_text`
 - `browser.get_selection`
 - `browser.click`
 - `browser.hover`
+- `browser.drag`
 - `browser.type`
 - `browser.key`
 - `browser.dropdown_options`
@@ -108,14 +109,16 @@ These commands are the private engine contract used by Detach itself. Agents no 
 - `browser.scroll`
 - `browser.wait`
 - `browser.screenshot`
+- `browser.media`
+- `browser.artifact_fetch`
 - `browser.events`
-- `browser.dialog` (Power Browser only)
-- `browser.begin_task` and `browser.end_task` (runtime-managed task scope; isolation is explicit)
+- `browser.dialog`
+- `browser.begin_task` and `browser.end_task` (runtime-managed task scope)
 - `browser.request_all_sites_access`
 
-Targets can use `tabId`, `ref`, `selector`, or visible `targetText` depending on the command. `browser.snapshot` returns collision-free refs such as `lz-a1b2c3d4-7`; refs remain bound to the same DOM element until it is removed or the page navigates.
+Targets can use `tabId`, `ref`, `selector`, or visible `targetText` depending on the command. Snapshots aggregate accessible child frames and bind each ref to its tab, frame, and document. Collision-free refs such as `lz-a1b2c3d4-7` remain bound to the same DOM element until it is removed or its document navigates.
 
-The code tool returns pruned semantic trees and automatically drains popup, new-tab, download, navigation, and failure events. Power Browser additionally reports and controls JavaScript dialogs through CDP.
+The code tool returns pruned semantic trees and automatically drains popup, new-tab, download, navigation, dialog, and failure events. It can also crop a target element from a screenshot, drag elements, inspect/seek media, and import authenticated page resources into task-owned artifacts.
 
 `browser.request_all_sites_access` is listed for protocol completeness, but Chrome normally requires permission prompts to start from a user gesture. In practice the popup button is the reliable way to grant all-sites access during development.
 

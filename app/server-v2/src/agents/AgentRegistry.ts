@@ -1,17 +1,20 @@
 import type { AgentKind } from "../protocol/messages";
+import type { HostedModelSessionManager } from "../hosted/HostedModelSessionManager";
 import type { AgentAdapter } from "./AgentAdapter";
 import { ClaudeAdapter } from "./ClaudeAdapter";
 import { CodexAdapter } from "./CodexAdapter";
 import { GrokAdapter } from "./GrokAdapter";
+import { OpenCodeAdapter } from "./OpenCodeAdapter";
 
 export class AgentRegistry {
   private adapters = new Map<AgentKind, AgentAdapter>();
   private currentAgent: AgentKind = "codex";
 
-  constructor() {
+  constructor(hostedModels: HostedModelSessionManager) {
     this.register(new CodexAdapter());
     this.register(new ClaudeAdapter());
     this.register(new GrokAdapter());
+    this.register(new OpenCodeAdapter(hostedModels));
   }
 
   register(adapter: AgentAdapter) {

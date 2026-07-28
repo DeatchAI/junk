@@ -22,7 +22,7 @@ struct FloatingChatToolbarView: View {
   private var agentOptions: [(model: String, isAvailable: Bool)] {
     let capabilities = wsManager.agentCapabilities
     if capabilities.isEmpty {
-      return [("Codex", true), ("Claude", false), ("Grok", false)]
+      return [("Codex", true), ("Claude", false), ("Grok", false), ("Hosted AI", false)]
     }
     return capabilities.map { ($0.displayName, $0.installed) }
   }
@@ -196,6 +196,7 @@ struct FloatingChatToolbarView: View {
     switch id {
     case "claude": return "Claude"
     case "grok": return "Grok"
+    case "opencode": return "Hosted AI"
     default: return "Codex"
     }
   }

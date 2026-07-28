@@ -313,4 +313,100 @@ describe("browser code executor", () => {
       'Browser events: [{"type":"failure","error":"Target is covered"}]'
     );
   });
+
+  test("combines frame actions, visual crops, drag, media, lifecycle events, and document artifacts", async () => {
+    const calls: Array<{ command: string; payload: Record<string, unknown> }> = [];
+    let eventReads = 0;
+    const executor = new BrowserCodeExecutor(async (command, payload) => {
+      calls.push({ command, payload });
+      if (command === "browser.resolve_frame") {
+        return { frameId: 7, documentId: "document-payment", url: "https://pay.example/frame" };
+      }
+      if (command === "browser.screenshot") {
+        return { format: "png", dataUrl: "data:image/png;base64,Y3JvcA==" };
+      }
+      if (command === "browser.media") {
+        return payload.action === "inspect"
+          ? { selector: "video", captions: "A caption", duration: 42 }
+          : { ok: true, currentTime: payload.seconds };
+      }
+      if (command === "browser.artifact") {
+        return { id: "artifact-1", kind: "pdf", pages: 2, text: "Quarterly report" };
+      }
+      if (command === "browser.artifacts") {
+        return { artifacts: [{ id: "artifact-1", kind: "pdf" }] };
+      }
+      if (command === "browser.frames") {
+        return { frames: [{ frameId: 0, main: true }, { frameId: 7, documentId: "document-payment" }] };
+      }
+      if (command === "browser.events") {
+        eventReads += 1;
+        return {
+          events: eventReads === 1
+            ? [{ type: "download", phase: "complete", url: "https://example.com/report.pdf" }]
+            : [],
+        };
+      }
+      return { verified: true };
+    });
+
+    const result = await executor.execute(`
+      const payment = page.frameLocator("#payment-frame");
+      const source = payment.locator("#source");
+      const target = payment.locator("#target");
+      await source.dragTo(target);
+      await payment.locator("#amount").setRange(75);
+      await payment.locator("#terms").check();
+      await payment.locator("#terms").uncheck();
+      await payment.locator("canvas").click({ position: { x: 24, y: 36 } });
+      await payment.locator("#row").dblclick();
+      await payment.locator("#chart").screenshot();
+      const media = await page.media.inspect({ selector: "video" });
+      await page.media.seek(12, { selector: "video" });
+      const download = await page.waitForEvent("download", { timeout: 500 });
+      const document = await page.artifact(download.url);
+      const frames = await page.frames();
+      const artifacts = await page.artifacts();
+      return { media, download, document, frames, artifacts };
+    `);
+
+    expect(calls).toContainEqual({
+      command: "browser.drag",
+      payload: {
+        frameId: 7,
+        documentId: "document-payment",
+        selector: "#source",
+        target: { frameId: 7, documentId: "document-payment", selector: "#target" },
+      },
+    });
+    expect(calls).toContainEqual({
+      command: "browser.screenshot",
+      payload: { frameId: 7, documentId: "document-payment", selector: "#chart" },
+    });
+    expect(calls).toContainEqual({
+      command: "browser.check",
+      payload: { frameId: 7, documentId: "document-payment", selector: "#terms", checked: true },
+    });
+    expect(calls).toContainEqual({
+      command: "browser.click",
+      payload: {
+        frameId: 7,
+        documentId: "document-payment",
+        selector: "canvas",
+        position: { x: 24, y: 36 },
+      },
+    });
+    expect(calls).toContainEqual({
+      command: "browser.artifact",
+      payload: { url: "https://example.com/report.pdf" },
+    });
+    expect(result.images).toEqual([{ data: "Y3JvcA==", mimeType: "image/png" }]);
+    expect(result.result).toMatchObject({
+      media: { captions: "A caption", duration: 42 },
+      download: { type: "download", phase: "complete" },
+      document: { id: "artifact-1", kind: "pdf", pages: 2 },
+      frames: { frames: expect.any(Array) },
+      artifacts: { artifacts: [{ id: "artifact-1", kind: "pdf" }] },
+    });
+  });
 });

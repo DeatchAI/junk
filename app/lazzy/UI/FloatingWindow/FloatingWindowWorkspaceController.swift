@@ -111,6 +111,26 @@ final class FloatingWindowWorkspaceController: ObservableObject {
     return true
   }
 
+  /// Voice input follows the user's active task instead of leaking text into a
+  /// different retained composer. From a clean workspace, holding Fn creates
+  /// the first task so the gesture is useful from anywhere on macOS.
+  @discardableResult
+  func prepareForVoiceInput(at location: NSPoint) -> Task {
+    let task = lastActiveTaskID.flatMap { id in tasks.first { $0.id == id } }
+      ?? tasks.last(where: { $0.controller.isFrontmost })
+      ?? tasks.last(where: { $0.controller.isVisible })
+      ?? tasks.max { $0.openedAt < $1.openedAt }
+
+    guard let task else {
+      return openNewTask(at: location)
+    }
+
+    task.controller.bringToFront()
+    markTaskActive(task)
+    refreshComposerVisibility()
+    return task
+  }
+
   private func markTaskActive(_ task: Task) {
     lastActiveTaskID = task.id
   }

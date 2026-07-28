@@ -6,7 +6,7 @@ import {
   type ActionRunTraceEntry,
 } from "./actions/ActionSkillManager";
 import { BrowserBridge } from "./browser/BrowserBridge";
-import { BrowserAutomation, type BrowserAutomationSettings } from "./browser/BrowserAutomation";
+import { BrowserAutomation } from "./browser/BrowserAutomation";
 import { BROWSER_TOOL_NAMES, runBrowserMCPServer } from "./browser/BrowserMCPServer";
 import {
   learnBrowserSkillFromArtifacts,
@@ -28,6 +28,7 @@ import { SqliteSlashCommands } from "./history/SqliteSlashCommands";
 import { ToolBroker } from "./tools/ToolBroker";
 import { resolveSelectedSkillInstructions } from "./skills/SkillResolver";
 import { workspaceMemorySystemInstruction } from "./workspace/WorkspaceMemory";
+import { HostedModelSessionManager } from "./hosted/HostedModelSessionManager";
 import type { ActionDefinition, ChatRequest, ClientMessage, MCPServerConfig, Message, ServerMessage } from "./protocol/messages";
 import type { AgentPermissionRequest } from "./agents/AgentAdapter";
 
@@ -54,7 +55,8 @@ if (process.argv.includes("--mcp-secrets-tools")) {
 const PORT = Number(Bun.env.PORT || 3847);
 const BROWSER_EXTENSION_ORIGIN = "chrome-extension://gdobcabflbojkedmocahijccipghgoij";
 
-const agents = new AgentRegistry();
+const hostedModels = new HostedModelSessionManager();
+const agents = new AgentRegistry(hostedModels);
 const history = new SqliteHistory();
 const quickActions = new SqliteQuickActions();
 const slashCommands = new SqliteSlashCommands();
@@ -86,19 +88,6 @@ const server = Bun.serve<{ kind: "app" | "browser-native" }>({
 
     if (url.pathname === "/api/browser/status" && req.method === "GET") {
       return jsonResponse(await browserAutomation.getStatus());
-    }
-
-    if (url.pathname === "/api/browser/settings" && req.method === "GET") {
-      return jsonResponse({ ok: true, settings: browserAutomation.getSettings() });
-    }
-
-    if (url.pathname === "/api/browser/settings" && req.method === "POST") {
-      try {
-        const body = await req.json() as Partial<BrowserAutomationSettings>;
-        return jsonResponse({ ok: true, settings: browserAutomation.updateSettings(body) });
-      } catch (error) {
-        return jsonResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }, 400);
-      }
     }
 
     if (url.pathname === "/api/browser/artifacts" && req.method === "GET") {
@@ -185,6 +174,13 @@ const server = Bun.serve<{ kind: "app" | "browser-native" }>({
     }
 
     if (url.pathname === "/api/sync-profile" && req.method === "POST") {
+      const body = await req.json().catch(() => undefined) as { accessToken?: unknown } | undefined;
+      const hostedControlPlane = {
+        endpoint: Bun.env.DETACH_HOSTED_CONTROL_PLANE_URL,
+        accessToken: typeof body?.accessToken === "string" ? body.accessToken : undefined,
+      };
+      composio.configureHostedControlPlane(hostedControlPlane);
+      hostedModels.configure(hostedControlPlane);
       return jsonResponse({ success: true });
     }
 
@@ -608,17 +604,6 @@ async function handleMessage(ws: ServerWebSocket, raw: string) {
         send(ws, { type: "memories_cleared", success: true });
         return;
 
-      case "update_browser_settings":
-        browserAutomation.updateSettings({
-          mode: message.mode,
-          cdpUrl: message.cdpUrl ?? "",
-          headless: message.headless,
-          viewportWidth: message.viewportWidth,
-          viewportHeight: message.viewportHeight,
-          userDataDir: message.userDataDir ?? "",
-        });
-        return;
-
       default: {
         const unknownMessage = message as { type: string };
         send(ws, { type: "error", error: `Detach runtime does not handle '${unknownMessage.type}' yet.` });
@@ -821,7 +806,7 @@ async function handleChat(ws: ServerWebSocket, message: ChatRequest) {
 async function capabilities(): Promise<ServerMessage> {
   return {
     type: "capabilities",
-    agents: await getCapabilities(agents.getCurrentAgent()),
+    agents: await getCapabilities(agents.getCurrentAgent(), hostedModels),
     defaultAgent: agents.getCurrentAgent(),
   };
 }

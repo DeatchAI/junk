@@ -1,5 +1,6 @@
 import type { AgentCapability, AgentModelCapability } from "../protocol/messages";
 import type { AgentKind } from "../protocol/messages";
+import type { HostedModelSessionManager } from "../hosted/HostedModelSessionManager";
 import { runProcess } from "./ProcessRunner";
 
 const homeExecutableDirs = Bun.env.HOME
@@ -25,6 +26,11 @@ const commonExecutableDirs = [
 ];
 
 export async function findExecutable(name: string): Promise<string | undefined> {
+  if (name === "opencode") {
+    const configured = Bun.env.DETACH_OPENCODE_PATH?.trim();
+    if (configured && await Bun.file(configured).exists()) return configured;
+  }
+
   const fromPath = await which(name);
   if (fromPath) return fromPath;
 
@@ -38,15 +44,29 @@ export async function findExecutable(name: string): Promise<string | undefined> 
   return undefined;
 }
 
-export async function getCapabilities(defaultAgent: AgentKind): Promise<AgentCapability[]> {
-  const [codexPath, claudePath, grokPath] = await Promise.all([
+export async function getCapabilities(
+  defaultAgent: AgentKind,
+  hostedModels?: HostedModelSessionManager,
+): Promise<AgentCapability[]> {
+  const [codexPath, claudePath, grokPath, openCodePath] = await Promise.all([
     findExecutable("codex"),
     findExecutable("claude"),
     findExecutable("grok"),
+    findExecutable("opencode"),
   ]);
-  const [codexModels, grokCatalog] = await Promise.all([
+  const hostedConfigured = hostedModels?.isConfigured() === true;
+  const [codexModels, grokCatalog, openCodeCatalog] = await Promise.all([
     codexPath ? discoverCodexModels(codexPath) : Promise.resolve([]),
     grokPath ? discoverGrokModels(grokPath) : Promise.resolve({ models: [], defaultModel: undefined }),
+    hostedConfigured
+      ? hostedModels.capability()
+        .then((catalog) => ({ ...catalog, error: undefined }))
+        .catch((error) => ({
+          models: [],
+          defaultModel: undefined,
+          error: error instanceof Error ? error.message : String(error),
+        }))
+      : Promise.resolve({ models: [], defaultModel: undefined, error: undefined }),
   ]);
 
   return [
@@ -75,7 +95,26 @@ export async function getCapabilities(defaultAgent: AgentKind): Promise<AgentCap
       models: grokCatalog.models,
       defaultModel: grokCatalog.defaultModel,
     },
+    {
+      id: "opencode" as const,
+      displayName: "Hosted AI",
+      installed: Boolean(openCodePath && hostedConfigured && openCodeCatalog.models.length > 0),
+      executablePath: openCodePath,
+      authHint: openCodeCapabilityHint(openCodePath, hostedConfigured, openCodeCatalog.error),
+      models: openCodeCatalog.models,
+      defaultModel: openCodeCatalog.defaultModel,
+    },
   ].sort((a, b) => (a.id === defaultAgent ? -1 : b.id === defaultAgent ? 1 : 0));
+}
+
+function openCodeCapabilityHint(
+  executablePath: string | undefined,
+  hostedConfigured: boolean,
+  sessionError?: string,
+) {
+  if (!executablePath) return "The OpenCode harness is missing. Reinstall or update Detach.";
+  if (!hostedConfigured) return "Sign in to the hosted Detach app to use hosted models.";
+  return sessionError;
 }
 
 const claudeModels: AgentModelCapability[] = [

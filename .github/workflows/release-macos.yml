@@ -25,6 +25,7 @@ concurrency:
 jobs:
   release:
     runs-on: macos-14
+    environment: release
     env:
       APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
       APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
@@ -40,7 +41,7 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
@@ -72,11 +73,10 @@ jobs:
           echo "APPLE_NOTARY_KEY_PATH=$notary_key" >> "$GITHUB_ENV"
 
       - name: Run runtime checks
-        working-directory: server-v2
+        working-directory: app/server-v2
         run: |
           bun install --frozen-lockfile
-          bun test
-          bunx tsc --noEmit
+          bun run check
 
       - name: Determine release version
         id: release
@@ -99,6 +99,7 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Archive, notarize, package, sign, and publish
+        working-directory: app
         run: |
           bash scripts/release.sh \
             --version "${{ steps.release.outputs.version }}" \
@@ -116,7 +117,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ steps.release.outputs.tag }}"
-          dmg="dist/release-${{ steps.release.outputs.version }}-${{ steps.release.outputs.build }}/Detach-${{ steps.release.outputs.version }}.dmg"
+          dmg="app/dist/release-${{ steps.release.outputs.version }}-${{ steps.release.outputs.build }}/Detach-${{ steps.release.outputs.version }}.dmg"
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "$dmg" --clobber
           else
@@ -128,8 +129,8 @@ jobs:
         with:
           name: detach-${{ steps.release.outputs.version }}
           path: |
-            dist/release-${{ steps.release.outputs.version }}-${{ steps.release.outputs.build }}/Detach-${{ steps.release.outputs.version }}.dmg
-            dist/release-${{ steps.release.outputs.version }}-${{ steps.release.outputs.build }}/appcast.xml
+            app/dist/release-${{ steps.release.outputs.version }}-${{ steps.release.outputs.build }}/Detach-${{ steps.release.outputs.version }}.dmg
+            app/dist/release-${{ steps.release.outputs.version }}-${{ steps.release.outputs.build }}/appcast.xml
           if-no-files-found: error
 
       - name: Remove signing keychain

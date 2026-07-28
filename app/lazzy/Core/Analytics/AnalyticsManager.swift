@@ -1,58 +1,122 @@
 import Foundation
-import Supabase
+import os
 
-/// Manages analytics event logging to Supabase
-class AnalyticsManager {
+/// Lazzy's small product-analytics facade backed by the in-house Desperate SDK.
+///
+/// This deliberately emits only product signals and coarse app metadata. Prompts,
+/// file paths, tool arguments, and account details never leave the app through
+/// this service.
+final class AnalyticsManager {
   static let shared = AnalyticsManager()
 
-  private init() {}
+  private let client = AnalyticsLite.shared
+  private let logger = Logger(subsystem: "app.getlazzy", category: "analytics")
+  private let userDefaults: UserDefaults
+  private let sessionID: String
+  private var isConfigured = false
 
-  /// Log an event to Supabase
-  /// - Parameters:
-  ///   - event: The name of the event (e.g., "app_launched", "error")
-  ///   - properties: Optional dictionary of properties to include
+  private enum Key {
+    static let anonymousID = "desperate_analytics_anonymous_id"
+  }
+
+  private init(userDefaults: UserDefaults = .standard) {
+    self.userDefaults = userDefaults
+    self.sessionID = UUID().uuidString
+  }
+
+  /// Configures analytics once during app startup.
+  func configure() {
+    guard !isConfigured else { return }
+
+    guard let analyticsWriteKey = AppConfiguration.analyticsWriteKey, !analyticsWriteKey.isEmpty else {
+      logger.notice("Analytics is disabled for this build.")
+      return
+    }
+
+    client.configure(apiKey: analyticsWriteKey, maxBatchSize: 25)
+    isConfigured = true
+    logger.notice("Desperate analytics configured for the current app bundle.")
+  }
+
+  /// Sends a product event immediately. Lazzy produces low-volume, meaningful
+  /// signals, so immediate delivery avoids losing a single launch or error
+  /// event when a menu-bar-only app is closed before its buffer fills.
   func logEvent(_ event: String, properties: [String: Any]? = nil) {
+    guard isConfigured else { return }
+
+    let analyticsEvent = AnalyticsEvent(
+      type: event,
+      userAnonID: anonymousID,
+      sessionID: sessionID,
+      metadata: makeMetadata(properties)
+    )
+
     Task {
       do {
-        // AuthManager.shared.supabase is not optional in current implementation
-        let client = AuthManager.shared.supabase
-
-        // DTO initialization might throw if JSON serialization fails
-        let dto = try AnalyticsEventDTO(
-          user_id: AuthManager.shared.currentUser?.id,
-          event_type: event,
-          properties: properties
-        )
-
-        try await client.from("events").insert(dto).execute()
-        print("📊 Logged event: \(event)")
+        _ = try await client.send(analyticsEvent)
       } catch {
-        print("❌ Failed to log event '\(event)': \(error)")
+        logger.error("Failed to send analytics event \(event, privacy: .public): \(error.localizedDescription, privacy: .private)")
       }
     }
   }
-}
 
-// MARK: - DTOs
+  func trackAppLaunch() {
+    let bundle = Bundle.main
+    let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+    let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+    let previousVersion = userDefaults.string(forKey: "last_version")
 
-struct AnalyticsEventDTO: Codable {
-  let user_id: UUID?
-  let event_type: String
-  let properties: AnyJSON
-  let created_at: Date?
+    var properties: [String: Any] = [
+      "app_version": version,
+      "build": build,
+      "platform": "macos",
+    ]
+    if let previousVersion, previousVersion != version {
+      properties["previous_version"] = previousVersion
+    }
 
-  init(user_id: UUID?, event_type: String, properties: [String: Any]?) throws {
-    self.user_id = user_id
-    self.event_type = event_type
-    self.created_at = Date()
+    logEvent("app_launched", properties: properties)
+    userDefaults.set(version, forKey: "last_version")
+  }
 
-    if let properties = properties {
-      // Convert [String: Any] to AnyJSON via JSONSerialization -> Data -> Decoder
-      // This ensures we handle all types supported by JSON (String, Number, Bool, Array, Object, Null)
-      let data = try JSONSerialization.data(withJSONObject: properties)
-      self.properties = try JSONDecoder().decode(AnyJSON.self, from: data)
-    } else {
-      self.properties = .object([:])
+  private var anonymousID: String {
+    if let id = userDefaults.string(forKey: Key.anonymousID), !id.isEmpty {
+      return id
+    }
+
+    let id = UUID().uuidString
+    userDefaults.set(id, forKey: Key.anonymousID)
+    return id
+  }
+
+  private func makeMetadata(_ properties: [String: Any]?) -> AnalyticsMetadata {
+    guard let properties else { return [:] }
+
+    return properties.reduce(into: [:]) { metadata, entry in
+      guard let value = analyticsValue(from: entry.value) else { return }
+      metadata[entry.key] = value
+    }
+  }
+
+  private func analyticsValue(from value: Any) -> AnalyticsValue? {
+    switch value {
+    case let value as String:
+      return .string(value)
+    case let value as Bool:
+      return .bool(value)
+    case let value as Int:
+      return .int(value)
+    case let value as Double:
+      return .double(value)
+    case let value as Float:
+      return .double(Double(value))
+    case let value as NSNumber:
+      return .double(value.doubleValue)
+    case _ as NSNull:
+      return .null
+    default:
+      logger.debug("Dropped unsupported analytics property type.")
+      return nil
     }
   }
 }

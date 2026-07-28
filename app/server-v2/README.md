@@ -8,15 +8,29 @@ This replaces the legacy Lazzy AI Gateway server with a small process-backed Det
 - no provider registry
 - no Polar
 - no Supabase plan logic
-- no hosted model keys
+- no hosted model keys in the Mac app or local runtime
 
 The runtime supports first-class local agent adapters for:
 
 - Codex via `codex exec --json`
 - Claude via `claude -p --output-format stream-json`
 - Grok via `grok -p --output-format streaming-json`
+- Detach Hosted via the bundled OpenCode ACP harness and the hosted control plane
 
-The Gemini CLI adapter was removed after the CLI deprecation; future non-first-party model support should go through a bridge adapter such as OpenCode.
+The Gemini CLI adapter was removed after the CLI deprecation. Provider-neutral
+hosted models run through OpenCode. The local runtime exchanges the signed-in
+user session for a short-lived model-only token, then points OpenCode at the
+Detach proxy. The user's Supabase token and Detach's provider credentials are
+never inherited by the agent process.
+
+Vercel AI Gateway is the first hosted provider. Provider choice lives behind the
+control-plane catalog and router, so adding Kie later does not change the Mac
+protocol, OpenCode adapter, MCP translation, or approval flow.
+
+The bundled OpenCode process runs in ACP `--pure` mode with isolated state under
+`~/Library/Application Support/Detach/OpenCode`. Detach injects an inline
+provider configuration for each run, while OpenCode tool permission requests
+continue through the existing native approval UI.
 
 Chat history, quick actions, and MCP server configs are stored locally in SQLite at:
 
@@ -52,10 +66,17 @@ The browser and desktop bridges use the same agent-neutral MCP pipeline:
 native capability -> local runtime bridge -> built-in MCP server -> agent adapter mapper
 ```
 
-`detach_browser_execute` is the single model-facing browser tool in both modes. It runs a safe Playwright-shaped JavaScript subset and translates each local program into the private P0 engine contract: the Chrome extension/native host for Signed-in Chrome, or the CDP-backed Power Browser actor with a separate persistent automation profile. Live locator reads query the current DOM, snapshots are pruned before they reach the model, and popup, dialog, download, tab, navigation, and failure events are queued with each run. `detach_macos_*` works through the connected Detach app so Accessibility, Screen Recording, and input synthesis remain in the signed macOS process instead of an agent CLI.
+`detach_browser_execute` is the single model-facing browser tool. It runs a safe Playwright-shaped JavaScript subset and translates each local program into the signed-in Chrome extension contract. Live locator reads query every accessible frame, snapshots are pruned before they reach the model, and popup, download, tab, navigation, and failure events are queued with each run. The same tool supports element screenshots, drag/range/media interactions, and task-owned document artifacts. `detach_macos_*` works through the connected Detach app so Accessibility, Screen Recording, and input synthesis remain in the signed macOS process instead of an agent CLI.
 
 The macOS v1 tools cover permission status, running apps and windows, app launch/activation, accessibility snapshots, display screenshots, semantic or coordinate clicks, text input, shortcuts, and scrolling. Snapshot refs expire on the next snapshot. Secure text fields are blocked, and the bridge intentionally exposes no arbitrary AppleScript or shell command.
 
 Both built-in servers are represented as ordinary `MCPServerConfig` values. Codex, Claude, Grok/ACP, and future ACP adapters therefore receive the same tools and policy without desktop-specific code in an adapter.
 
-Composio is managed as a first-class MCP session, not as a pasted URL. Set `COMPOSIO_API_KEY` in the runtime environment; Detach creates or reuses a Composio session per stable Detach user id, stores the returned session MCP endpoint in SQLite, and passes that endpoint to Codex, Claude, Grok/ACP, and future agents like any other MCP server. Custom HTTP/SSE/stdio MCP servers still belong in Settings > MCP > Custom.
+Composio is managed as a first-class MCP session, not as a pasted URL. A local
+development runtime may use its own `COMPOSIO_API_KEY`, but a distributed Detach
+build must provision its session through the hosted control plane. The
+Detach-owned project key must never reach this runtime or the macOS app. Custom
+HTTP/SSE/stdio MCP servers still belong in Settings > MCP > Custom.
+
+For a source build using its own Composio project, see
+[`../../docs/composio-setup.md`](../../docs/composio-setup.md).

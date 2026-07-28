@@ -10,15 +10,6 @@ export type ClientMessage =
   | { type: "edit_message"; messageId: string; content: string }
   | { type: "search"; query: string; limit?: number }
   | { type: "update_ai_settings"; agent?: AgentKind; model?: string }
-  | {
-      type: "update_browser_settings";
-      mode?: "signed_in" | "power";
-      cdpUrl?: string;
-      headless?: boolean;
-      viewportWidth?: number;
-      viewportHeight?: number;
-      userDataDir?: string;
-    }
   | { type: "list_quick_actions" }
   | ({ type: "add_quick_action" } & ActionDefinitionCreateFields)
   | {
@@ -109,7 +100,7 @@ export type ClientMessage =
     }
   | { type: "delete_slash_command"; commandId: string };
 
-export type AgentKind = "codex" | "claude" | "grok";
+export type AgentKind = "codex" | "claude" | "grok" | "opencode";
 
 export type ComposerMode = "explain_only" | "plan_only" | "review_only" | "debug_only";
 
