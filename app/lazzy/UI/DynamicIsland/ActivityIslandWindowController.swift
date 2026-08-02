@@ -7,16 +7,27 @@ import SwiftUI
 /// activity updates, which avoids AppKit/SwiftUI sizing feedback during tool bursts.
 @MainActor
 final class ActivityIslandWindowController: NSObject, ObservableObject {
+  private struct PendingFrameRequest {
+    let expanded: Bool
+    let animated: Bool
+  }
+
   private var islandWindow: NSPanel?
   private let runStore: DetachedRunStore
   private var completionDismissWorkItem: DispatchWorkItem?
   private var hoverCollapseWorkItem: DispatchWorkItem?
   private var approvalShakeWorkItems: [DispatchWorkItem] = []
+  private var approvalShakeRestingFrame: NSRect?
+  private var pendingFrameRequest: PendingFrameRequest?
   private var cancellables = Set<AnyCancellable>()
   private var isDismissedByUser = false
   private var isSuppressedByVisibleComposer = false
   private var isPointerHovering = false
   private var isAnimatingFrame = false
+  private var isShakingApproval = false
+  private var shouldShakeForInterrupt = false
+  private var frameAnimationGeneration = 0
+  private var approvalShakeGeneration = 0
 
   @Published private(set) var isVisible = false
   @Published private(set) var isExpanded = false
@@ -35,7 +46,7 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
     runStore.$runs
       .receive(on: RunLoop.main)
       .sink { [weak self] _ in
-        guard let self, self.isVisible, self.isExpanded, !self.isAnimatingFrame, let window = self.islandWindow else { return }
+        guard let self, self.isVisible, self.isExpanded, let window = self.islandWindow else { return }
         self.applyFrame(to: window, expanded: true)
       }
       .store(in: &cancellables)
@@ -89,11 +100,12 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
 
   func showApproval() {
     isDismissedByUser = false
-    // Approval is an interrupt: it must be visible even while the originating
-    // floating chat is open, otherwise a waiting agent looks like it is stuck.
+    // Approval and credential requests are interrupts: they must be visible
+    // even while the originating chat is open, otherwise a waiting agent looks stuck.
     isExpanded = true
+    shouldShakeForInterrupt = true
     present(ignoringComposerVisibility: true)
-    shakeForApproval()
+    startInterruptShakeIfReady()
   }
 
   /// Makes the notch visible just before a composer animates into it. Returning
@@ -124,7 +136,7 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
     guard isSuppressedByVisibleComposer != isVisible else { return }
     isSuppressedByVisibleComposer = isVisible
     if isVisible {
-      if runStore.hasPendingApproval {
+      if runStore.hasPendingApproval || hasPendingCredential {
         showApproval()
       } else {
         hideForVisibleComposer()
@@ -147,15 +159,15 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
 
   func hide() {
     stopApprovalShake()
+    resetPendingFrameWork()
     hoverCollapseWorkItem?.cancel()
     hoverCollapseWorkItem = nil
     isPointerHovering = false
-    isAnimatingFrame = false
     completionDismissWorkItem?.cancel()
     completionDismissWorkItem = nil
-    guard let window = islandWindow else { return }
     isExpanded = false
     isVisible = false
+    guard let window = islandWindow else { return }
     window.orderOut(nil)
   }
 
@@ -163,10 +175,10 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
   /// intentionally does not set the dismissed flag or discard run state.
   private func hideForVisibleComposer() {
     stopApprovalShake()
+    resetPendingFrameWork()
     hoverCollapseWorkItem?.cancel()
     hoverCollapseWorkItem = nil
     isPointerHovering = false
-    isAnimatingFrame = false
     completionDismissWorkItem?.cancel()
     completionDismissWorkItem = nil
     isExpanded = false
@@ -260,6 +272,13 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
   }
 
   private func applyFrame(to window: NSWindow, expanded: Bool, animated: Bool = false) {
+    if isAnimatingFrame || isShakingApproval {
+      // The latest semantic state wins. In particular, an approval or Touch ID
+      // interrupt must resize after a hover animation instead of being dropped.
+      pendingFrameRequest = PendingFrameRequest(expanded: expanded, animated: animated)
+      return
+    }
+
     let screen = window.screen ?? NSScreen.main ?? NSScreen.screens.first
     guard let screen else { return }
     let size = panelSize(for: screen, expanded: expanded)
@@ -269,22 +288,61 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
       width: size.width,
       height: size.height
     )
-    guard window.frame != frame else { return }
-    guard !isAnimatingFrame else { return }
+    guard window.frame != frame else {
+      frameUpdateDidSettle(on: window)
+      return
+    }
     guard animated else {
       window.setFrame(frame, display: true)
+      frameUpdateDidSettle(on: window)
       return
     }
 
     isAnimatingFrame = true
+    frameAnimationGeneration &+= 1
+    let generation = frameAnimationGeneration
     NSAnimationContext.runAnimationGroup { context in
       context.duration = 0.28
       context.allowsImplicitAnimation = true
       window.animator().setFrame(frame, display: true)
-      context.completionHandler = { [weak self] in
-        self?.isAnimatingFrame = false
+      context.completionHandler = { [weak self, weak window] in
+        guard let self, let window, self.frameAnimationGeneration == generation else { return }
+        self.isAnimatingFrame = false
+        self.frameUpdateDidSettle(on: window)
       }
     }
+  }
+
+  private func frameUpdateDidSettle(on window: NSWindow) {
+    if let pendingFrameRequest {
+      self.pendingFrameRequest = nil
+      applyFrame(
+        to: window,
+        expanded: pendingFrameRequest.expanded,
+        animated: pendingFrameRequest.animated
+      )
+      return
+    }
+    startInterruptShakeIfReady()
+  }
+
+  private func resetPendingFrameWork() {
+    frameAnimationGeneration &+= 1
+    pendingFrameRequest = nil
+    isAnimatingFrame = false
+    shouldShakeForInterrupt = false
+  }
+
+  private func startInterruptShakeIfReady() {
+    guard shouldShakeForInterrupt,
+      isVisible,
+      !isAnimatingFrame,
+      !isShakingApproval,
+      pendingFrameRequest == nil
+    else { return }
+
+    shouldShakeForInterrupt = false
+    shakeForApproval()
   }
 
   /// A brief lateral nudge makes an approval perceptible without turning the
@@ -294,17 +352,22 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
     guard let window = islandWindow else { return }
     let restingFrame = window.frame
     let offsets: [CGFloat] = [-6, 6, -4, 4, -2, 2, 0]
-    isAnimatingFrame = true
+    approvalShakeRestingFrame = restingFrame
+    isShakingApproval = true
+    approvalShakeGeneration &+= 1
+    let generation = approvalShakeGeneration
 
     for (index, offset) in offsets.enumerated() {
       let workItem = DispatchWorkItem { [weak self, weak window] in
-        guard let self, let window else { return }
+        guard let self, let window, self.approvalShakeGeneration == generation else { return }
         var frame = restingFrame
         frame.origin.x += offset
         window.setFrame(frame, display: true)
         if index == offsets.count - 1 {
-          self.isAnimatingFrame = false
+          self.isShakingApproval = false
+          self.approvalShakeRestingFrame = nil
           self.approvalShakeWorkItems.removeAll()
+          self.frameUpdateDidSettle(on: window)
         }
       }
       approvalShakeWorkItems.append(workItem)
@@ -313,9 +376,14 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
   }
 
   private func stopApprovalShake() {
+    approvalShakeGeneration &+= 1
     approvalShakeWorkItems.forEach { $0.cancel() }
     approvalShakeWorkItems.removeAll()
-    isAnimatingFrame = false
+    if let approvalShakeRestingFrame, let window = islandWindow {
+      window.setFrame(approvalShakeRestingFrame, display: true)
+    }
+    approvalShakeRestingFrame = nil
+    isShakingApproval = false
   }
 
   private func panelSize(for screen: NSScreen?, expanded: Bool) -> CGSize {
@@ -339,11 +407,19 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
   }
 
   private var sizeForExpandedState: CGSize {
-    if runStore.hasPendingApproval {
+    if runStore.hasPendingApproval || hasPendingCredential {
       return CGSize(width: 560, height: 70)
     }
     let taskCount = min(max(runStore.presentationRuns.count, 1), 5)
-    return CGSize(width: 560, height: min(380, 36 + CGFloat(taskCount) * 64))
+    let dividerCount = max(taskCount - 1, 0)
+    return CGSize(
+      width: 560,
+      height: min(380, 36 + CGFloat(taskCount * 64 + dividerCount))
+    )
+  }
+
+  private var hasPendingCredential: Bool {
+    runStore.presentationRuns.contains { $0.credential != nil }
   }
 
   /// The compact state must occupy the hardware cutout exactly. Using the

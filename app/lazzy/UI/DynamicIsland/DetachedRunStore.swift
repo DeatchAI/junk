@@ -319,6 +319,7 @@ final class DetachedRunStore: ObservableObject {
           id: "debug_\(id)",
           agent: agent,
           kind: kind,
+          action: nil,
           phase: state == .failed ? "failed" : state == .completed ? "completed" : "updated",
           title: title,
           subtitle: status,

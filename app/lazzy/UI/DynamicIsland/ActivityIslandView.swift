@@ -92,35 +92,8 @@ struct ActivityIslandView: View {
         .foregroundStyle(.green)
       dismissButton
     }
-    .padding(.horizontal, 52)
-    .frame(height: 52)
-    .padding(.bottom, 12)
-  }
-
-  private func approvalHeadline(_ approval: DetachedRunApproval) -> some View {
-    HStack(spacing: 10) {
-      DetachedMarkLoader(isLoading: false)
-
-      Text(approval.description.isEmpty ? approval.command : approval.description)
-        .font(.appFont(size: 12, weight: .medium))
-        .foregroundStyle(.white.opacity(0.9))
-        .lineLimit(1)
-        .truncationMode(.tail)
-
-      Spacer(minLength: 2)
-
-      dismissButton
-
-      approvalButton(icon: "xmark", tint: .white.opacity(0.15), title: "Deny") {
-        onApprovalResponse(approval.id, false)
-      }
-      approvalButton(icon: "checkmark", tint: .white, title: "Approve", foreground: .black) {
-        onApprovalResponse(approval.id, true)
-      }
-    }
-    .padding(.horizontal, 52)
-    .frame(height: 52)
-    .padding(.bottom, 12)
+    .padding(.horizontal, 50)
+    .frame(height: 70)
   }
 
   private func approvalButton(
@@ -148,6 +121,8 @@ struct ActivityIslandView: View {
     }
     if let conversationId = store.primaryRun?.conversationId {
       onOpenConversation(conversationId)
+    } else if store.primaryRun != nil {
+      onToggle()
     }
   }
 
@@ -155,6 +130,8 @@ struct ActivityIslandView: View {
     VStack(spacing: 0) {
       if let approval {
         approvalInterrupt(approval)
+      } else if let credential {
+        credentialHeadline(credential)
       } else {
         HStack(spacing: 8) {
           Text("TASKS")
@@ -165,7 +142,7 @@ struct ActivityIslandView: View {
           dismissButton
         }
         .padding(.horizontal, 50)
-        .frame(height: 20)
+        .frame(height: 36)
 
         ForEach(Array(store.presentationRuns.prefix(5).enumerated()), id: \.element.id) { index, run in
           taskRow(run)
@@ -271,10 +248,41 @@ struct ActivityIslandView: View {
 
   private func headline(for run: DetachedAgentRun?) -> String {
     guard let run else { return "" }
-    if run.state == .completed {
-      return "\(run.displayTitle) — Completed"
+
+    let title = cleanHeadlinePart(run.taskTitle) ?? "New chat"
+    let activity: String?
+    switch run.state {
+    case .completed:
+      activity = "Completed"
+    case .failed:
+      activity = cleanHeadlinePart(run.status) ?? "Needs attention"
+    case .awaitingApproval:
+      activity = "Approval required"
+    case .awaitingCredential:
+      activity = "Touch ID required"
+    case .running:
+      activity = [
+        run.event?.title,
+        run.event?.subtitle,
+        run.status,
+        run.currentActivity,
+      ]
+      .compactMap(cleanHeadlinePart)
+      .first { $0.caseInsensitiveCompare(title) != .orderedSame }
     }
-    return "\(run.displayTitle) — \(run.status)"
+
+    guard let activity, activity.caseInsensitiveCompare(title) != .orderedSame else {
+      return title
+    }
+    return "\(title) — \(activity)"
+  }
+
+  private func cleanHeadlinePart(_ text: String?) -> String? {
+    guard let text else { return nil }
+    let normalized = text
+      .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return normalized.isEmpty ? nil : normalized
   }
 
   private var completionMark: some View {
@@ -312,6 +320,7 @@ struct ActivityIslandView: View {
 /// readable speed instead of being line-clamped and faded by the island edges.
 private struct MarqueeHeadline: View {
   let text: String
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var startedAt = Date.now
 
   private let gap: CGFloat = 42
@@ -320,27 +329,34 @@ private struct MarqueeHeadline: View {
   var body: some View {
     GeometryReader { proxy in
       let textWidth = measuredWidth
-      let shouldScroll = textWidth > proxy.size.width
+      let shouldScroll = textWidth > proxy.size.width && !reduceMotion
       let distance = textWidth + gap
 
-      TimelineView(.animation) { timeline in
-        let elapsed = timeline.date.timeIntervalSince(startedAt)
-        let offset = shouldScroll
-          ? -CGFloat(elapsed * Double(speed)).truncatingRemainder(dividingBy: distance)
-          : 0
+      if shouldScroll {
+        TimelineView(.animation) { timeline in
+          let elapsed = timeline.date.timeIntervalSince(startedAt)
+          let offset = -CGFloat(elapsed * Double(speed))
+            .truncatingRemainder(dividingBy: distance)
 
-        HStack(spacing: gap) {
-          label
-          if shouldScroll { label }
+          HStack(spacing: gap) {
+            label
+            label
+          }
+          .fixedSize(horizontal: true, vertical: false)
+          .offset(x: offset)
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         }
-        .fixedSize(horizontal: true, vertical: false)
-        .offset(x: offset)
+      } else {
+        label
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
       }
     }
     .frame(maxWidth: .infinity, minHeight: 20, maxHeight: 20, alignment: .leading)
     .clipped()
     .onChange(of: text) { _, _ in
+      startedAt = .now
+    }
+    .onChange(of: reduceMotion) { _, _ in
       startedAt = .now
     }
     .accessibilityLabel(text)
