@@ -2,40 +2,49 @@ import SwiftUI
 
 /// A custom ViewModifier to apply a shimmer effect.
 struct Shimmer: ViewModifier {
-    @State private var phase: CGFloat = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var phase: CGFloat = -0.7
 
-    let duration: Double = 0.85   // Speed of the shimmer
-    let gradient: Gradient = Gradient(colors: [
-        Color.gray.opacity(0.5),  // Darker part of the shimmer
-        Color.white.opacity(0.8), // Bright, reflective part
-        Color.gray.opacity(0.5)   // Darker part
-    ])
+    let duration: Double = 1.15
 
     func body(content: Content) -> some View {
-        content
-            .overlay(
-                // The moving gradient layer
-                LinearGradient(gradient: gradient,
-                               startPoint: .leading,
-                               endPoint: .trailing)
-                    // The gradient is shifted based on the 'phase' state
-                    .offset(x: phase * 200) // 200 is an arbitrary width multiplier
-                    // The text itself is used as the mask
+        if reduceMotion {
+            content
+        } else {
+            content
+                .overlay {
+                    LinearGradient(
+                        colors: [
+                            .clear,
+                            shimmerHighlight.opacity(0.18),
+                            shimmerHighlight.opacity(0.72),
+                            shimmerHighlight.opacity(0.18),
+                            .clear,
+                        ],
+                        startPoint: UnitPoint(x: phase, y: 0.5),
+                        endPoint: UnitPoint(x: phase + 0.42, y: 0.5)
+                    )
                     .mask(content)
-            )
-            .onAppear {
-                withAnimation(
-                    .linear(duration: duration)
-                    .repeatForever(autoreverses: false)
-                ) {
-                    // Start the phase off-screen and let it move across
-                    phase = 1.5
+                    .allowsHitTesting(false)
                 }
-            }
-            // Reset phase when disappearing (optional, but good practice)
-            .onDisappear {
-                phase = 0
-            }
+                .onAppear {
+                    phase = -0.7
+                    withAnimation(
+                        .linear(duration: duration)
+                        .repeatForever(autoreverses: false)
+                    ) {
+                        phase = 1.35
+                    }
+                }
+                .onDisappear {
+                    phase = -0.7
+                }
+        }
+    }
+
+    private var shimmerHighlight: Color {
+        colorScheme == .dark ? .white : .black
     }
 }
 

@@ -34,6 +34,7 @@ struct SettingsView: View {
 
   private var menuItems: [(title: String, id: String, icon: String)] {
     return [
+      ("Account", "account", "person.crop.circle"),
       ("General", "general", "gearshape"),
       ("Quick Actions", "quick_actions", "bolt"),
       ("Workflows", "workflows", "point.3.connected.trianglepath.dotted"),
@@ -192,6 +193,8 @@ struct SettingsView: View {
       // Tab content
       VStack(alignment: .leading) {
         switch selectedTab {
+        case "account":
+          AccountSettingsView()
         case "general":
           GeneralSettingsView(wsManager: wsManager)
         case "appearance":

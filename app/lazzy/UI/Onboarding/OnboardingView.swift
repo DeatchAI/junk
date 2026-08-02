@@ -162,7 +162,7 @@ struct OnboardingView: View {
   private var account: some View {
     OnboardingStepLayout(
       title: "Sign in, or\nkeep it local.",
-      subtitle: "An account syncs your Detach preferences. You can use every local setup feature without one."
+      subtitle: "An account unlocks Detach-hosted models and monthly credits. You can use every local setup feature without one."
     ) {
       VStack(alignment: .leading, spacing: 16) {
         Text("Email")
@@ -262,9 +262,7 @@ struct OnboardingView: View {
   private var agentsSetup: some View {
     OnboardingStepLayout(
       title: "Your subscriptions,\nyour agents.",
-      subtitle: DistributionConfiguration.mode == .hosted
-        ? "Use CLI agents already on your Mac or Detach-hosted models through the bundled OpenCode harness."
-        : "Detach connects to the CLI agents already installed on your Mac. Nothing is routed through a hosted Detach model."
+      subtitle: "Use CLI agents already on your Mac or Detach-hosted models through the bundled OpenCode harness."
     ) {
       VStack(alignment: .leading, spacing: 10) {
         ForEach(LocalAgentDetector.Agent.allCases) { agent in

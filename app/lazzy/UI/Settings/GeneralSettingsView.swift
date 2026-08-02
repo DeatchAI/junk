@@ -15,13 +15,14 @@ struct GeneralSettingsView: View {
   @AppStorage("ai_system_prompt") private var systemPrompt = AISettings.defaultSystemPrompt
   @AppStorage("detach_selected_agent") private var selectedAgent = DetachSettings.defaultAgent
   @State private var selectedModelName = "Default"
+  @StateObject private var hostedSubscription = HostedSubscriptionManager.shared
 
   private var agentOptions: [(model: String, isAvailable: Bool)] {
     let capabilities = wsManager.agentCapabilities
     if capabilities.isEmpty {
-      return [("Codex", true), ("Claude", false), ("Grok", false), ("Hosted AI", false)]
+      return [("Codex", true), ("Claude", false), ("Grok", false), ("OpenCode", false), ("Hosted AI", true)]
     }
-    return capabilities.map { ($0.displayName, $0.installed) }
+    return capabilities.map { ($0.displayName, $0.id == "hosted" || $0.installed) }
   }
 
   private var selectedCapability: AgentCapability? {
@@ -50,6 +51,9 @@ struct GeneralSettingsView: View {
     .onAppear {
       wsManager.requestCapabilities()
       refreshSelectedModel()
+    }
+    .task {
+      await hostedSubscription.refresh()
     }
     .onChange(of: wsManager.agentCapabilities) {
       refreshSelectedModel()
@@ -84,7 +88,7 @@ struct GeneralSettingsView: View {
     VStack(alignment: .leading, spacing: 10) {
       SettingsSectionHeader(
         title: "Agent runtime",
-        subtitle: "Use an agent already signed in on this Mac or Detach-hosted models through OpenCode."
+        subtitle: "Use your existing coding-agent or OpenCode account, or choose Detach-hosted models."
       )
 
       SettingsCard {
@@ -115,7 +119,12 @@ struct GeneralSettingsView: View {
             selectedOption: Binding(
               get: { displayName(for: selectedAgent) },
               set: { newValue in
-                selectedAgent = agentId(for: newValue)
+                let nextAgent = agentId(for: newValue)
+                if nextAgent == "hosted" && !hostedSubscription.canUseHostedAI {
+                  HostedPricingWindowController.shared.show()
+                  return
+                }
+                selectedAgent = nextAgent
                 DetachSettings.selectedAgent = selectedAgent
                 wsManager.updateAISettings(
                   agent: selectedAgent,
@@ -231,7 +240,8 @@ struct GeneralSettingsView: View {
     switch id {
     case "claude": return "Claude"
     case "grok": return "Grok"
-    case "opencode": return "Hosted AI"
+    case "opencode": return "OpenCode"
+    case "hosted": return "Hosted AI"
     default: return "Codex"
     }
   }

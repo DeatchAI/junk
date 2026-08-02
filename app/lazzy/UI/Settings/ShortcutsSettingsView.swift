@@ -59,7 +59,13 @@ struct ShortcutsSettingsView: View {
                 get: { ShortcutSettings.historyPanel },
                 set: { ShortcutSettings.historyPanel = $0 }
               ),
-              isLast: true
+              isLast: false
+            )
+
+            SystemShortcutRow(
+              title: "App Shot",
+              description: "Press Fn to capture the frontmost app when no floating composer is open",
+              shortcut: "fn"
             )
           }
 
@@ -163,6 +169,45 @@ struct ShortcutRow: View {
           .opacity(0.22)
       }
     }
+  }
+}
+
+/// A reserved system gesture that does not go through the configurable Carbon
+/// shortcut recorder because macOS exposes Fn as a modifier-only event.
+struct SystemShortcutRow: View {
+  let title: String
+  let description: String
+  let shortcut: String
+
+  @ObservedObject private var theme = ThemeManager.shared
+
+  var body: some View {
+    HStack(spacing: 12) {
+      VStack(alignment: .leading, spacing: 4) {
+        Text(title)
+          .font(.appFont(size: 14, weight: .semibold))
+          .foregroundColor(theme.textColor)
+        Text(description)
+          .font(.appFont(size: 12))
+          .foregroundColor(theme.secondaryTextColor)
+      }
+
+      Spacer()
+
+      Text(shortcut)
+        .font(.appFont(size: 12, design: .monospaced))
+        .foregroundColor(theme.textColor)
+        .frame(minWidth: 100)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(theme.textColor.opacity(0.05))
+        .overlay(
+          RoundedRectangle(cornerRadius: theme.borderRadius / 1.5)
+            .stroke(theme.borderColor, lineWidth: 0.5)
+        )
+    }
+    .padding(.horizontal, 16)
+    .padding(.vertical, 14)
   }
 }
 
