@@ -4,9 +4,9 @@ import SwiftUI
 struct FloatingChatHeaderView: View {
   let sessionContexts: [DetectedContent]
   let messages: [ChatMessage]
-  @Binding var pendingAttachments: [ChatAttachment]
   @Binding var activeMessageIndex: Int?
   @Binding var lastCompletedResponse: String
+  @Binding var activeMediaJob: MediaJob?
 
   // Internal state for hover effects
   @State private var hoveredContent: String?
@@ -39,22 +39,13 @@ struct FloatingChatHeaderView: View {
             action: {
               activeMessageIndex = index
               lastCompletedResponse = msg.aiResponse ?? ""
+              activeMediaJob = msg.mediaJob
               copyToClipboard(msg.userPrompt)
             }
           )
           .onHover { isHovering in
             handleHover(isHovering, content: msg.userPrompt)
           }
-        }
-
-        // Pending attachments (images, PDFs, etc.)
-        ForEach(pendingAttachments) { attachment in
-          AttachmentChip(
-            image: attachment.thumbnail,
-            onRemove: {
-              pendingAttachments.removeAll { $0.id == attachment.id }
-            }
-          )
         }
       }
       .padding(.top, 50)
@@ -170,44 +161,5 @@ struct GlassChip: View {
       )
     }
     .buttonStyle(.plain)
-  }
-}
-
-struct AttachmentChip: View {
-  let image: NSImage
-  let onRemove: () -> Void
-
-  @ObservedObject private var theme = ThemeManager.shared
-  @State private var isHovering = false
-
-  var body: some View {
-    ZStack(alignment: .topTrailing) {
-      Image(nsImage: image)
-        .resizable()
-        .aspectRatio(contentMode: .fill)
-        .frame(width: 44, height: 44)
-        .clipShape(RoundedRectangle(cornerRadius: theme.borderRadius))
-        .overlay(
-          RoundedRectangle(cornerRadius: theme.borderRadius)
-            .stroke(theme.textColor.opacity(0.3), lineWidth: 1)
-        )
-
-      // Remove button (visible on hover)
-      if isHovering {
-        Button(action: onRemove) {
-          Image(systemName: "xmark.circle.fill")
-            .font(.appFont(size: 14))
-            .foregroundColor(.white)
-            .background(Circle().fill(Color.black.opacity(0.6)))
-        }
-        .buttonStyle(.plain)
-        .offset(x: 4, y: -4)
-      }
-    }
-    .onHover { hovering in
-      withAnimation(.easeInOut(duration: 0.15)) {
-        isHovering = hovering
-      }
-    }
   }
 }

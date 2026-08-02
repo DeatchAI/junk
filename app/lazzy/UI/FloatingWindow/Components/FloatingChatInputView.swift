@@ -16,6 +16,7 @@ struct FloatingChatInputView: View {
   @Binding var isAttachmentMenuRequested: Bool
   @Binding var isAttachmentMenuActive: Bool
   @Binding var isCommandMenuActive: Bool
+  @ObservedObject var skillsDirectory: SkillsDirectoryService
   var onAttachFile: (URL) -> Void
   var onAttachSkill: (SkillAttachment) -> Void
   var onAttachMCP: (ComposerMCPAttachment) -> Void
@@ -42,6 +43,20 @@ struct FloatingChatInputView: View {
     VStack(spacing: 8) {
         if voiceDictationState != .idle {
           voiceStatus
+        }
+
+        if !fileAttachments.isEmpty {
+          ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+              ForEach(fileAttachments) { attachment in
+                ComposerFileAttachmentPill(attachment: attachment) {
+                  onRemoveFile(attachment)
+                }
+              }
+            }
+            .padding(.horizontal, 5)
+          }
+          .frame(height: 28)
         }
 
         HStack(alignment: .top, spacing: 8) {
@@ -76,14 +91,19 @@ struct FloatingChatInputView: View {
     .background {
       ComposerAttachmentPanelAnchor(
         isPresented: $isAttachmentMenuPresented,
-        preferredWidth: attachmentMenuPage == .files ? 320 : 280,
+        preferredWidth: attachmentMenuPage == .files
+          || attachmentMenuPage == .discoverSkills
+          || attachmentMenuPage == .remoteSkillDetail ? 320 : 280,
+        contentRefreshID: attachmentMenuContentRefreshID,
         menu: ComposerAttachmentMenu(
           page: $attachmentMenuPage,
           availableMCPAttachments: availableMCPAttachments,
           availableSkills: availableSkills,
+          skillsDirectory: skillsDirectory,
           selectedMCPIds: Set(selectedMCPAttachments.map(\.id)),
           selectedSkillIds: Set(selectedSkills.map(\.id)),
           fileSearchQuery: mentionSearchQuery,
+          skillsSearchQuery: skillsSearchQuery,
           onAttachFile: completeFileAttachment,
           onUpdateFileQuery: replaceMentionQuery,
           onAttachSkill: completeSkillAttachment,
@@ -96,6 +116,7 @@ struct FloatingChatInputView: View {
       ComposerAttachmentPanelAnchor(
         isPresented: $isSlashCommandMenuPresented,
         preferredWidth: 320,
+        contentRefreshID: AnyHashable(slashCommandQuery),
         menu: ComposerSlashCommandMenu(
           query: slashCommandQuery,
           workflows: workflows,
@@ -207,6 +228,27 @@ struct FloatingChatInputView: View {
     return String(inputText[afterTrigger...].prefix { !$0.isWhitespace && !$0.isNewline })
   }
 
+  /// Skills are searched from the whole trailing composer phrase so queries
+  /// such as `@web design` are useful, rather than being cut off at a space.
+  private var skillsSearchQuery: String {
+    guard let mentionTriggerOffset, mentionTriggerOffset < inputText.count else { return "" }
+    let triggerIndex = inputText.index(inputText.startIndex, offsetBy: mentionTriggerOffset)
+    let afterTrigger = inputText.index(after: triggerIndex)
+    return String(inputText[afterTrigger...].prefix { !$0.isNewline })
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var attachmentMenuContentRefreshID: AnyHashable? {
+    switch attachmentMenuPage {
+    case .files:
+      return AnyHashable(mentionSearchQuery)
+    case .discoverSkills, .remoteSkillDetail:
+      return AnyHashable(skillsSearchQuery)
+    case .root, .skills, .mcpServers:
+      return nil
+    }
+  }
+
   private var slashCommandQuery: String {
     guard let slashTriggerOffset, slashTriggerOffset < inputText.count else { return "" }
     let triggerIndex = inputText.index(inputText.startIndex, offsetBy: slashTriggerOffset)
@@ -232,6 +274,8 @@ struct FloatingChatInputView: View {
 
     if !mentionStillExists {
       dismissAttachmentMenu()
+    } else if attachmentMenuPage == .discoverSkills {
+      skillsDirectory.search(query: skillsSearchQuery)
     } else if !mentionSearchQuery.isEmpty {
       attachmentMenuPage = .files
     }
@@ -678,10 +722,12 @@ private final class ComposerNSTextView: NSTextView {
   }
 }
 
-private enum ComposerAttachmentMenuPage {
+private enum ComposerAttachmentMenuPage: Equatable {
   case root
   case files
   case skills
+  case discoverSkills
+  case remoteSkillDetail
   case mcpServers
 }
 
@@ -691,6 +737,11 @@ private enum ComposerAttachmentMenuPage {
 private struct ComposerAttachmentPanelAnchor<MenuContent: View>: NSViewRepresentable {
   @Binding var isPresented: Bool
   let preferredWidth: CGFloat
+  /// Most picker state is owned inside the detached SwiftUI host. Refresh the
+  /// root only when a caller-owned value (such as the @ file query) changes.
+  /// Replacing the host for every cursor update makes AppKit continuously
+  /// reorder the panel and can lock up the app.
+  let contentRefreshID: AnyHashable?
   let menu: MenuContent
 
   func makeCoordinator() -> Coordinator {
@@ -705,7 +756,12 @@ private struct ComposerAttachmentPanelAnchor<MenuContent: View>: NSViewRepresent
 
   func updateNSView(_ anchorView: NSView, context: Context) {
     if isPresented {
-      context.coordinator.present(menu: menu, preferredWidth: preferredWidth, from: anchorView)
+      context.coordinator.present(
+        menu: menu,
+        preferredWidth: preferredWidth,
+        contentRefreshID: contentRefreshID,
+        from: anchorView
+      )
     } else {
       context.coordinator.dismiss()
     }
@@ -718,18 +774,37 @@ private struct ComposerAttachmentPanelAnchor<MenuContent: View>: NSViewRepresent
   @MainActor
   final class Coordinator {
     private var panel: NSPanel?
+    private var hostingView: NSHostingView<AnyView>?
     private weak var parentWindow: NSWindow?
+    private var lastContentRefreshID: AnyHashable?
 
-    func present(menu: MenuContent, preferredWidth: CGFloat, from anchorView: NSView) {
+    func present(
+      menu: MenuContent,
+      preferredWidth: CGFloat,
+      contentRefreshID: AnyHashable?,
+      from anchorView: NSView
+    ) {
       guard let window = anchorView.window else { return }
 
-      let hostingView = NSHostingView(rootView: menu.padding(22))
-      hostingView.layer?.backgroundColor = NSColor.clear.cgColor
+      let shouldRefreshContent = hostingView == nil || lastContentRefreshID != contentRefreshID
+      let hostingView: NSHostingView<AnyView>
+      if let existingHostingView = self.hostingView {
+        hostingView = existingHostingView
+        if shouldRefreshContent {
+          hostingView.rootView = AnyView(menu.padding(22))
+        }
+      } else {
+        hostingView = NSHostingView(rootView: AnyView(menu.padding(22)))
+        hostingView.layer?.backgroundColor = NSColor.clear.cgColor
+        self.hostingView = hostingView
+      }
+      lastContentRefreshID = contentRefreshID
 
       let menuPanel: NSPanel
+      let isNewPanel: Bool
       if let panel {
         menuPanel = panel
-        menuPanel.contentView = hostingView
+        isNewPanel = false
       } else {
         menuPanel = KeyablePanel(
           contentRect: .zero,
@@ -747,8 +822,10 @@ private struct ComposerAttachmentPanelAnchor<MenuContent: View>: NSViewRepresent
         menuPanel.collectionBehavior = [.transient, .moveToActiveSpace, .fullScreenAuxiliary]
         menuPanel.contentView = hostingView
         panel = menuPanel
+        isNewPanel = true
       }
 
+      let parentWindowChanged = parentWindow !== window
       if parentWindow !== window {
         parentWindow?.removeChildWindow(menuPanel)
         window.addChildWindow(menuPanel, ordered: .above)
@@ -758,9 +835,19 @@ private struct ComposerAttachmentPanelAnchor<MenuContent: View>: NSViewRepresent
       hostingView.frame.size.width = preferredWidth + 44
       hostingView.layoutSubtreeIfNeeded()
       let fittingHeight = min(max(hostingView.fittingSize.height, 80), 390)
-      menuPanel.setContentSize(NSSize(width: preferredWidth + 44, height: fittingHeight))
-      position(menuPanel, relativeTo: anchorView)
-      menuPanel.orderFront(nil)
+      let targetSize = NSSize(width: preferredWidth + 44, height: fittingHeight)
+      let currentSize = menuPanel.contentView?.bounds.size ?? .zero
+      let sizeChanged = abs(currentSize.width - targetSize.width) > 0.5
+        || abs(currentSize.height - targetSize.height) > 0.5
+      if sizeChanged {
+        menuPanel.setContentSize(targetSize)
+      }
+      if isNewPanel || parentWindowChanged || sizeChanged {
+        position(menuPanel, relativeTo: anchorView)
+      }
+      if !menuPanel.isVisible {
+        menuPanel.orderFront(nil)
+      }
     }
 
     func dismiss() {
@@ -768,7 +855,9 @@ private struct ComposerAttachmentPanelAnchor<MenuContent: View>: NSViewRepresent
       parentWindow?.removeChildWindow(panel)
       panel.orderOut(nil)
       self.panel = nil
+      hostingView = nil
       parentWindow = nil
+      lastContentRefreshID = nil
     }
 
     private func position(_ panel: NSPanel, relativeTo anchorView: NSView) {
@@ -798,9 +887,11 @@ private struct ComposerAttachmentMenu: View {
   @Binding var page: ComposerAttachmentMenuPage
   let availableMCPAttachments: [ComposerMCPAttachment]
   let availableSkills: [SkillAttachment]
+  @ObservedObject var skillsDirectory: SkillsDirectoryService
   let selectedMCPIds: Set<String>
   let selectedSkillIds: Set<String>
   let fileSearchQuery: String
+  let skillsSearchQuery: String
   let onAttachFile: (URL) -> Void
   let onUpdateFileQuery: (String) -> Void
   let onAttachSkill: (SkillAttachment) -> Void
@@ -811,6 +902,7 @@ private struct ComposerAttachmentMenu: View {
   @State private var selectedRootIndex = 0
   @State private var selectedSkillIndex = 0
   @State private var selectedMCPIndex = 0
+  @State private var selectedRemoteSkill: RemoteSkill?
   @State private var keyMonitor: Any?
 
   var body: some View {
@@ -822,19 +914,25 @@ private struct ComposerAttachmentMenu: View {
         fileMenu
       case .skills:
         skillMenu
+      case .discoverSkills:
+        discoverSkillsMenu
+      case .remoteSkillDetail:
+        remoteSkillDetail
       case .mcpServers:
         mcpMenu
       }
     }
     .padding(6)
-    .frame(width: page == .files ? 320 : 280, alignment: .leading)
+    .frame(
+      width: page == .files || page == .discoverSkills || page == .remoteSkillDetail ? 320 : 280,
+      alignment: .leading
+    )
     .background(menuBackground)
     .overlay {
       RoundedRectangle(cornerRadius: 16, style: .continuous)
         .stroke(theme.textColor.opacity(0.1), lineWidth: 0.5)
     }
     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-    .shadow(color: .black.opacity(0.15), radius: 20, x: 0, y: 8)
     .onAppear(perform: setupKeyMonitor)
     .onDisappear(perform: removeKeyMonitor)
     .onChange(of: page) { _, _ in clampSelectionForCurrentPage() }
@@ -863,11 +961,20 @@ private struct ComposerAttachmentMenu: View {
         page = .skills
       }
       ComposerAttachmentMenuRow(
+        title: "Discover Skills",
+        subtitle: "Browse popular skills or search with @",
+        systemImage: "magnifyingglass",
+        isHighlighted: selectedRootIndex == 2,
+        onHover: { selectedRootIndex = 2 }
+      ) {
+        openSkillsDirectory()
+      }
+      ComposerAttachmentMenuRow(
         title: "Connected MCP Servers",
         subtitle: "Interact with model context servers",
         systemImage: "server.rack",
-        isHighlighted: selectedRootIndex == 2,
-        onHover: { selectedRootIndex = 2 }
+        isHighlighted: selectedRootIndex == 3,
+        onHover: { selectedRootIndex = 3 }
       ) {
         page = .mcpServers
       }
@@ -876,8 +983,8 @@ private struct ComposerAttachmentMenu: View {
         subtitle: "Enable browser tools",
         systemImage: "globe",
         isSelected: selectedMCPIds.contains(ComposerMCPAttachment.browser.id),
-        isHighlighted: selectedRootIndex == 3,
-        onHover: { selectedRootIndex = 3 }
+        isHighlighted: selectedRootIndex == 4,
+        onHover: { selectedRootIndex = 4 }
       ) {
         onAttachMCP(.browser)
       }
@@ -886,8 +993,8 @@ private struct ComposerAttachmentMenu: View {
         subtitle: "Control native macOS apps",
         systemImage: "macwindow",
         isSelected: selectedMCPIds.contains(ComposerMCPAttachment.macOS.id),
-        isHighlighted: selectedRootIndex == 4,
-        onHover: { selectedRootIndex = 4 }
+        isHighlighted: selectedRootIndex == 5,
+        onHover: { selectedRootIndex = 5 }
       ) {
         onAttachMCP(.macOS)
       }
@@ -896,8 +1003,8 @@ private struct ComposerAttachmentMenu: View {
         subtitle: "Use saved credentials with Touch ID",
         systemImage: "lock.fill",
         isSelected: selectedMCPIds.contains(ComposerMCPAttachment.secrets.id),
-        isHighlighted: selectedRootIndex == 5,
-        onHover: { selectedRootIndex = 5 }
+        isHighlighted: selectedRootIndex == 6,
+        onHover: { selectedRootIndex = 6 }
       ) {
         onAttachMCP(.secrets)
       }
@@ -971,6 +1078,158 @@ private struct ComposerAttachmentMenu: View {
     }
   }
 
+  private var discoverSkillsMenu: some View {
+    Group {
+      ComposerAttachmentMenuHeader(title: "Discover Skills") {
+        skillsDirectory.search(query: "")
+        page = .root
+      }
+
+      let normalizedQuery = skillsSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+      if normalizedQuery.count < 2 {
+        Text("Trending skills")
+          .font(.appFont(size: 11, weight: .semibold))
+          .foregroundColor(theme.secondaryTextColor)
+          .padding(.horizontal, 4)
+          .padding(.top, 3)
+
+        ScrollView {
+          VStack(spacing: 2) {
+            ForEach(SkillsDirectoryService.featuredSkills) { skill in
+              remoteSkillRow(skill)
+            }
+          }
+        }
+        .frame(maxHeight: 236)
+      } else if skillsDirectory.isSearching {
+        HStack(spacing: 8) {
+          ProgressView()
+            .controlSize(.small)
+          Text("Searching skills.sh…")
+            .font(.appFont(size: 12))
+            .foregroundColor(theme.secondaryTextColor)
+        }
+        .frame(maxWidth: .infinity, minHeight: 72)
+      } else if skillsDirectory.searchResults.isEmpty {
+        ComposerAttachmentMenuEmptyState(text: "No skills found")
+      } else {
+        ScrollView {
+          VStack(spacing: 2) {
+            ForEach(skillsDirectory.searchResults) { skill in
+              remoteSkillRow(skill)
+            }
+          }
+        }
+        .frame(maxHeight: 236)
+      }
+
+      if let errorMessage = skillsDirectory.errorMessage {
+        Text(errorMessage)
+          .font(.appFont(size: 10))
+          .foregroundColor(.red.opacity(0.85))
+          .lineLimit(4)
+          .padding(.horizontal, 4)
+          .padding(.top, 3)
+      }
+    }
+  }
+
+  private func remoteSkillRow(_ skill: RemoteSkill) -> some View {
+    ComposerAttachmentMenuRow(
+      title: skill.name,
+      subtitle: [skill.source, skill.formattedInstalls]
+        .filter { !$0.isEmpty }
+        .joined(separator: " · "),
+      systemImage: "wand.and.stars"
+    ) {
+      selectedRemoteSkill = skill
+      skillsDirectory.clearError()
+      page = .remoteSkillDetail
+    }
+    .help("Open " + skill.name)
+  }
+
+  private var remoteSkillDetail: some View {
+    Group {
+      ComposerAttachmentMenuHeader(title: selectedRemoteSkill?.name ?? "Skill") {
+        page = .discoverSkills
+      }
+
+      if let skill = selectedRemoteSkill {
+        VStack(alignment: .leading, spacing: 10) {
+          Text(skill.source)
+            .font(.appFont(size: 12, weight: .medium))
+            .foregroundColor(theme.textColor)
+
+          if !skill.formattedInstalls.isEmpty {
+            Label(skill.formattedInstalls, systemImage: "arrow.down.circle")
+              .font(.appFont(size: 11))
+              .foregroundColor(theme.secondaryTextColor)
+          }
+
+          HStack(spacing: 8) {
+            if let detailURL = skill.detailURL {
+              Button("View on skills.sh") {
+                NSWorkspace.shared.open(detailURL)
+              }
+              .buttonStyle(.plain)
+              .font(.appFont(size: 11, weight: .medium))
+              .foregroundColor(theme.accentColor)
+            }
+
+            Spacer()
+
+            Button(action: installSelectedRemoteSkill) {
+              HStack(spacing: 5) {
+                if skillsDirectory.installingSkillID == skill.id {
+                  ProgressView()
+                    .controlSize(.small)
+                } else {
+                  Image(systemName: "arrow.down.circle")
+                }
+                Text(skillsDirectory.installingSkillID == skill.id ? "Installing…" : "Install & Attach")
+              }
+              .font(.appFont(size: 12, weight: .semibold))
+              .foregroundColor(theme.backgroundColor)
+              .padding(.horizontal, 10)
+              .padding(.vertical, 6)
+              .background(
+                skillsDirectory.installingSkillID == nil
+                  ? theme.accentColor
+                  : theme.textColor.opacity(0.16)
+              )
+              .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(skillsDirectory.installingSkillID != nil)
+          }
+
+          if let errorMessage = skillsDirectory.errorMessage {
+            Text(errorMessage)
+              .font(.appFont(size: 10))
+              .foregroundColor(.red.opacity(0.85))
+              .lineLimit(6)
+          }
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 5)
+      } else {
+        ComposerAttachmentMenuEmptyState(text: "Select a skill to continue")
+      }
+    }
+  }
+
+  private func installSelectedRemoteSkill() {
+    guard let selectedRemoteSkill else { return }
+    Task { @MainActor in
+      let result = await skillsDirectory.install(selectedRemoteSkill)
+      guard case .success(let attachment) = result else { return }
+      onAttachSkill(attachment)
+      self.selectedRemoteSkill = nil
+      page = .skills
+    }
+  }
+
   @ViewBuilder
   private var menuBackground: some View {
     if theme.usesGlassEffect {
@@ -991,7 +1250,7 @@ private struct ComposerAttachmentMenu: View {
   private func setupKeyMonitor() {
     guard keyMonitor == nil else { return }
     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-      guard page != .files else { return event }
+      guard page != .files && page != .discoverSkills else { return event }
       let modifiers = event.modifierFlags.intersection([.command, .option, .control])
       guard modifiers.isEmpty else { return event }
 
@@ -1028,12 +1287,12 @@ private struct ComposerAttachmentMenu: View {
   private func moveSelection(by delta: Int) {
     switch page {
     case .root:
-      selectedRootIndex = clamped(selectedRootIndex + delta, count: 6)
+      selectedRootIndex = clamped(selectedRootIndex + delta, count: 7)
     case .skills:
       selectedSkillIndex = clamped(selectedSkillIndex + delta, count: availableSkills.count)
     case .mcpServers:
       selectedMCPIndex = clamped(selectedMCPIndex + delta, count: availableMCPAttachments.count)
-    case .files:
+    case .files, .discoverSkills, .remoteSkillDetail:
       break
     }
   }
@@ -1044,10 +1303,12 @@ private struct ComposerAttachmentMenu: View {
       switch selectedRootIndex {
       case 0: page = .files
       case 1: page = .skills
-      case 2: page = .mcpServers
-      case 3: onAttachMCP(.browser)
-      case 4: onAttachMCP(.macOS)
-      case 5: onAttachMCP(.secrets)
+      case 2:
+        openSkillsDirectory()
+      case 3: page = .mcpServers
+      case 4: onAttachMCP(.browser)
+      case 5: onAttachMCP(.macOS)
+      case 6: onAttachMCP(.secrets)
       default: break
       }
     case .skills:
@@ -1056,15 +1317,21 @@ private struct ComposerAttachmentMenu: View {
     case .mcpServers:
       guard availableMCPAttachments.indices.contains(selectedMCPIndex) else { return }
       onAttachMCP(availableMCPAttachments[selectedMCPIndex])
-    case .files:
+    case .files, .discoverSkills, .remoteSkillDetail:
       break
     }
   }
 
   private func clampSelectionForCurrentPage() {
-    selectedRootIndex = clamped(selectedRootIndex, count: 6)
+    selectedRootIndex = clamped(selectedRootIndex, count: 7)
     selectedSkillIndex = clamped(selectedSkillIndex, count: availableSkills.count)
     selectedMCPIndex = clamped(selectedMCPIndex, count: availableMCPAttachments.count)
+  }
+
+  private func openSkillsDirectory() {
+    skillsDirectory.clearError()
+    skillsDirectory.search(query: skillsSearchQuery)
+    page = .discoverSkills
   }
 
   private func clamped(_ value: Int, count: Int) -> Int {
@@ -1172,7 +1439,6 @@ private struct ComposerSlashCommandMenu: View {
         .stroke(theme.textColor.opacity(0.1), lineWidth: 0.5)
     }
     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-    .shadow(color: .black.opacity(0.15), radius: 20, x: 0, y: 8)
     .onAppear(perform: setupKeyMonitor)
     .onDisappear(perform: removeKeyMonitor)
     .onChange(of: query) { _, _ in clampSelection() }
@@ -1866,5 +2132,60 @@ private struct InlineFileResultRow: View {
     }
     .buttonStyle(.plain)
     .onHover { isHovered = $0 }
+  }
+}
+
+/// A compact attachment representation for the composer. Content previews are
+/// intentionally avoided here so files do not pull the composer apart visually.
+private struct ComposerFileAttachmentPill: View {
+  let attachment: ChatAttachment
+  let onRemove: () -> Void
+
+  @ObservedObject private var theme = ThemeManager.shared
+
+  private var systemImage: String {
+    let mimeType = attachment.fileRequest.mimeType
+    if mimeType == "inode/directory" { return "folder" }
+    if mimeType.hasPrefix("image/") { return "photo" }
+    if mimeType == "application/pdf" { return "doc.richtext" }
+    if mimeType.contains("xml") || mimeType.contains("json") || mimeType.hasPrefix("text/") {
+      return "doc.text"
+    }
+    return "doc"
+  }
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Image(systemName: systemImage)
+        .font(.appFont(size: 11, weight: .medium))
+        .foregroundStyle(theme.accentColor)
+
+      Text(attachment.fileName)
+        .font(.appFont(size: 11, weight: .medium))
+        .foregroundStyle(theme.textColor)
+        .lineLimit(1)
+        .truncationMode(.middle)
+
+      Button(action: onRemove) {
+        Image(systemName: "xmark")
+          .font(.appFont(size: 9, weight: .bold))
+          .foregroundStyle(theme.secondaryTextColor)
+          .frame(width: 16, height: 16)
+      }
+      .buttonStyle(.plain)
+      .help("Remove \(attachment.fileName)")
+    }
+    .padding(.leading, 8)
+    .padding(.trailing, 3)
+    .padding(.vertical, 4)
+    .frame(maxWidth: 210)
+    .background {
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .fill(theme.textColor.opacity(0.06))
+    }
+    .overlay {
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .stroke(theme.textColor.opacity(0.12), lineWidth: 0.5)
+    }
   }
 }

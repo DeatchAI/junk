@@ -39,7 +39,10 @@ struct FloatingChatExpandedView: View {
             .padding(.leading, 40)
 
             // AI Response
-            if let response = msg.aiResponse {
+            if let mediaJob = msg.mediaJob {
+              GeneratedMediaCard(job: mediaJob)
+                .padding(.trailing, 20)
+            } else if let response = msg.aiResponse {
               HStack(alignment: .top, spacing: 12) {
                 // AI Icon/Avatar could go here
                 MarkdownMessageView(text: response)

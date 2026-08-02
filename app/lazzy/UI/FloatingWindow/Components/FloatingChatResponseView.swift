@@ -8,6 +8,7 @@ struct FloatingChatResponseView: View {
   let isThinking: Bool
   let errorMessage: String?
   let currentActivity: String
+  let mediaJob: MediaJob?
   var maxStreamingHeight: CGFloat
 
   // Internal state for content height
@@ -61,7 +62,7 @@ struct FloatingChatResponseView: View {
     let shouldShowLiveActivityHeader =
       isLive && !currentActivity.isEmpty && !hasActivity
 
-    let actionBarHeight: CGFloat = !displayText.isEmpty && !isLive ? 41 : 0
+    let actionBarHeight: CGFloat = !displayText.isEmpty && !isLive && mediaJob == nil ? 41 : 0
     let responseHeight = min(max(contentHeight, 0), max(maxStreamingHeight - actionBarHeight, 0))
 
     return VStack(spacing: 0) {
@@ -75,7 +76,7 @@ struct FloatingChatResponseView: View {
       .frame(height: responseHeight)
       .background(Color.clear)
 
-      if !displayText.isEmpty && !isLive {
+      if !displayText.isEmpty && !isLive && mediaJob == nil {
         HStack {
           Button(action: {
             let pasteboard = NSPasteboard.general
@@ -127,14 +128,19 @@ struct FloatingChatResponseView: View {
           ))
       } else {
         VStack(alignment: .leading, spacing: 12) {
-          if shouldShowLiveActivityHeader {
+          if let mediaJob {
+            GeneratedMediaCard(job: mediaJob)
+              .padding(12)
+          } else if shouldShowLiveActivityHeader {
             AgentActivityText(activity: currentActivity, fontSize: 12)
               .padding(.horizontal, 18)
               .padding(.top, 16)
               .padding(.bottom, showTimeline ? 0 : 16)
           }
 
-          if showTimeline {
+          if mediaJob != nil {
+            EmptyView()
+          } else if showTimeline {
             ResponseTimelineView(events: responseEvents, compact: true)
               .padding(.horizontal, 18)
               .padding(.top, shouldShowLiveActivityHeader ? 0 : 16)
@@ -167,9 +173,21 @@ struct ResponseTimelineView: View {
   let events: [AgentResponseEvent]
   var compact: Bool = false
 
+  private var displayedEvents: [AgentResponseEvent] {
+    guard compact,
+      let latestActivityID = events.last(where: { $0.kind == .activity })?.id
+    else {
+      return events
+    }
+
+    return events.filter { event in
+      event.kind == .text || event.id == latestActivityID
+    }
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: compact ? 12 : 14) {
-      ForEach(events) { event in
+      ForEach(displayedEvents) { event in
         switch event.kind {
         case .text:
           MarkdownMessageView(text: event.text)
@@ -178,13 +196,17 @@ struct ResponseTimelineView: View {
             AgentActivityText(
               activity: event.text,
               fontSize: compact ? 11 : 12,
-              isActive: event.isActive
+              isActive: event.isActive,
+              event: event.activity,
+              toolName: event.toolName
             )
             Spacer(minLength: 0)
           }
           .padding(.vertical, 2)
+          .transition(.opacity.combined(with: .move(edge: .leading)))
         }
       }
     }
+    .animation(.easeOut(duration: 0.18), value: displayedEvents.map(\.id))
   }
 }
