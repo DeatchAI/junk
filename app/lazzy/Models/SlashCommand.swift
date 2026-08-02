@@ -1,12 +1,15 @@
 import Foundation
 
 enum SettingsLaunchIntent {
+  case account
   case createQuickAction
   case createWorkflow
   case connectMCP
 
   var settingsTab: String {
     switch self {
+    case .account:
+      return "account"
     case .createQuickAction:
       return "quick_actions"
     case .createWorkflow:
@@ -146,5 +149,4 @@ enum CommandOrString: Codable {
     }
   }
 }
-
 

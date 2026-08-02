@@ -64,6 +64,7 @@ struct DetachSettings {
   private enum Keys {
     static let selectedAgent = "detach_selected_agent"
     static let selectedModelPrefix = "detach_selected_model_"
+    static let migratedHostedOpenCodeSelection = "detach_migrated_hosted_opencode_selection_v1"
   }
 
   static let defaultAgent = "codex"
@@ -83,5 +84,20 @@ struct DetachSettings {
     } else {
       UserDefaults.standard.removeObject(forKey: key)
     }
+  }
+
+  /// Until Hosted AI was split out, its persisted agent identifier was
+  /// `opencode`. Preserve that existing choice once, then leave future
+  /// standalone OpenCode selections untouched.
+  static func migrateLegacyHostedOpenCodeSelection(availableAgentIDs: Set<String>) {
+    guard !UserDefaults.standard.bool(forKey: Keys.migratedHostedOpenCodeSelection) else { return }
+    defer { UserDefaults.standard.set(true, forKey: Keys.migratedHostedOpenCodeSelection) }
+
+    guard selectedAgent == "opencode", availableAgentIDs.contains("hosted") else { return }
+    if let selectedModel = selectedModel(for: "opencode") {
+      setSelectedModel(selectedModel, for: "hosted")
+      setSelectedModel(nil, for: "opencode")
+    }
+    selectedAgent = "hosted"
   }
 }
