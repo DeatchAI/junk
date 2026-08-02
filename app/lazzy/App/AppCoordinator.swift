@@ -152,6 +152,22 @@ class AppCoordinator: ObservableObject {
       task.controller.onNewChat = { [weak task] in
         task?.wsManager.startNewConversation()
       }
+      task.controller.onVoiceInputBegan = { [weak self, weak task] in
+        guard let self, let task else { return }
+        self.beginVoiceDictation(in: task.controller)
+      }
+      task.controller.onVoiceInputEnded = { [weak self] in
+        self?.voiceDictation.endPushToTalk()
+      }
+      task.controller.onVoiceInputToggled = { [weak self, weak task] in
+        guard let self, let task else { return }
+        self.toggleVoiceDictation(in: task.controller)
+      }
+      task.controller.onVoiceInputCancelled = { [weak self, weak task] in
+        guard let self, let task, self.voiceTargetController === task.controller else { return }
+        self.voiceDictation.stop()
+        self.voiceTargetController = nil
+      }
       task.controller.onDismissTransition = { [weak self] in
         self?.activityIsland.beginComposerHandoff()
       }
@@ -163,12 +179,6 @@ class AppCoordinator: ObservableObject {
   }
 
   private func setupVoiceDictation() {
-    voiceDictation.onHoldBegan = { [weak self] in
-      guard let self else { return }
-      let task = self.floatingWorkspace.prepareForVoiceInput(at: NSEvent.mouseLocation)
-      self.voiceTargetController = task.controller
-    }
-
     voiceDictation.onStateChanged = { [weak self] state, partialTranscript in
       self?.voiceTargetController?.updateVoiceDictation(
         state: state,
@@ -178,6 +188,20 @@ class AppCoordinator: ObservableObject {
 
     voiceDictation.onTranscription = { [weak self] transcript in
       self?.voiceTargetController?.insertVoiceTranscription(transcript)
+    }
+  }
+
+  private func beginVoiceDictation(in controller: FloatingWindowController) {
+    voiceTargetController = controller
+    voiceDictation.beginPushToTalk()
+  }
+
+  private func toggleVoiceDictation(in controller: FloatingWindowController) {
+    switch voiceDictation.state {
+    case .idle, .failed:
+      beginVoiceDictation(in: controller)
+    case .requestingPermission, .listening, .processing:
+      voiceDictation.endPushToTalk()
     }
   }
 
@@ -267,7 +291,6 @@ class AppCoordinator: ObservableObject {
       .sink { [weak self] isGranted in
         guard let self, self.hasCompletedOnboarding, isGranted else { return }
         self.selectionMonitor.startMonitoring()
-        self.voiceDictation.restartMonitoring()
         self.isMonitoring = true
       }
       .store(in: &cancellables)
@@ -588,7 +611,6 @@ class AppCoordinator: ObservableObject {
     hasStartedCoreServices = true
     registerAllShortcuts()
     observeShortcutChanges()
-    voiceDictation.startMonitoring()
     permissionsManager.checkPermissions()
 
     if permissionsManager.hasAccessibilityPermission {
@@ -637,7 +659,7 @@ class AppCoordinator: ObservableObject {
     wsManager.disconnect()
     serverLauncher.stop()
     quickActionsMenu.hide()
-    voiceDictation.stopMonitoring()
+    voiceDictation.stop()
     isMonitoring = false
     print("🛑 App coordinator stopped")
   }
