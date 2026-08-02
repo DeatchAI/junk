@@ -16,6 +16,7 @@
 		F000F4192EFA6D0200FB9D42 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = F000F4182EFA6D0200FB9D42 /* Supabase */; };
 		F00C73582EED1EDD008F30AE /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = F00C73572EED1EDD008F30AE /* MarkdownUI */; };
 		F020BDBD2F03D1CC009B02B3 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = F020BDBC2F03D1CC009B02B3 /* Sparkle */; };
+		F10000000000000000000004 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = F10000000000000000000003 /* WhisperKit */; };
 		F07367C52F2F431200EA9FBD /* Realtime in Frameworks */ = {isa = PBXBuildFile; productRef = F07367C42F2F431200EA9FBD /* Realtime */; };
 		F0B25E592EFA6054006069CD /* Auth in Frameworks */ = {isa = PBXBuildFile; productRef = F0B25E582EFA6054006069CD /* Auth */; };
 		F0FE06E22EF7FEAF006C04D2 /* SDWebImageSVGCoder in Frameworks */ = {isa = PBXBuildFile; productRef = F0FE06E12EF7FEAF006C04D2 /* SDWebImageSVGCoder */; };
@@ -98,6 +99,7 @@
 				F020BDBD2F03D1CC009B02B3 /* Sparkle in Frameworks */,
 				F0B25E592EFA6054006069CD /* Auth in Frameworks */,
 				F0FE06E22EF7FEAF006C04D2 /* SDWebImageSVGCoder in Frameworks */,
+				F10000000000000000000004 /* WhisperKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -170,6 +172,7 @@
 			buildPhases = (
 				F036A8ED2EE2E5BA008B2707 /* Sources */,
 				F036A8EE2EE2E5BA008B2707 /* Frameworks */,
+				A30000000000000000000001 /* Build Bundled Runtime */,
 				F036A8EF2EE2E5BA008B2707 /* Resources */,
 				A20000000000000000000001 /* Sign Bundled OpenCode */,
 				F0A5CDC72EEAF33100EDCCE8 /* Embed App Extensions */,
@@ -191,6 +194,7 @@
 				F000F4182EFA6D0200FB9D42 /* Supabase */,
 				F020BDBC2F03D1CC009B02B3 /* Sparkle */,
 				F07367C42F2F431200EA9FBD /* Realtime */,
+				F10000000000000000000003 /* WhisperKit */,
 			);
 			productName = Detach;
 			productReference = F036A8F12EE2E5BA008B2707 /* Detach.app */;
@@ -229,6 +233,7 @@
 				F0FE06E32EF7FEC9006C04D2 /* XCRemoteSwiftPackageReference "SDWebImageSwiftUI" */,
 				F0B25E572EFA6054006069CD /* XCRemoteSwiftPackageReference "supabase-swift" */,
 				F020BDBB2F03D1CC009B02B3 /* XCRemoteSwiftPackageReference "Sparkle" */,
+				F10000000000000000000001 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = F036A8F22EE2E5BA008B2707 /* Products */;
@@ -259,6 +264,21 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		A30000000000000000000001 /* Build Bundled Runtime */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Build Bundled Runtime";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ \"${CONFIGURATION}\" = \"Debug\" ]; then\n  set -eu\n  cd \"${SRCROOT}/server-v2\"\n  /usr/bin/env bun run build\n  /usr/bin/ditto \"${SRCROOT}/server-v2/detach-runtime\" \"${SRCROOT}/lazzy/detach-runtime\"\n  /bin/mkdir -p \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\n  /usr/bin/ditto \"${SRCROOT}/server-v2/detach-runtime\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/detach-runtime\"\nfi\n";
+		};
 		A20000000000000000000001 /* Sign Bundled OpenCode */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -313,8 +333,6 @@
 				CODE_SIGN_ENTITLEMENTS = FinderExtension/FinderExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 7;
-				DETACH_DISTRIBUTION_MODE = self_hosted;
-				DETACH_HOSTED_CONTROL_PLANE_URL = "";
 				DEVELOPMENT_TEAM = RZJT39VU7M;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -356,8 +374,6 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 7;
-				DETACH_DISTRIBUTION_MODE = self_hosted;
-				DETACH_HOSTED_CONTROL_PLANE_URL = "";
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = RZJT39VU7M;
 				ENABLE_APP_SANDBOX = YES;
@@ -526,6 +542,7 @@
 				DEVELOPMENT_TEAM = RZJT39VU7M;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
 				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
@@ -539,6 +556,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "This app needs to control Finder to detect selected files.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Detach uses the microphone only while voice input is active in the composer.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -579,6 +597,7 @@
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = RZJT39VU7M;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
 				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
@@ -592,6 +611,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "This app needs to control Finder to detect selected files.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Detach uses the microphone only while voice input is active in the composer.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -691,6 +711,14 @@
 				minimumVersion = 3.1.4;
 			};
 		};
+		F10000000000000000000001 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/argmaxinc/argmax-oss-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -728,6 +756,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = F0FE06E32EF7FEC9006C04D2 /* XCRemoteSwiftPackageReference "SDWebImageSwiftUI" */;
 			productName = SDWebImageSwiftUI;
+		};
+		F10000000000000000000003 /* WhisperKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F10000000000000000000001 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */;
+			productName = WhisperKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

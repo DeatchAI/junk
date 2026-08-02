@@ -8,6 +8,7 @@ import Foundation
 enum AppConfiguration {
   static let supabaseURL = "https://qymrzmmsroxkteaxbgoo.supabase.co"
   static let supabasePublishableKey = "sb_publishable_aWjjz60k2uciZe45sFGzSg_11quNmaV"
+  static let hostedControlPlaneURL = URL(string: "https://detach.run")!
 
   /// Open-source builds do not send product analytics. A release build may
   /// supply a non-sensitive write key through its build configuration later.

@@ -82,7 +82,7 @@ class AuthManager: ObservableObject {
         // Sync profile to local server via HTTP
         Task {
           await self.syncProfileToServer()
-          await self.fetchUserUsage()
+          self.usage = nil
         }
       }
     } catch {
@@ -187,9 +187,11 @@ class AuthManager: ObservableObject {
     isLoading = false
   }
 
-  /// Syncs user profile metadata to the local Bun server via HTTP
+  /// Sends the signed-in session to the local Bun runtime over loopback. The
+  /// runtime uses it only to obtain a short-lived hosted-model session; it does
+  /// not need the profile record to enable Hosted AI.
   func syncProfileToServer() async {
-    guard let profile = userProfile else { return }
+    guard let accessToken = session?.accessToken, !accessToken.isEmpty else { return }
 
     // Wait for server to be ready before making HTTP requests
     await waitForServerReady()
@@ -200,14 +202,9 @@ class AuthManager: ObservableObject {
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
     let body: [String: Any] = [
-      "userId": profile.id.uuidString,
-      "email": profile.email ?? "",
-      "planType": profile.planType.rawValue,
-      "distributionMode": DistributionConfiguration.mode.rawValue,
-      "hostedControlPlaneURL": DistributionConfiguration.hostedControlPlaneURL?.absoluteString ?? "",
       // This token is sent only over localhost to the child runtime. The
-      // runtime forwards it only when the signed app is a hosted build.
-      "accessToken": DistributionConfiguration.mode == .hosted ? (session?.accessToken ?? "") : "",
+      // runtime exchanges it for an inference-scoped token only.
+      "accessToken": accessToken,
     ]
 
     do {

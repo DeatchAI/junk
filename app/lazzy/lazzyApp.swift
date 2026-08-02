@@ -94,6 +94,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         continue
       }
 
+      if url.host?.lowercased() == "credits-complete" {
+        NotificationCenter.default.post(name: .detachHostedCreditsDidChange, object: nil)
+        DispatchQueue.main.async {
+          NSApp.activate(ignoringOtherApps: true)
+          MenuBarContentView.showSettings(
+            wsManager: coordinator.wsManager,
+            onRunWorkflow: coordinator.runWorkflow
+          )
+        }
+        continue
+      }
+
       guard coordinator.hasCompletedOnboarding else {
         DispatchQueue.main.async {
           coordinator.onboardingWindow.show()
@@ -166,10 +178,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 struct MenuBarContentView: View {
   @ObservedObject var appDelegate: AppDelegate
   @ObservedObject var updaterViewModel: UpdaterViewModel
+  @StateObject private var auth = AuthManager.shared
+  @StateObject private var hostedSubscription = HostedSubscriptionManager.shared
   @State private var showMCPSettings = false
 
   var body: some View {
-    if let coordinator = appDelegate.coordinator {
+    Group {
+      if let coordinator = appDelegate.coordinator {
       // Status indicator
       // HStack {
       //   Circle()
@@ -190,6 +205,15 @@ struct MenuBarContentView: View {
       // Divider()
 
       OnboardingMenuSection(coordinator: coordinator)
+
+      if coordinator.hasCompletedOnboarding && auth.isAuthenticated {
+        Divider()
+        HostedCreditsMenuSection(
+          hostedSubscription: hostedSubscription,
+          wsManager: coordinator.wsManager,
+          onRunWorkflow: coordinator.runWorkflow
+        )
+      }
 
       // Button(
       //   FIFinderSyncController.isExtensionEnabled
@@ -234,8 +258,12 @@ struct MenuBarContentView: View {
         NSApplication.shared.terminate(nil)
       }
       .keyboardShortcut("q")
-    } else {
-      Text("Initializing...")
+      } else {
+        Text("Initializing...")
+      }
+    }
+    .task(id: auth.isAuthenticated) {
+      await hostedSubscription.refresh()
     }
   }
 
@@ -293,6 +321,48 @@ struct MenuBarContentView: View {
 
     window.center()
     controller.showWindow(nil)
+  }
+}
+
+private struct HostedCreditsMenuSection: View {
+  @ObservedObject var hostedSubscription: HostedSubscriptionManager
+  let wsManager: WebSocketManager
+  let onRunWorkflow: (QuickAction) -> Void
+
+  var body: some View {
+    if let credits = hostedSubscription.credits,
+      let progress = hostedSubscription.availableCreditProgress,
+      let percentage = hostedSubscription.availableCreditPercentage
+    {
+      VStack(alignment: .leading, spacing: 7) {
+        Text("Hosted AI credits")
+          .font(.caption)
+          .foregroundColor(.secondary)
+
+        HostedCreditsProgressView(progress: progress, percentage: percentage)
+          .frame(width: 230)
+
+        Text("\(credits.available) credits remaining")
+          .font(.caption2)
+          .foregroundColor(.secondary)
+
+        Button("Manage credits…") {
+          MenuBarContentView.showSettings(
+            wsManager: wsManager,
+            onRunWorkflow: onRunWorkflow,
+            launchIntent: .account
+          )
+        }
+      }
+      .padding(.vertical, 4)
+      .onAppear {
+        Task { await hostedSubscription.refresh() }
+      }
+    } else if hostedSubscription.isLoading {
+      Text("Loading hosted credits…")
+        .font(.caption)
+        .foregroundColor(.secondary)
+    }
   }
 }
 
