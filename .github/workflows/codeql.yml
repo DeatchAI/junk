@@ -18,7 +18,7 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v6
-      - uses: github/codeql-action/init@v4
+      - uses: github/codeql-action/init@v4.37.4
         with:
           languages: javascript-typescript, swift
           build-mode: manual
@@ -32,4 +32,4 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
             build
-      - uses: github/codeql-action/analyze@v4
+      - uses: github/codeql-action/analyze@v4.37.4
