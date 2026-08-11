@@ -19,7 +19,7 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@composio/core": "0.13.1",
+    "@composio/core": "0.15.0",
     "opencode-ai": "1.18.7",
     "pdfjs-dist": "5.4.149"
   }
