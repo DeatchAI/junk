@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { BrowserAutomation } from "./BrowserAutomation";
+import { BrowserAutomation, browserActivityForPrimitive } from "./BrowserAutomation";
 import { BrowserBridge } from "./BrowserBridge";
 
 class MockSocket {
@@ -11,6 +11,29 @@ class MockSocket {
 }
 
 describe("shared P0 browser routing", () => {
+  test("turns primitive browser operations into privacy-safe activity", () => {
+    expect(browserActivityForPrimitive({
+      id: "activity-1",
+      command: "browser.navigate",
+      payload: { url: "https://example.com/private?token=secret" },
+      phase: "started",
+    })).toEqual({
+      id: "activity-1",
+      action: "browser.navigate",
+      phase: "started",
+      title: "Opening example.com",
+      subtitle: "example.com",
+      sourceEventType: "browser.navigate",
+    });
+
+    expect(browserActivityForPrimitive({
+      id: "activity-2",
+      command: "browser.type",
+      payload: { text: "this must not be displayed" },
+      phase: "started",
+    }).title).toBe("Entering text in the browser");
+  });
+
   test("reports the browser harness version for benchmark preflight", async () => {
     const browser = new BrowserAutomation(new BrowserBridge());
     expect(await browser.getStatus()).toMatchObject({

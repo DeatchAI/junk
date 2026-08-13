@@ -2,9 +2,13 @@ import { readFile, stat } from "node:fs/promises";
 import { basename, delimiter, resolve, sep } from "node:path";
 
 import { BrowserBridge, type BrowserCommandEnvelope } from "./BrowserBridge";
-import { BrowserCodeExecutor } from "./BrowserCodeExecutor";
+import {
+  BrowserCodeExecutor,
+  type BrowserPrimitiveUpdate,
+} from "./BrowserCodeExecutor";
 import { compactBrowserSnapshot } from "./BrowserSnapshot";
 import { DocumentArtifactService } from "./DocumentArtifactService";
+import type { AgentActivityAction } from "../protocol/messages";
 
 export type BrowserAutomationMode = "signed_in";
 
@@ -28,6 +32,17 @@ export interface BrowserArtifacts {
   finalScreenshot?: string;
   completedAt?: number;
 }
+
+export interface BrowserActivityUpdate {
+  id: string;
+  action: AgentActivityAction;
+  phase: "started" | "completed" | "failed";
+  title: string;
+  subtitle?: string;
+  sourceEventType: string;
+}
+
+export type BrowserActivitySink = (update: BrowserActivityUpdate) => void;
 
 const BROWSER_HARNESS_VERSION = "0.4.0";
 
@@ -58,6 +73,7 @@ const MAX_TRAJECTORY_SCREENSHOTS = 4;
 export class BrowserAutomation {
   private readonly activeTasks = new Set<string>();
   private readonly taskUploadRoots = new Map<string, string[]>();
+  private readonly activitySinks = new Map<string, BrowserActivitySink>();
   private readonly artifacts = new Map<string, BrowserArtifacts>();
   private readonly documents = new DocumentArtifactService();
 
@@ -74,9 +90,14 @@ export class BrowserAutomation {
     };
   }
 
-  async beginTask(runId: string, allowedUploadPaths: string[] = []) {
+  async beginTask(
+    runId: string,
+    allowedUploadPaths: string[] = [],
+    activitySink?: BrowserActivitySink,
+  ) {
     this.activeTasks.add(runId);
     this.artifacts.set(runId, { trace: [], screenshots: [] });
+    if (activitySink) this.activitySinks.set(runId, activitySink);
     this.taskUploadRoots.set(runId, uniqueResolvedPaths([
       ...allowedUploadPaths,
       ...(Bun.env.DETACH_BROWSER_UPLOAD_ROOTS?.split(delimiter) ?? []),
@@ -84,6 +105,7 @@ export class BrowserAutomation {
     const status = this.extension.getStatus();
     if (!status.extensionConnected) {
       this.activeTasks.delete(runId);
+      this.activitySinks.delete(runId);
       throw new Error("The Detach Browser Agent extension is not connected. Open its popup in signed-in Chrome.");
     }
     try {
@@ -92,6 +114,7 @@ export class BrowserAutomation {
       this.activeTasks.delete(runId);
       this.artifacts.delete(runId);
       this.taskUploadRoots.delete(runId);
+      this.activitySinks.delete(runId);
       throw error;
     }
   }
@@ -139,6 +162,7 @@ export class BrowserAutomation {
     artifacts.completedAt = Date.now();
     this.activeTasks.delete(runId);
     this.taskUploadRoots.delete(runId);
+    this.activitySinks.delete(runId);
     this.documents.endTask(runId);
     this.pruneArtifacts();
   }
@@ -239,6 +263,9 @@ export class BrowserAutomation {
     const executor = new BrowserCodeExecutor(async (command, commandPayload) => {
       const normalized = await this.normalizePayload(command, commandPayload, runId);
       return await this.executeUntraced({ command, payload: normalized }, runId);
+    }, (update) => {
+      if (!runId) return;
+      this.activitySinks.get(runId)?.(browserActivityForPrimitive(update));
     });
     return await executor.execute(code, timeoutMs);
   }
@@ -303,6 +330,92 @@ export class BrowserAutomation {
       .sort((a, b) => (a[1].completedAt ?? 0) - (b[1].completedAt ?? 0));
     for (const [runId] of completed.slice(0, Math.max(0, this.artifacts.size - 30))) this.artifacts.delete(runId);
   }
+}
+
+export function browserActivityForPrimitive(update: BrowserPrimitiveUpdate): BrowserActivityUpdate {
+  const action = browserAction(update.command);
+  const target = browserTarget(update.command, update.payload);
+  const title = browserTitle(update.command, target);
+  return {
+    id: update.id,
+    action: update.phase === "failed" ? "error" : action,
+    phase: update.phase,
+    title,
+    subtitle: update.phase === "failed" ? conciseError(update.error) : target?.subtitle,
+    sourceEventType: update.command,
+  };
+}
+
+function browserAction(command: string): AgentActivityAction {
+  if (/(navigate|open_tab|back|forward|refresh|activate_tab|close_tab)/.test(command)) return "browser.navigate";
+  if (/(snapshot|extract_text|list_tabs|get_active_tab|frames|resolve_frame|table|url|title)/.test(command)) return "browser.inspect";
+  if (/(type|fill|key|press|select|check|uncheck)/.test(command)) return "browser.type";
+  if (/(screenshot|media|frame|caption)/.test(command)) return "browser.capture";
+  if (/(wait|events)/.test(command)) return "wait";
+  if (/(upload)/.test(command)) return "image";
+  return "browser.interact";
+}
+
+function browserTarget(command: string, payload: Record<string, unknown>) {
+  const rawURL = typeof payload.url === "string" ? payload.url : undefined;
+  if (rawURL) {
+    try {
+      const url = new URL(rawURL);
+      return { label: url.hostname || "the page", subtitle: url.hostname || undefined };
+    } catch {
+      return { label: "the page" };
+    }
+  }
+
+  const name = safeLabel(payload.name)
+    ?? safeLabel(payload.accessibleName)
+    ?? safeLabel(payload.label)
+    ?? safeLabel(payload.placeholder);
+  return name ? { label: `“${name}”` } : undefined;
+}
+
+function browserTitle(command: string, target?: { label: string }) {
+  const label = target?.label;
+  if (command === "browser.navigate") return label ? `Opening ${label}` : "Opening a web page";
+  if (command === "browser.open_tab") return label ? `Opening ${label} in a new tab` : "Opening a browser tab";
+  if (command === "browser.back") return "Going back in the browser";
+  if (command === "browser.forward") return "Going forward in the browser";
+  if (command === "browser.refresh") return "Refreshing the current page";
+  if (command === "browser.list_tabs") return "Reviewing open browser tabs";
+  if (command === "browser.get_active_tab") return "Checking the active browser tab";
+  if (command === "browser.snapshot") return "Inspecting the current page";
+  if (command === "browser.extract_text") return "Reading the current page";
+  if (command === "browser.screenshot") return "Capturing browser evidence";
+  if (command === "browser.click") return label ? `Clicking ${label}` : "Clicking in the browser";
+  if (command === "browser.hover") return label ? `Inspecting ${label}` : "Inspecting a browser control";
+  if (/(type|fill)/.test(command)) return label ? `Entering text in ${label}` : "Entering text in the browser";
+  if (/(key|press)/.test(command)) return "Using the browser keyboard";
+  if (command === "browser.select") return label ? `Selecting ${label}` : "Selecting a browser option";
+  if (command === "browser.upload_file") return "Uploading a file";
+  if (/(wait)/.test(command)) return "Waiting for the page to update";
+  if (command === "browser.artifact") return "Reading a browser document";
+  return humanizeBrowserCommand(command);
+}
+
+function safeLabel(value: unknown) {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().replace(/\s+/g, " ");
+  if (!trimmed || trimmed.length > 60) return undefined;
+  return trimmed;
+}
+
+function humanizeBrowserCommand(command: string) {
+  const value = command
+    .replace(/^browser\./, "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return `${value || "Using browser"}`;
+}
+
+function conciseError(error?: string) {
+  if (!error) return undefined;
+  const firstLine = error.trim().split(/\r?\n/)[0] ?? "";
+  return firstLine.length <= 120 ? firstLine : `${firstLine.slice(0, 117)}...`;
 }
 
 function uniqueResolvedPaths(values: string[]) {

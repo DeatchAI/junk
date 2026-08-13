@@ -3,6 +3,15 @@ import * as ts from "typescript";
 import { compactBrowserSnapshot, type CompactSnapshotOptions } from "./BrowserSnapshot";
 
 export type BrowserPrimitiveRunner = (command: string, payload: Record<string, unknown>) => Promise<unknown>;
+export type BrowserPrimitiveObserver = (update: BrowserPrimitiveUpdate) => void;
+
+export interface BrowserPrimitiveUpdate {
+  id: string;
+  command: string;
+  payload: Record<string, unknown>;
+  phase: "started" | "completed" | "failed";
+  error?: string;
+}
 
 export interface BrowserCodeExecution {
   result: unknown;
@@ -139,7 +148,10 @@ export class BrowserCodeExecutor {
   private deadline = 0;
   private executionStartedAt = 0;
 
-  constructor(private readonly runPrimitive: BrowserPrimitiveRunner) {}
+  constructor(
+    private readonly runPrimitive: BrowserPrimitiveRunner,
+    private readonly observePrimitive?: BrowserPrimitiveObserver,
+  ) {}
 
   async execute(code: string, timeoutMs = 60_000): Promise<BrowserCodeExecution> {
     const source = code.trim();
@@ -838,13 +850,29 @@ export class BrowserCodeExecutor {
   async primitive(command: string, payload: Record<string, unknown>, record = true) {
     this.assertWithinDeadline();
     const startedAt = Date.now();
+    const activityId = `browser_activity_${crypto.randomUUID()}`;
     const operation: BrowserCodeOperation = { operation: command.replace(/^browser\./, ""), durationMs: 0, ok: false };
+    if (record) {
+      this.observePrimitive?.({ id: activityId, command, payload, phase: "started" });
+    }
     try {
       const result = await this.runPrimitive(command, payload);
       operation.ok = true;
+      if (record) {
+        this.observePrimitive?.({ id: activityId, command, payload, phase: "completed" });
+      }
       return result;
     } catch (error) {
       operation.error = error instanceof Error ? error.message : String(error);
+      if (record) {
+        this.observePrimitive?.({
+          id: activityId,
+          command,
+          payload,
+          phase: "failed",
+          error: operation.error,
+        });
+      }
       throw error;
     } finally {
       operation.durationMs = Date.now() - startedAt;

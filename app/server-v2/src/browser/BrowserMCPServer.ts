@@ -149,7 +149,7 @@ class BrowserMCPServer {
     const command = TOOL_COMMANDS[name] ?? name.replace(/^detach_/, "browser.");
     const response = await fetch(`${this.runtimeUrl}/api/browser/command`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: runtimeHeaders(),
       body: JSON.stringify({
         command,
         payload: args,
@@ -215,6 +215,15 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function resolveRuntimeUrl() {
   return Bun.env.DETACH_BROWSER_RUNTIME_HTTP?.trim() || Bun.env.DETACH_RUNTIME_URL?.trim() || DEFAULT_RUNTIME_URL;
+}
+
+function runtimeHeaders() {
+  const token = Bun.env.DETACH_RUNTIME_TOKEN?.trim();
+  if (!token) throw new Error("DETACH_RUNTIME_TOKEN is required");
+  return {
+    "Authorization": `Bearer ${token}`,
+    "Content-Type": "application/json",
+  };
 }
 
 function resolveRunId() {

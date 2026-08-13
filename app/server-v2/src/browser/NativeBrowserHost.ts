@@ -120,7 +120,15 @@ function resolveRuntimeUrl() {
   if (explicit) return explicit;
 
   const port = Bun.env.DETACH_PORT?.trim() || Bun.env.PORT?.trim();
-  if (port) return `ws://127.0.0.1:${port}/api/browser/native`;
+  if (port) return authenticatedRuntimeUrl(`ws://127.0.0.1:${port}/api/browser/native`);
 
-  return DEFAULT_RUNTIME_URL;
+  return authenticatedRuntimeUrl(DEFAULT_RUNTIME_URL);
+}
+
+function authenticatedRuntimeUrl(value: string) {
+  const token = Bun.env.DETACH_RUNTIME_TOKEN?.trim();
+  if (!token) throw new Error("DETACH_RUNTIME_TOKEN is required");
+  const url = new URL(value);
+  url.searchParams.set("token", token);
+  return url.toString();
 }
