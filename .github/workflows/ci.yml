@@ -28,9 +28,19 @@ jobs:
 
   macos:
     name: macOS build
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+      - name: Install runtime dependencies
+        working-directory: app/server-v2
+        run: bun install --frozen-lockfile
+      - name: Show selected Xcode
+        run: xcodebuild -version
+      - name: Verify privacy logger redaction
+        run: |
+          swiftc app/lazzy/Core/Logging/PrivacyLogger.swift app/scripts/PrivacyLoggerCheck.swift -o "$RUNNER_TEMP/privacy-logger-check"
+          "$RUNNER_TEMP/privacy-logger-check"
       - name: Build without signing
         run: |
           xcodebuild \

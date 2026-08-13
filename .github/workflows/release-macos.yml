@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   release:
-    runs-on: macos-14
+    runs-on: macos-15
     environment: release
     env:
       APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
@@ -42,6 +42,9 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v6
+
+      - name: Show selected Xcode
+        run: xcodebuild -version
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2

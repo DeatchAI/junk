@@ -13,15 +13,36 @@ permissions:
   security-events: write
 
 jobs:
-  analyze:
-    name: Analyze Swift and TypeScript
-    runs-on: macos-14
+  javascript:
+    name: Analyze JavaScript and TypeScript
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: github/codeql-action/init@v4
         with:
-          languages: javascript-typescript, swift
+          languages: javascript-typescript
+          build-mode: none
+      - uses: github/codeql-action/analyze@v4
+
+  swift:
+    name: Analyze Swift
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+      - name: Install runtime dependencies
+        working-directory: app/server-v2
+        run: bun install --frozen-lockfile
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: swift
           build-mode: manual
+      - name: Show selected Xcode
+        run: xcodebuild -version
+      - name: Verify privacy logger redaction
+        run: |
+          swiftc app/lazzy/Core/Logging/PrivacyLogger.swift app/scripts/PrivacyLoggerCheck.swift -o "$RUNNER_TEMP/privacy-logger-check"
+          "$RUNNER_TEMP/privacy-logger-check"
       - name: Build Swift sources for analysis
         run: |
           xcodebuild \
