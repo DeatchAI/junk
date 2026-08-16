@@ -1,11 +1,25 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { resolveSelectedSkillInstructions } from "./SkillResolver";
 
 describe("selected skill resolution", () => {
+  test("loads a skill from the Detach-managed workspace root", () => {
+    const root = mkdtempSync(join(tmpdir(), "detach-managed-skills-"));
+    const skillDirectory = join(root, "workspace", ".agents", "skills", "remote-review");
+    mkdirSync(skillDirectory, { recursive: true });
+    const skillPath = join(skillDirectory, "SKILL.md");
+    writeFileSync(skillPath, "# Remote review\n\nUse the installed review guidance.");
+
+    const instructions = resolveSelectedSkillInstructions([
+      { id: skillPath, name: "Remote review", path: skillPath },
+    ], [join(root, "workspace", ".agents", "skills")]);
+
+    expect(instructions).toContain("Use the installed review guidance.");
+  });
+
   test("loads a selected SKILL.md only from a trusted installed-skill root", () => {
     const root = mkdtempSync(join(tmpdir(), "detach-skills-"));
     const skillDirectory = join(root, "review");
@@ -18,6 +32,7 @@ describe("selected skill resolution", () => {
     ], [root]);
 
     expect(instructions).toContain("Selected skill: Review");
+    expect(instructions).toContain(`Skill directory: ${dirname(realpathSync(skillPath))}`);
     expect(instructions).toContain("Review code carefully.");
   });
 

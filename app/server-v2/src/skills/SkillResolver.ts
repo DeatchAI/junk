@@ -1,6 +1,6 @@
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 
 import type { SkillAttachment } from "../protocol/messages";
 import { defaultDataDir } from "../history/databasePath";
@@ -10,6 +10,7 @@ const MAX_SKILL_CHARACTERS = 64_000;
 export function defaultSkillRoots() {
   const home = homedir();
   return [
+    join(defaultDataDir(), "skill-workspace", ".agents", "skills"),
     join(home, ".codex", "skills"),
     join(home, ".agents", "skills"),
     join(defaultDataDir(), "action-skills"),
@@ -61,7 +62,9 @@ export function resolveSelectedSkillInstructions(
     if (!contents) continue;
     seen.add(skillPath);
     const name = skill.name?.trim() || skillPath.split("/").at(-2) || "Installed skill";
-    sections.push(`Selected skill: ${name}\n${contents.slice(0, MAX_SKILL_CHARACTERS)}`);
+    sections.push(
+      `Selected skill: ${name}\nSkill directory: ${dirname(skillPath)}\n${contents.slice(0, MAX_SKILL_CHARACTERS)}`
+    );
   }
 
   return sections.join("\n\n---\n\n");
