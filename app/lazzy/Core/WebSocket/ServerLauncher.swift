@@ -37,8 +37,7 @@ class ServerLauncher: ObservableObject {
     startTask = Task.detached { [weak self] in
       guard let self else { return }
       do {
-        // Hardcode port for stability
-        let port: UInt16 = 3847
+        let port = try self.availableLoopbackPort()
         try await self.launch(serverPath: serverPath, port: port)
       } catch is CancellationError {
         // Expected on stop during startup
@@ -113,25 +112,25 @@ extension ServerLauncher {
     outputPipe.fileHandleForReading.readabilityHandler = { handle in
       let data = handle.availableData
       if let string = String(data: data, encoding: .utf8), !string.isEmpty {
+        #if DEBUG
         print("🟢 SERVER OUT: \(string.trimmingCharacters(in: .whitespacesAndNewlines))")
+        #endif
       }
     }
 
     errorPipe.fileHandleForReading.readabilityHandler = { handle in
       let data = handle.availableData
       if let string = String(data: data, encoding: .utf8), !string.isEmpty {
+        #if DEBUG
         print("🔴 SERVER ERR: \(string.trimmingCharacters(in: .whitespacesAndNewlines))")
+        #endif
       }
     }
 
     var environment = ProcessInfo.processInfo.environment
     environment["PORT"] = "\(port)"
-    environment["DETACH_DISTRIBUTION_MODE"] = DistributionConfiguration.mode.rawValue
-    if let hostedControlPlaneURL = DistributionConfiguration.hostedControlPlaneURL {
-      environment["DETACH_HOSTED_CONTROL_PLANE_URL"] = hostedControlPlaneURL.absoluteString
-    } else {
-      environment.removeValue(forKey: "DETACH_HOSTED_CONTROL_PLANE_URL")
-    }
+    environment["DETACH_RUNTIME_TOKEN"] = ServerConfig.runtimeToken
+    environment["DETACH_HOSTED_CONTROL_PLANE_URL"] = AppConfiguration.hostedControlPlaneURL.absoluteString
     if let openCodeURL = Bundle.main.url(forResource: "opencode", withExtension: nil) {
       environment["DETACH_OPENCODE_PATH"] = openCodeURL.path
     } else {
@@ -153,10 +152,10 @@ extension ServerLauncher {
     }
 
     do {
-      // PROACTIVE CLEANUP: Kill anything currently holding this port
-      // This fixes the issue where Xcode "Stop" button leaves the server running
-      killProcessOnPort(port)
-
+      try BrowserExtensionInstaller.prepare(
+        port: port,
+        runtimeToken: ServerConfig.runtimeToken
+      )
       try process.run()
 
       await MainActor.run {
@@ -196,7 +195,13 @@ extension ServerLauncher {
   }
 
   fileprivate func isAcceptingConnections(port: Int) async -> Bool {
-    guard let url = URL(string: "ws://127.0.0.1:\(port)") else { return false }
+    var components = URLComponents()
+    components.scheme = "ws"
+    components.host = "127.0.0.1"
+    components.port = port
+    components.path = "/"
+    components.queryItems = [URLQueryItem(name: "token", value: ServerConfig.runtimeToken)]
+    guard let url = components.url else { return false }
     let session = URLSession(configuration: .ephemeral)
     let task = session.webSocketTask(with: url)
     task.resume()
@@ -211,32 +216,32 @@ extension ServerLauncher {
     return responded
   }
 
-  // Helper to force kill any zombie process on the target port
-  fileprivate func killProcessOnPort(_ port: UInt16) {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-    process.arguments = ["-t", "-i", ":\(port)"]
+  nonisolated fileprivate func availableLoopbackPort() throws -> UInt16 {
+    let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+    guard descriptor >= 0 else { throw ServerLaunchError.notReady }
+    defer { Darwin.close(descriptor) }
 
-    let pipe = Pipe()
-    process.standardOutput = pipe
+    var address = sockaddr_in()
+    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = 0
+    address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
 
-    try? process.run()
-    process.waitUntilExit()
-
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    if let pids = String(data: data, encoding: .utf8)?.split(separator: "\n") {
-      for pidString in pids {
-        if let pid = Int(pidString) {
-          print("🧹 Killing zombie process on port \(port) (PID: \(pid))")
-          // Kill with -9 to ensure it dies immediately
-          let killTask = Process()
-          killTask.executableURL = URL(fileURLWithPath: "/bin/kill")
-          killTask.arguments = ["-9", "\(pid)"]
-          try? killTask.run()
-          killTask.waitUntilExit()
-        }
+    let bindResult = withUnsafePointer(to: &address) { pointer in
+      pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
       }
     }
+    guard bindResult == 0 else { throw ServerLaunchError.notReady }
+
+    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+    let nameResult = withUnsafeMutablePointer(to: &address) { pointer in
+      pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        getsockname(descriptor, $0, &length)
+      }
+    }
+    guard nameResult == 0 else { throw ServerLaunchError.notReady }
+    return UInt16(bigEndian: address.sin_port)
   }
 
   fileprivate func terminateProcess(_ process: Process) {

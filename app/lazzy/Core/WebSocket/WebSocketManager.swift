@@ -19,10 +19,13 @@ class WebSocketManager: ObservableObject {
   @Published private(set) var currentConversationId: String?
   @Published private(set) var conversations: [Conversation] = []
   @Published private(set) var mcpServers: [MCPServer] = []
+  @Published private(set) var isLoadingMCPServers = false
   @Published private(set) var customQuickActions: [QuickAction] = []
   @Published private(set) var workflows: [QuickAction] = []
   @Published private(set) var customSlashCommands: [CustomSlashCommand] = []
   @Published private(set) var agentCapabilities: [AgentCapability] = []
+  @Published private(set) var isLoadingCapabilities = false
+  @Published private(set) var mediaModels: [MediaModelCapability] = []
   @Published private(set) var defaultAgent: String = DetachSettings.defaultAgent
 
   // Composio Integration State
@@ -46,10 +49,14 @@ class WebSocketManager: ObservableObject {
   private var errorListeners: [(String) -> Void] = []
   private var creditsListeners: [(String) -> Void] = []
   private var chatSentListeners: [(ChatRequest) -> Void] = []
+  private var mediaRunStartedListeners: [(MediaRunStart) -> Void] = []
   private var agentActivityListeners: [(AgentActivityUpdate) -> Void] = []
   private var runCompletionListeners: [(String?, String) -> Void] = []
   private var runErrorListeners: [(String?, String) -> Void] = []
   private var cancellables = Set<AnyCancellable>()
+  private var capabilitiesRequestInFlight = false
+  private var capabilitiesRefreshQueued = false
+  private var capabilitiesTimeoutTask: Task<Void, Never>?
 
   // MARK: - Callbacks
 
@@ -63,6 +70,9 @@ class WebSocketManager: ObservableObject {
   var onConversationLoaded: ((Conversation, [Message]) -> Void)?
   var onSearchResults: (([SearchResult]) -> Void)?
   var onImageGenerated: ((String, String) -> Void)?
+  var onMediaModels: (([MediaModelCapability]) -> Void)?
+  var onMediaJob: ((String?, String, String, String, MediaJob) -> Void)?
+  var onMediaQuote: ((String, MediaQuote) -> Void)?
   var onDeleted: ((String) -> Void)?
   var onUpdated: ((String) -> Void)?
   var onMCPServersLoaded: (([MCPServer]) -> Void)?
@@ -89,6 +99,7 @@ class WebSocketManager: ObservableObject {
   var onSlashCommandDeleted: ((String) -> Void)?
   // Activity callback
   var onActivityUpdate: ((String, String?) -> Void)?  // (status, toolName)
+  var onAgentActivityUpdate: ((AgentActivityUpdate) -> Void)?
   // System automation callback
   var onCommandApprovalRequest: ((String, String?, String?, String, String, String) -> Void)?  // (id, runId, conversationId, command, description, riskLevel)
   var onSecretCredentialRequest: ((String, String?, String?, String, String) -> Void)?
@@ -101,7 +112,11 @@ class WebSocketManager: ObservableObject {
     NotificationCenter.default.publisher(for: .detachHostedProfileDidSync)
       .receive(on: RunLoop.main)
       .sink { [weak self] _ in
-        self?.requestCapabilities()
+        self?.requestCapabilities(force: true)
+        self?.listMediaModels()
+        self?.listMCPServers()
+        self?.composioIntegrations = []
+        self?.composioError = nil
       }
       .store(in: &cancellables)
   }
@@ -128,6 +143,10 @@ class WebSocketManager: ObservableObject {
     chatSentListeners.append(listener)
   }
 
+  func addMediaRunStartedListener(_ listener: @escaping (MediaRunStart) -> Void) {
+    mediaRunStartedListeners.append(listener)
+  }
+
   func addAgentActivityListener(_ listener: @escaping (AgentActivityUpdate) -> Void) {
     agentActivityListeners.append(listener)
   }
@@ -147,7 +166,7 @@ class WebSocketManager: ObservableObject {
     isConnecting = true
 
     let url = ServerConfig.wsURL
-    print("🔌 Connecting to \(url)...")
+    print("🔌 Connecting to local runtime")
 
     webSocket = session?.webSocketTask(with: url)
     webSocket?.resume()
@@ -184,7 +203,14 @@ class WebSocketManager: ObservableObject {
           self.listQuickActions()
           self.listWorkflows()
           self.listSlashCommands()
+          self.listMCPServers()
           self.requestCapabilities()
+          // Runtime processes can restart independently of SwiftUI's auth
+          // lifecycle. Re-send the active loopback-only session on every
+          // connection so Detach Cloud never depends on a prior profile refresh.
+          Task {
+            await AuthManager.shared.syncProfileToServer()
+          }
           self.listConversations()
           if let conversationId = self.currentConversationId {
             self.getConversation(id: conversationId)
@@ -194,12 +220,36 @@ class WebSocketManager: ObservableObject {
     }
   }
 
-  func requestCapabilities() {
+  func requestCapabilities(force: Bool = false) {
     guard isConnected else { return }
+
+    if capabilitiesRequestInFlight {
+      if force { capabilitiesRefreshQueued = true }
+      return
+    }
+
+    capabilitiesRequestInFlight = true
+    isLoadingCapabilities = true
+    capabilitiesTimeoutTask?.cancel()
+    capabilitiesTimeoutTask = Task { [weak self] in
+      try? await Task.sleep(nanoseconds: 15_000_000_000)
+      guard !Task.isCancelled else { return }
+      guard let self, self.capabilitiesRequestInFlight else { return }
+      self.capabilitiesRequestInFlight = false
+      self.capabilitiesRefreshQueued = false
+      self.isLoadingCapabilities = false
+      print("⚠️ Capability discovery timed out; keeping the last known provider state")
+    }
     sendRawRequest(["type": "capabilities"], label: "capabilities")
   }
 
   func disconnect() {
+    capabilitiesTimeoutTask?.cancel()
+    capabilitiesTimeoutTask = nil
+    capabilitiesRequestInFlight = false
+    capabilitiesRefreshQueued = false
+    isLoadingCapabilities = false
+    isLoadingMCPServers = false
     pingTimer?.invalidate()
     pingTimer = nil
     webSocket?.cancel(with: .normalClosure, reason: nil)
@@ -242,7 +292,8 @@ class WebSocketManager: ObservableObject {
     integrations: [String]? = nil, systemPrompt: String? = nil, fastMode: Bool = false,
     userId: String? = nil, zeroDataRetention: Bool? = nil,
     actionId: String? = nil, mcpServerIds: [String]? = nil, skills: [SkillAttachment]? = nil,
-    agent: String? = nil, model: String? = nil
+    browserTabs: [BrowserTabAttachment]? = nil,
+    agent: String? = nil, model: String? = nil, modelSettings: AgentModelSettings? = nil
   ) {
     guard isConnected else {
       lastError = "Not connected to server"
@@ -257,6 +308,10 @@ class WebSocketManager: ObservableObject {
 
     // Use provided conversationId or current one for follow-ups
     let convId = conversationId ?? currentConversationId
+    let resolvedAgent = agent ?? DetachSettings.selectedAgent
+    let resolvedModel = model ?? DetachSettings.selectedModel(for: resolvedAgent)
+    let resolvedModelSettings = modelSettings
+      ?? DetachSettings.modelSettings(for: resolvedAgent, model: resolvedModel)
 
     let request = ChatRequest(
       text: text, displayText: displayText, files: files.isEmpty ? nil : files,
@@ -264,16 +319,75 @@ class WebSocketManager: ObservableObject {
       conversationId: convId,
       integrations: integrations, systemPrompt: systemPrompt, fastMode: fastMode,
       userId: userId,
-      model: model ?? DetachSettings.selectedModel(for: agent ?? DetachSettings.selectedAgent),
-      agent: agent ?? DetachSettings.selectedAgent,
+      model: resolvedModel,
+      agent: resolvedAgent,
+      modelSettings: resolvedModelSettings,
       zeroDataRetention: zeroDataRetention,
       actionId: actionId,
       mcpServerIds: mcpServerIds,
-      skills: skills)
+      skills: skills,
+      browserTabs: browserTabs)
 
     sendRequest(request, label: "chat")
     onChatSent?(request)
     chatSentListeners.forEach { $0(request) }
+  }
+
+  func listMediaModels() {
+    guard isConnected else { return }
+    sendRequest(ListMediaModelsRequest(), label: "list_media_models")
+  }
+
+  func quoteMedia(
+    requestId: String,
+    model: String,
+    prompt: String,
+    config: MediaGenerationConfig,
+    inputRoles: [String]
+  ) {
+    guard isConnected else { return }
+    sendRequest(
+      QuoteMediaRequest(
+        requestId: requestId,
+        model: model,
+        prompt: prompt,
+        config: config,
+        inputRoles: inputRoles.isEmpty ? nil : inputRoles
+      ),
+      label: "quote_media"
+    )
+  }
+
+  func generateMedia(
+    prompt: String,
+    kind: String,
+    model: String,
+    config: MediaGenerationConfig,
+    inputs: [MediaInputRequest]
+  ) {
+    guard isConnected else {
+      onError?("Not connected to server")
+      return
+    }
+    currentResponse = ""
+    isStreaming = true
+    lastError = nil
+    let runId = UUID().uuidString
+    sendRequest(
+      GenerateMediaRequest(
+        runId: runId,
+        kind: kind,
+        requestKey: UUID().uuidString,
+        prompt: prompt,
+        model: model,
+        config: config,
+        inputs: inputs.isEmpty ? nil : inputs,
+        conversationId: currentConversationId
+      ),
+      label: "generate_media"
+    )
+    let start = MediaRunStart(runId: runId, prompt: prompt, kind: kind, model: model)
+    mediaRunStartedListeners.forEach { $0(start) }
   }
 
   /// List all conversations
@@ -337,6 +451,7 @@ class WebSocketManager: ObservableObject {
   /// List all configured MCP servers
   func listMCPServers() {
     guard isConnected else { return }
+    isLoadingMCPServers = true
     let request = ListMCPServersRequest()
     sendRequest(request, label: "list_mcp_servers")
   }
@@ -437,15 +552,6 @@ class WebSocketManager: ObservableObject {
       zeroDataRetention: zeroDataRetention
     )
     sendRequest(request, label: "update_ai_settings")
-  }
-
-  // MARK: - BYOK API Keys Management
-
-  /// Update custom API keys on the server
-  func updateAPIKeys(keys: [String: String], enabled: Bool = true) {
-    guard isConnected else { return }
-    let request = UpdateAPIKeysRequest(keys: keys, enabled: enabled)
-    sendRequest(request, label: "update_api_keys")
   }
 
   // MARK: - Quick Actions Management
@@ -751,14 +857,11 @@ class WebSocketManager: ObservableObject {
     else {
       lastError = "Failed to encode \(label) request"
       if label == "chat" { isStreaming = false }
+      if label == "list_mcp_servers" { isLoadingMCPServers = false }
       return
     }
 
-    if label == "secret_command_result" {
-      print("📤 Sending secret command result (credential payload redacted)")
-    } else {
-      print("📤 Sending \(label): \(jsonString.prefix(100))...")
-    }
+    print("📤 Sending \(label) request")
 
     webSocket?.send(.string(jsonString)) { [weak self] error in
       if let error = error {
@@ -768,6 +871,7 @@ class WebSocketManager: ObservableObject {
           print("❌ Send error: \(error.localizedDescription)")
           self.lastError = error.localizedDescription
           if label == "chat" { self.isStreaming = false }
+          if label == "list_mcp_servers" { self.isLoadingMCPServers = false }
           self.onError?(error.localizedDescription)
         }
       }
@@ -779,6 +883,10 @@ class WebSocketManager: ObservableObject {
       let jsonString = String(data: data, encoding: .utf8)
     else {
       lastError = "Failed to encode \(label) request"
+      if label == "capabilities" {
+        capabilitiesRequestInFlight = false
+        isLoadingCapabilities = false
+      }
       return
     }
 
@@ -787,6 +895,13 @@ class WebSocketManager: ObservableObject {
         let weakSelf = self
         Task { @MainActor in
           guard let self = weakSelf else { return }
+          if label == "capabilities" {
+            self.capabilitiesRequestInFlight = false
+            self.capabilitiesRefreshQueued = false
+            self.capabilitiesTimeoutTask?.cancel()
+            self.capabilitiesTimeoutTask = nil
+            self.isLoadingCapabilities = false
+          }
           self.lastError = error.localizedDescription
           self.onError?(error.localizedDescription)
         }
@@ -808,30 +923,51 @@ class WebSocketManager: ObservableObject {
       currentConversationId = conversationId
     }
 
-    let visibleStatus = visibleActivityStatus(status)
+    let visibleStatus = event?.userFacing == false
+      ? nil
+      : visibleActivityStatus(status, event: event)
     if let visibleStatus {
       onActivityUpdate?(visibleStatus, toolName)
       activityListeners.forEach { $0(visibleStatus, toolName) }
     }
 
-    // The floating chat hides lifecycle-only strings to avoid noisy transcript rows,
-    // but the detached island must still receive the structured state transition.
-    guard let islandStatus = visibleStatus ?? event?.subtitle ?? event?.title else { return }
-    agentActivityListeners.forEach {
-      $0(AgentActivityUpdate(
-        runId: runId,
-        conversationId: conversationId,
-        status: islandStatus,
-        toolName: toolName,
-        event: event
-      ))
-    }
+    // Keep provider lifecycle/debug events out of both user-facing activity surfaces.
+    guard event?.userFacing != false,
+      let islandStatus = visibleStatus ?? event?.subtitle ?? event?.title
+    else { return }
+    let update = AgentActivityUpdate(
+      runId: runId,
+      conversationId: conversationId,
+      status: islandStatus,
+      toolName: toolName,
+      event: event
+    )
+    onAgentActivityUpdate?(update)
+    agentActivityListeners.forEach { $0(update) }
     print("📊 Activity: \(islandStatus)\(toolName != nil ? " (\(toolName!))" : "")")
   }
 
-  private func visibleActivityStatus(_ status: String) -> String? {
+  private func visibleActivityStatus(_ status: String, event: AgentActivityEvent? = nil) -> String? {
     let trimmed = status.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
+
+    let combined = "\(trimmed) \(event?.title ?? "") \(event?.subtitle ?? "")".lowercased()
+    if combined.contains("still working")
+      || combined.contains("without a new")
+      || combined.contains("no new event")
+    {
+      return "Working…"
+    }
+    if event?.action == "think" || combined.contains(" is thinking") {
+      return "Thinking…"
+    }
+    if event?.action == "error" && [
+      "network", "connection", "connect", "socket", "timed out", "timeout",
+      "fetch failed", "econn", "enotfound", "dns", "temporary", "service unavailable",
+      "bad gateway", "gateway timeout", "429", "502", "503", "504"
+    ].contains(where: { combined.contains($0) }) {
+      return "Retrying…"
+    }
 
     let terminalPattern = #"\b(finished|complete|completed|done)\b"#
     if trimmed.range(of: terminalPattern, options: [.regularExpression, .caseInsensitive]) != nil {
@@ -839,12 +975,12 @@ class WebSocketManager: ObservableObject {
     }
 
     let lifecyclePatterns = [
-      #"^Using\s+(Codex|Claude|Grok|Hosted AI|Agent)\b"#,
-      #"^Starting\s+(Codex|Claude|Grok|Hosted AI)\b"#,
-      #"^(Codex|Claude|Grok|Hosted AI)\s+is\s+thinking\b"#,
-      #"^(Codex|Claude|Grok|Hosted AI)\s+is\s+still\s+working\b"#,
-      #"^(Codex|Claude|Grok|Hosted AI)\s+(thread|session)\s+started\b"#,
-      #"^(Codex|Claude|Grok|Hosted AI)\s+will\s+use\s+MCP\s+servers\b"#,
+      #"^Using\s+(Codex|Claude|Grok|OpenCode|Detach Cloud|Detach Hosted|Hosted AI|Agent)\b"#,
+      #"^Starting\s+(Codex|Claude|Grok|OpenCode|Detach Cloud|Detach Hosted|Hosted AI)\b"#,
+      #"^(Codex|Claude|Grok|OpenCode|Detach Cloud|Detach Hosted|Hosted AI)\s+is\s+thinking\b"#,
+      #"^(Codex|Claude|Grok|OpenCode|Detach Cloud|Detach Hosted|Hosted AI)\s+is\s+still\s+working\b"#,
+      #"^(Codex|Claude|Grok|OpenCode|Detach Cloud|Detach Hosted|Hosted AI)\s+(thread|session)\s+started\b"#,
+      #"^(Codex|Claude|Grok|OpenCode|Detach Cloud|Detach Hosted|Hosted AI)\s+will\s+use\s+MCP\s+servers\b"#,
       #"^Loaded\s+\d+\s+MCP\s+server"#,
       #"^Thinking:\s*"#,
     ]
@@ -965,6 +1101,7 @@ class WebSocketManager: ObservableObject {
       lastError = errorMessage
       composioError = errorMessage
       connectingToolkit = nil
+      isLoadingMCPServers = false
       isStreaming = false
       onError?(errorMessage)
       errorListeners.forEach { $0(errorMessage) }
@@ -984,6 +1121,15 @@ class WebSocketManager: ObservableObject {
       }
 
     case .capabilities(let agents, let defaultAgent):
+      capabilitiesTimeoutTask?.cancel()
+      capabilitiesTimeoutTask = nil
+      capabilitiesRequestInFlight = false
+      let refreshAgain = capabilitiesRefreshQueued
+      capabilitiesRefreshQueued = false
+      isLoadingCapabilities = refreshAgain
+      DetachSettings.migrateLegacyHostedOpenCodeSelection(
+        availableAgentIDs: Set(agents.map(\.id))
+      )
       agentCapabilities = agents
       if let defaultAgent {
         self.defaultAgent = defaultAgent
@@ -994,6 +1140,26 @@ class WebSocketManager: ObservableObject {
         DetachSettings.selectedAgent = firstInstalled.id
       }
       print("🧠 Agent capabilities loaded: \(agents.map { "\($0.displayName):\($0.installed)" }.joined(separator: ", "))")
+      if refreshAgain {
+        requestCapabilities()
+      }
+
+    case .mediaModels(let models):
+      mediaModels = models
+      onMediaModels?(models)
+      print("🎨 Loaded \(models.count) Detach Cloud media models")
+
+    case .mediaQuote(let requestId, let quote):
+      onMediaQuote?(requestId, quote)
+
+    case .mediaJob(let runId, let conversationId, let userMessageId, let assistantMessageId, let job):
+      currentConversationId = conversationId
+      isStreaming = !job.isTerminal
+      onMediaJob?(runId, conversationId, userMessageId, assistantMessageId, job)
+      if job.isTerminal {
+        NotificationCenter.default.post(name: .detachHostedCreditsDidChange, object: nil)
+      }
+      print("🎞️ Media job \(job.id): \(job.state) \(job.progress)%")
 
     case .conversationsList(let convs):
       conversations = convs
@@ -1003,7 +1169,7 @@ class WebSocketManager: ObservableObject {
     case .conversation(let conv, let messages):
       currentConversationId = conv.id
       onConversationLoaded?(conv, messages)
-      print("💬 Loaded conversation '\(conv.title ?? "Untitled")' with \(messages.count) messages")
+      print("💬 Loaded conversation with \(messages.count) messages")
 
     case .searchResults(let results):
       onSearchResults?(results)
@@ -1031,24 +1197,28 @@ class WebSocketManager: ObservableObject {
 
     case .mcpServersList(let servers):
       mcpServers = servers
+      isLoadingMCPServers = false
       onMCPServersLoaded?(servers)
       print("🔧 Loaded \(servers.count) MCP servers")
 
     case .mcpServerDeleted(let serverId):
       mcpServers.removeAll { $0.id == serverId }
       print("🔧 MCP server deleted: \(serverId)")
+      listMCPServers()
 
     case .mcpServerConnected(let status):
       if let index = mcpServers.firstIndex(where: { $0.id == status.id }) {
         mcpServers[index].status = status
       }
       print("🔧 MCP server connected: \(status.name)")
+      listMCPServers()
 
     case .mcpServerDisconnected(let serverId):
       if let index = mcpServers.firstIndex(where: { $0.id == serverId }) {
         mcpServers[index].status = nil
       }
       print("🔧 MCP server disconnected: \(serverId)")
+      listMCPServers()
 
     case .mcpToolsList(let tools):
       print("🔧 MCP tools: \(tools.map { $0.name })")
@@ -1058,6 +1228,7 @@ class WebSocketManager: ObservableObject {
         mcpServers[index] = server
       }
       print("🔧 MCP server updated: \(server.name)")
+      listMCPServers()
 
     // Composio messages
     case .composioIntegrations(
@@ -1133,8 +1304,7 @@ class WebSocketManager: ObservableObject {
 
     case .actionLearningStarted(_, let actionName):
       let name = actionName.isEmpty ? "this action" : actionName
-      onActivityUpdate?("Learning \(name) for faster future runs", "Action learning")
-      activityListeners.forEach { $0("Learning this action for faster future runs", "Action learning") }
+      publishActivity("Learning \(name) for faster future runs", toolName: "Action learning")
       print("🧠 Learning action: \(name)")
 
     case .actionLearningCompleted(let action):
@@ -1175,7 +1345,7 @@ class WebSocketManager: ObservableObject {
 
     case .imageGenerated(let image, let prompt):
       onImageGenerated?(image, prompt)
-      print("🖼️ Received generated image for: \(prompt)")
+      print("🖼️ Received generated image")
 
     // Slash command messages
     case .slashCommandsList(let commands):
@@ -1246,6 +1416,7 @@ class WebSocketManager: ObservableObject {
   private func handleConnectionError(_ error: Error) {
     isConnected = false
     isConnecting = false
+    isLoadingMCPServers = false
     isStreaming = false
     lastError = error.localizedDescription
     onError?(error.localizedDescription)

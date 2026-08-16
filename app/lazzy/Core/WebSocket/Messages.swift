@@ -3,6 +3,14 @@ import Combine
 
 // MARK: - Client → Server Messages
 
+struct AgentModelSettings: Codable, Equatable {
+  let reasoningEffort: String?
+
+  init(reasoningEffort: String? = nil) {
+    self.reasoningEffort = reasoningEffort
+  }
+}
+
 struct ChatRequest: Codable {
   var type: String = "chat"
   /// A client-generated ID that lets the detached island follow this run while the chat is hidden.
@@ -20,6 +28,7 @@ struct ChatRequest: Codable {
   let fastMode: Bool?
   let userId: String?  // Supabase user ID for usage billing
   let model: String?  // Optional model override for per-request model selection
+  let modelSettings: AgentModelSettings?
   let agent: String?  // Local agent id, e.g. "codex", "claude", or "grok"
   let zeroDataRetention: Bool?  // Optional flag to enable/disable zero data retention
   let actionId: String?
@@ -27,6 +36,8 @@ struct ChatRequest: Codable {
   let mcpServerIds: [String]?
   /// Skills selected in the composer. The runtime validates paths before loading their instructions.
   let skills: [SkillAttachment]?
+  /// Chrome tabs explicitly selected from the composer attachment menu.
+  let browserTabs: [BrowserTabAttachment]?
 
   init(
     text: String, displayText: String? = nil, files: [FileAttachmentRequest]? = nil,
@@ -36,8 +47,9 @@ struct ChatRequest: Codable {
     slashCommandId: String? = nil,
     fastMode: Bool = false,
     userId: String? = nil, model: String? = nil, agent: String? = nil,
+    modelSettings: AgentModelSettings? = nil,
     zeroDataRetention: Bool? = nil, actionId: String? = nil, mcpServerIds: [String]? = nil,
-    skills: [SkillAttachment]? = nil
+    skills: [SkillAttachment]? = nil, browserTabs: [BrowserTabAttachment]? = nil
   ) {
     self.runId = runId
     #if DEBUG
@@ -56,17 +68,161 @@ struct ChatRequest: Codable {
     self.fastMode = fastMode ? true : nil  // Only send if true to save bandwidth
     self.userId = userId
     self.model = model
+    self.modelSettings = modelSettings
     self.agent = agent
     self.zeroDataRetention = zeroDataRetention
     self.actionId = actionId
     self.mcpServerIds = mcpServerIds
     self.skills = skills
+    self.browserTabs = browserTabs
   }
 }
 
 struct FileAttachmentRequest: Codable, Equatable {
   let path: String
   let mimeType: String
+}
+
+struct BrowserTabAttachment: Codable, Equatable, Identifiable {
+  let id: Int
+  let windowId: Int?
+  let active: Bool
+  let title: String
+  let url: String
+
+  init(id: Int, windowId: Int? = nil, active: Bool = false, title: String, url: String) {
+    self.id = id
+    self.windowId = windowId
+    self.active = active
+    self.title = title
+    self.url = url
+  }
+}
+
+struct MediaGenerationConfig: Codable, Equatable {
+  var aspectRatio: String?
+  var resolution: String?
+  var duration: Int?
+  var audio: Bool?
+  var outputFormat: String?
+}
+
+struct MediaInputRequest: Codable, Equatable {
+  let path: String
+  let mimeType: String
+  let role: String
+}
+
+struct GenerateMediaRequest: Codable {
+  var type: String = "generate_media"
+  let runId: String
+  /// Only Debug app builds enable the runtime's local image/video demo scenarios.
+  #if DEBUG
+    let demoMode: Bool? = true
+  #else
+    let demoMode: Bool? = nil
+  #endif
+  let kind: String
+  let requestKey: String
+  let prompt: String
+  let model: String
+  let config: MediaGenerationConfig
+  let inputs: [MediaInputRequest]?
+  let conversationId: String?
+}
+
+struct MediaRunStart {
+  let runId: String
+  let prompt: String
+  let kind: String
+  let model: String
+}
+
+struct ListMediaModelsRequest: Codable {
+  var type: String = "list_media_models"
+}
+
+struct QuoteMediaRequest: Codable {
+  var type: String = "quote_media"
+  let requestId: String
+  let model: String
+  let prompt: String
+  let config: MediaGenerationConfig
+  let inputRoles: [String]?
+}
+
+struct MediaConfigOption: Codable, Identifiable, Equatable {
+  let id: String
+  let label: String
+}
+
+struct MediaModelCapability: Codable, Identifiable, Equatable {
+  let id: String
+  let displayName: String
+  let kind: String
+  let description: String?
+  let aspectRatios: [MediaConfigOption]
+  let resolutions: [MediaConfigOption]
+  let durations: [Int]?
+  let supportsAudio: Bool
+  let outputFormats: [MediaConfigOption]
+  let defaults: MediaGenerationConfig
+  let inputRoles: [String]
+  let maxInputs: Int
+  let maxInputsByRole: [String: Int]?
+}
+
+struct MediaCreditAmount: Codable, Equatable {
+  let kieCredits: String
+  let detachCredits: String
+}
+
+struct MediaQuote: Codable, Equatable {
+  let kieCredits: String?
+  let detachCredits: String?
+  let summary: String?
+}
+
+struct MediaJobError: Codable, Equatable {
+  let code: String
+  let message: String
+}
+
+struct GeneratedMediaAsset: Codable, Identifiable, Equatable {
+  let id: String
+  let kind: String
+  let mimeType: String
+  let url: String
+  let byteSize: Int?
+  let width: Int?
+  let height: Int?
+  let durationSeconds: Double?
+}
+
+struct MediaJob: Codable, Identifiable, Equatable {
+  let id: String
+  let kind: String
+  let model: String
+  let state: String
+  let progress: Int
+  let prompt: String?
+  let config: MediaGenerationConfig
+  let quote: MediaCreditAmount?
+  let actual: MediaCreditAmount?
+  let error: MediaJobError?
+  let assets: [GeneratedMediaAsset]
+  let createdAt: String?
+  let updatedAt: String?
+
+  var isTerminal: Bool {
+    state == "succeeded" || state == "failed" || state == "reconciliation_required"
+  }
+}
+
+struct MessagePart: Codable, Equatable {
+  let type: String
+  let text: String?
+  let job: MediaJob?
 }
 
 /// A user-selected instruction set from an installed local skill.
@@ -343,14 +499,6 @@ struct DeleteSlashCommandRequest: Codable {
   let commandId: String
 }
 
-// MARK: - BYOK (Bring Your Own Key) Messages
-
-struct UpdateAPIKeysRequest: Codable {
-  var type: String = "update_api_keys"
-  let keys: [String: String]  // Environment variable name -> API key value
-  let enabled: Bool  // Whether BYOK mode is enabled
-}
-
 struct AgentCapability: Codable, Identifiable, Equatable {
   let id: String
   let displayName: String
@@ -364,6 +512,9 @@ struct AgentCapability: Codable, Identifiable, Equatable {
 struct AgentModelCapability: Codable, Identifiable, Equatable {
   let id: String
   let displayName: String
+  let reasoningEfforts: [String]?
+  let defaultReasoningEffort: String?
+  let reasoningLabel: String?
 }
 
 // MARK: - Memory Messages
@@ -475,6 +626,11 @@ enum ServerMessage {
   case creditsExhausted(message: String)
   case pong
   case capabilities(agents: [AgentCapability], defaultAgent: String?)
+  case mediaModels(models: [MediaModelCapability])
+  case mediaQuote(requestId: String, quote: MediaQuote)
+  case mediaJob(
+    runId: String?, conversationId: String, userMessageId: String,
+    assistantMessageId: String, job: MediaJob)
   case conversationsList(conversations: [Conversation])
   case conversation(conversation: Conversation, messages: [Message])
   case searchResults(results: [SearchResult])
@@ -547,6 +703,7 @@ struct Message: Codable, Identifiable {
   let conversation_id: String
   let role: String  // "user" or "assistant"
   let content: String
+  let parts: [MessagePart]?
   let created_at: Int  // Unix timestamp (ms)
 
   var createdDate: Date {
@@ -622,6 +779,11 @@ struct ServerMessageWrapper: Codable {
   let message: String?
   let agents: [AgentCapability]?
   let defaultAgent: String?
+  let models: [MediaModelCapability]?
+  let job: MediaJob?
+  let assistantMessageId: String?
+  let requestId: String?
+  let quote: MediaQuote?
 
   // Memory fields
   let memories: [Memory]?
@@ -679,6 +841,25 @@ extension ServerMessage {
 
     case "capabilities":
       return .capabilities(agents: wrapper.agents ?? [], defaultAgent: wrapper.defaultAgent)
+
+    case "media_models":
+      return .mediaModels(models: wrapper.models ?? [])
+
+    case "media_quote":
+      return .mediaQuote(
+        requestId: wrapper.requestId ?? "",
+        quote: wrapper.quote ?? MediaQuote(kieCredits: nil, detachCredits: nil, summary: nil)
+      )
+
+    case "media_job":
+      guard let job = wrapper.job else { return .unknown }
+      return .mediaJob(
+        runId: wrapper.runId,
+        conversationId: wrapper.conversationId ?? "",
+        userMessageId: wrapper.userMessageId ?? "",
+        assistantMessageId: wrapper.assistantMessageId ?? "",
+        job: job
+      )
 
     case "conversations_list":
       return .conversationsList(conversations: wrapper.conversations ?? [])
@@ -896,6 +1077,7 @@ struct AgentActivityEvent: Codable, Equatable {
   let id: String?
   let agent: String
   let kind: String
+  let action: String?
   let phase: String
   let title: String
   let subtitle: String?
