@@ -13,20 +13,64 @@ enum ActivityPresentationRegistry {
     event: AgentActivityEvent?,
     toolName: String?
   ) -> ActivityPresentation {
-    let title = event?.title.nonEmpty ?? status
-    let action = event?.action ?? inferredAction(
+    let rawTitle = event?.title.nonEmpty ?? status
+    let rawAction = event?.action ?? inferredAction(
       kind: event?.kind,
-      title: title,
+      title: rawTitle,
       toolName: event?.toolName ?? toolName
     )
+    let normalized = normalizedCopy(
+      action: rawAction,
+      title: rawTitle,
+      subtitle: event?.subtitle
+    )
+    let action = normalized.action
     let isGeneric = action == "prepare" || action == "think" || action == "generic"
 
     return ActivityPresentation(
       iconAsset: isGeneric ? nil : iconAsset(for: action),
-      title: title,
-      subtitle: visibleSubtitle(event?.subtitle, title: title),
+      title: normalized.title,
+      subtitle: normalized.subtitle,
       isGeneric: isGeneric
     )
+  }
+
+  private static func normalizedCopy(
+    action: String,
+    title: String,
+    subtitle: String?
+  ) -> (action: String, title: String, subtitle: String?) {
+    let combined = "\(title) \(subtitle ?? "")".lowercased()
+    if combined.contains("still working")
+      || combined.contains("without a new")
+      || combined.contains("no new event")
+    {
+      return ("generic", "Working…", nil)
+    }
+
+    if action == "error", isRetryableNetworkError(combined) {
+      return ("generic", "Retrying…", nil)
+    }
+
+    if action == "prepare" || action == "generic" {
+      return ("generic", "Working…", nil)
+    }
+
+    if action == "think" {
+      return ("think", "Thinking…", nil)
+    }
+
+    // Keep the actual diagnostic available for terminal errors, but never let
+    // it masquerade as a retry state unless the failure is network-related.
+    return (action, title, visibleSubtitle(subtitle, title: title))
+  }
+
+  private static func isRetryableNetworkError(_ value: String) -> Bool {
+    [
+      "network", "connection", "connect", "socket", "timed out", "timeout",
+      "fetch failed", "econn", "enotfound", "dns", "temporary",
+      "service unavailable", "bad gateway", "gateway timeout", "429", "502", "503", "504"
+    ].contains { value.contains($0) }
   }
 
   private static func iconAsset(for action: String) -> String {
@@ -111,7 +155,8 @@ enum ActivityPresentationRegistry {
     if lower.contains("prepar") || lower.contains("connect") || lower.contains("start") {
       return "prepare"
     }
-    if lower.contains("think") || lower.contains("working") { return "think" }
+    if lower.contains("think") { return "think" }
+    if lower.contains("working") { return "generic" }
     if lower.contains("wait") { return "wait" }
     if lower.contains("error") || lower.contains("fail") { return "error" }
     return "generic"

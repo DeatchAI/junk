@@ -63,9 +63,9 @@ struct SelectableTextView: NSViewRepresentable {
       .backgroundColor: selectionColor
     ]
     textView.linkTextAttributes = [
-      .foregroundColor: NSColor(theme.accentColor),
+      .foregroundColor: NSColor.linkColor,
       .underlineStyle: NSUnderlineStyle.single.rawValue,
-      .underlineColor: NSColor(theme.accentColor).withAlphaComponent(0.65),
+      .underlineColor: NSColor.linkColor.withAlphaComponent(0.72),
     ]
 
     return textView
@@ -100,9 +100,9 @@ struct SelectableTextView: NSViewRepresentable {
     }
 
     textView.linkTextAttributes = [
-      .foregroundColor: NSColor(theme.accentColor),
+      .foregroundColor: NSColor.linkColor,
       .underlineStyle: NSUnderlineStyle.single.rawValue,
-      .underlineColor: NSColor(theme.accentColor).withAlphaComponent(0.65),
+      .underlineColor: NSColor.linkColor.withAlphaComponent(0.72),
     ]
   }
 
@@ -122,87 +122,121 @@ struct SelectableTextView: NSViewRepresentable {
       blocks: [SelectableTextBlock], theme: ThemeManager, baseWidth: CGFloat
     ) -> NSAttributedString {
       let result = NSMutableAttributedString()
-
-      // Font setup
-      // Use the custom font if available, fallback to system
       let fontSize: CGFloat = 14
-      let font =
-        NSFont(name: "Geist-Regular", size: fontSize) ?? NSFont.systemFont(ofSize: fontSize)
+      let font = markdownFont(size: fontSize)
       let textColor = NSColor(theme.textColor)
 
-      let paragraphStyle = NSMutableParagraphStyle()
-      paragraphStyle.lineSpacing = 5
-      paragraphStyle.paragraphSpacing = 12
-      paragraphStyle.lineBreakMode = .byWordWrapping
-
-      let attributes: [NSAttributedString.Key: Any] = [
+      let baseAttributes: [NSAttributedString.Key: Any] = [
         .font: font,
         .foregroundColor: textColor,
-        .paragraphStyle: paragraphStyle,
       ]
 
       for (index, block) in blocks.enumerated() {
-        var blockString: NSAttributedString
+        let isLast = index == blocks.count - 1
+        let nextIsList = !isLast && blocks[index + 1].isListItem
+        let blockString: NSAttributedString
+        let terminalAttributes: [NSAttributedString.Key: Any]
 
         switch block {
         case .paragraph(let text):
+          let style = paragraphStyle(lineSpacing: 3, paragraphSpacing: 8)
+          var attributes = baseAttributes
+          attributes[.paragraphStyle] = style
           blockString = renderMarkdownText(text, baseAttributes: attributes, theme: theme)
+          terminalAttributes = attributes
 
         case .heading(let level, let text):
-          let headingSize = fontSize + CGFloat(4 - min(level, 3)) * 2  // Simple scaling
-          let headingFont =
-            NSFont(name: "Geist-Regular", size: headingSize)
-            ?? NSFont.boldSystemFont(ofSize: headingSize)
+          let headingSize: CGFloat
+          switch level {
+          case 1: headingSize = 20
+          case 2: headingSize = 18
+          case 3: headingSize = 16
+          case 4: headingSize = 15
+          default: headingSize = 14
+          }
 
-          var headingAttrs = attributes
-          headingAttrs[.font] = headingFont
-          // Reduce paragraph spacing after headings slightly
-          let headingStyle = paragraphStyle.mutableCopy() as! NSMutableParagraphStyle
-          headingStyle.paragraphSpacing = 8
-          headingStyle.lineBreakMode = .byWordWrapping
-          headingAttrs[.paragraphStyle] = headingStyle
-
-          blockString = renderMarkdownText(text, baseAttributes: headingAttrs, theme: theme)
+          let style = paragraphStyle(
+            lineSpacing: 2,
+            paragraphSpacing: 6,
+            paragraphSpacingBefore: index == 0 ? 0 : (level <= 2 ? 10 : 7)
+          )
+          var attributes = baseAttributes
+          attributes[.font] = markdownFont(size: headingSize, bold: true)
+          attributes[.paragraphStyle] = style
+          blockString = renderMarkdownText(text, baseAttributes: attributes, theme: theme)
+          terminalAttributes = attributes
 
         case .blockquote(let text):
-          let style = paragraphStyle.mutableCopy() as! NSMutableParagraphStyle
-          style.headIndent = 12
-          style.firstLineHeadIndent = 12
-          style.lineBreakMode = .byWordWrapping
+          let style = paragraphStyle(lineSpacing: 3, paragraphSpacing: 8)
+          style.headIndent = 15
+          style.firstLineHeadIndent = 15
+          var attributes = baseAttributes
+          attributes[.paragraphStyle] = style
+          attributes[.foregroundColor] = NSColor(theme.secondaryTextColor)
 
-          var modifiedAttrs = attributes
-          modifiedAttrs[.paragraphStyle] = style
-          modifiedAttrs[.foregroundColor] = NSColor(theme.secondaryTextColor)
+          let quote = NSMutableAttributedString(
+            string: "▏ ",
+            attributes: [
+              .font: markdownFont(size: fontSize, bold: true),
+              .foregroundColor: NSColor(theme.textColor).withAlphaComponent(0.18),
+              .paragraphStyle: style,
+            ]
+          )
+          quote.append(renderMarkdownText(text, baseAttributes: attributes, theme: theme))
+          blockString = quote
+          terminalAttributes = attributes
 
-          blockString = renderMarkdownText(text, baseAttributes: modifiedAttrs, theme: theme)
+        case .listItem(let text, let index, let ordered, let indentLevel):
+          let style = paragraphStyle(
+            lineSpacing: 3,
+            paragraphSpacing: nextIsList ? 3 : 8
+          )
+          let firstIndent = CGFloat(indentLevel) * 16 + 2
+          let contentIndent = firstIndent + (ordered ? 22 : 16)
+          style.firstLineHeadIndent = firstIndent
+          style.headIndent = contentIndent
+          style.tabStops = [
+            NSTextTab(textAlignment: .left, location: contentIndent, options: [:])
+          ]
 
-        case .listItem(let text, _, _, let indentLevel):
-          let style = paragraphStyle.mutableCopy() as! NSMutableParagraphStyle
-          let indent = CGFloat(indentLevel + 1) * 16
-          style.headIndent = indent
-          style.firstLineHeadIndent = indent - 10
-          style.tabStops = [NSTextTab(textAlignment: .left, location: indent, options: [:])]
-          style.lineBreakMode = .byWordWrapping
+          var attributes = baseAttributes
+          attributes[.paragraphStyle] = style
 
-          var listAttrs = attributes
-          listAttrs[.paragraphStyle] = style
-
-          let bullet = "•\t"
-          let content = renderMarkdownText(text, baseAttributes: listAttrs, theme: theme)
-          let fullString = NSMutableAttributedString(string: bullet, attributes: listAttrs)
+          let marker = ordered ? "\(index).\t" : "•\t"
+          let content = renderMarkdownText(text, baseAttributes: attributes, theme: theme)
+          let fullString = NSMutableAttributedString(string: marker, attributes: attributes)
           fullString.append(content)
           blockString = fullString
+          terminalAttributes = attributes
         }
 
         result.append(blockString)
 
-        // Add newline between blocks if not last
-        if index < blocks.count - 1 {
-          result.append(NSAttributedString(string: "\n", attributes: attributes))
+        if !isLast {
+          result.append(NSAttributedString(string: "\n", attributes: terminalAttributes))
         }
       }
 
       return result
+    }
+
+    private func paragraphStyle(
+      lineSpacing: CGFloat,
+      paragraphSpacing: CGFloat,
+      paragraphSpacingBefore: CGFloat = 0
+    ) -> NSMutableParagraphStyle {
+      let style = NSMutableParagraphStyle()
+      style.lineSpacing = lineSpacing
+      style.paragraphSpacing = paragraphSpacing
+      style.paragraphSpacingBefore = paragraphSpacingBefore
+      style.lineBreakMode = .byWordWrapping
+      return style
+    }
+
+    private func markdownFont(size: CGFloat, bold: Bool = false) -> NSFont {
+      let font = NSFont(name: "Geist-Regular", size: size) ?? NSFont.systemFont(ofSize: size)
+      guard bold else { return font }
+      return NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
     }
 
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
@@ -216,88 +250,187 @@ struct SelectableTextView: NSViewRepresentable {
       return true
     }
 
-    // Inline markdown parser - strips syntax and applies styles
     func renderMarkdownText(
       _ text: String, baseAttributes: [NSAttributedString.Key: Any], theme: ThemeManager
     ) -> NSAttributedString {
       let result = NSMutableAttributedString()
-      let remaining = text
+      var cursor = text.startIndex
+      var plainStart = cursor
 
-      // Links come first so labels are styled as one interactive reference
-      // instead of being split into plain brackets and inline styles.
-      let pattern = #"\[([^\]]+)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)|(\*\*(.+?)\*\*)|(\*(.+?)\*)|(`([^`]+)`)"#
-      guard let regex = try? NSRegularExpression(pattern: pattern) else {
-        return attributedPlainText(text, baseAttributes: baseAttributes, theme: theme)
+      func flushPlain(until end: String.Index) {
+        guard plainStart < end else { return }
+        result.append(
+          attributedPlainText(
+            String(text[plainStart..<end]),
+            baseAttributes: baseAttributes,
+            theme: theme
+          )
+        )
       }
 
-      var lastEnd = remaining.startIndex
-      let nsString = remaining as NSString
-      let matches = regex.matches(
-        in: remaining, range: NSRange(location: 0, length: nsString.length))
+      func appendStyled(
+        range: Range<String.Index>,
+        attributes: [NSAttributedString.Key: Any]
+      ) {
+        result.append(
+          renderMarkdownText(
+            String(text[range]),
+            baseAttributes: attributes,
+            theme: theme
+          )
+        )
+      }
 
-      for match in matches {
-        let matchRange = Range(match.range, in: remaining)!
+      while cursor < text.endIndex {
+        let character = text[cursor]
 
-        // Append text before this match
-        if lastEnd < matchRange.lowerBound {
-          let plainText = String(remaining[lastEnd..<matchRange.lowerBound])
-          result.append(attributedPlainText(plainText, baseAttributes: baseAttributes, theme: theme))
-        }
-
-        // Determine which group matched and apply appropriate style
-        if match.range(at: 1).location != NSNotFound,
-          let innerRange = Range(match.range(at: 2), in: remaining)
-        {
-          let labelRange = Range(match.range(at: 1), in: remaining)!
+        if character == "\\" {
+          let escapedIndex = text.index(after: cursor)
+          guard escapedIndex < text.endIndex else {
+            cursor = escapedIndex
+            continue
+          }
+          flushPlain(until: cursor)
           result.append(
-            attributedReference(
-              label: String(remaining[labelRange]),
-              target: String(remaining[innerRange]),
+            attributedPlainText(
+              String(text[escapedIndex]),
               baseAttributes: baseAttributes,
               theme: theme
             )
           )
-        } else if match.range(at: 3).location != NSNotFound,
-          let innerRange = Range(match.range(at: 4), in: remaining)
-        {
-          // Bold: **text**
-          let innerText = String(remaining[innerRange])
-          var boldAttrs = baseAttributes
-          if let font = baseAttributes[.font] as? NSFont {
-            boldAttrs[.font] = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
-          }
-          result.append(NSAttributedString(string: innerText, attributes: boldAttrs))
-        } else if match.range(at: 5).location != NSNotFound,
-          let innerRange = Range(match.range(at: 6), in: remaining)
-        {
-          // Italic: *text*
-          let innerText = String(remaining[innerRange])
-          var italicAttrs = baseAttributes
-          if let font = baseAttributes[.font] as? NSFont {
-            italicAttrs[.font] = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
-          }
-          result.append(NSAttributedString(string: innerText, attributes: italicAttrs))
-        } else if match.range(at: 7).location != NSNotFound,
-          let innerRange = Range(match.range(at: 8), in: remaining)
-        {
-          // Code: `text`
-          let innerText = String(remaining[innerRange])
-          var codeAttrs = baseAttributes
-          codeAttrs[.font] = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-          codeAttrs[.backgroundColor] = NSColor(theme.secondaryTextColor).withAlphaComponent(0.1)
-          result.append(NSAttributedString(string: innerText, attributes: codeAttrs))
+          cursor = text.index(after: escapedIndex)
+          plainStart = cursor
+          continue
         }
 
-        lastEnd = matchRange.upperBound
+        if character == "`" {
+          let fenceLength = delimiterRunLength(in: text, from: cursor, character: "`")
+          let contentStart = text.index(cursor, offsetBy: fenceLength)
+          let delimiter = String(repeating: "`", count: fenceLength)
+          if let closingRange = text.range(
+            of: delimiter,
+            range: contentStart..<text.endIndex
+          ) {
+            flushPlain(until: cursor)
+            var code = String(text[contentStart..<closingRange.lowerBound])
+              .replacingOccurrences(of: "\n", with: " ")
+            if code.hasPrefix(" "), code.hasSuffix(" "), code.count > 2,
+              !code.trimmingCharacters(in: .whitespaces).isEmpty
+            {
+              code.removeFirst()
+              code.removeLast()
+            }
+
+            var attributes = baseAttributes
+            attributes[.font] = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
+            attributes[.foregroundColor] = NSColor(theme.textColor).withAlphaComponent(0.94)
+            attributes[.backgroundColor] = NSColor(theme.textColor).withAlphaComponent(0.075)
+            attributes[.ligature] = 0
+            result.append(NSAttributedString(string: code, attributes: attributes))
+
+            cursor = closingRange.upperBound
+            plainStart = cursor
+            continue
+          }
+        }
+
+        if character == "[",
+          let labelEnd = text[cursor...].firstIndex(of: "]"),
+          text.index(after: labelEnd) < text.endIndex,
+          text[text.index(after: labelEnd)] == "(",
+          let destinationEnd = text[text.index(labelEnd, offsetBy: 2)...].firstIndex(of: ")")
+        {
+          let labelStart = text.index(after: cursor)
+          let destinationStart = text.index(labelEnd, offsetBy: 2)
+          let rawDestination = String(text[destinationStart..<destinationEnd])
+          let destination = rawDestination.components(separatedBy: " \"").first ?? rawDestination
+
+          flushPlain(until: cursor)
+          let label = NSMutableAttributedString(
+            attributedString: renderMarkdownText(
+              String(text[labelStart..<labelEnd]),
+              baseAttributes: baseAttributes,
+              theme: theme
+            )
+          )
+          applyReferenceStyle(to: label, target: destination)
+          result.append(label)
+
+          cursor = text.index(after: destinationEnd)
+          plainStart = cursor
+          continue
+        }
+
+        if text[cursor...].hasPrefix("**") {
+          let contentStart = text.index(cursor, offsetBy: 2)
+          if let closingRange = text.range(of: "**", range: contentStart..<text.endIndex) {
+            flushPlain(until: cursor)
+            var attributes = baseAttributes
+            if let font = baseAttributes[.font] as? NSFont {
+              attributes[.font] = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+            }
+            appendStyled(
+              range: contentStart..<closingRange.lowerBound,
+              attributes: attributes
+            )
+            cursor = closingRange.upperBound
+            plainStart = cursor
+            continue
+          }
+        }
+
+        if text[cursor...].hasPrefix("~~") {
+          let contentStart = text.index(cursor, offsetBy: 2)
+          if let closingRange = text.range(of: "~~", range: contentStart..<text.endIndex) {
+            flushPlain(until: cursor)
+            var attributes = baseAttributes
+            attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+            attributes[.strikethroughColor] = NSColor(theme.secondaryTextColor)
+            appendStyled(
+              range: contentStart..<closingRange.lowerBound,
+              attributes: attributes
+            )
+            cursor = closingRange.upperBound
+            plainStart = cursor
+            continue
+          }
+        }
+
+        if character == "*" {
+          let contentStart = text.index(after: cursor)
+          if let closingIndex = text[contentStart...].firstIndex(of: "*") {
+            flushPlain(until: cursor)
+            var attributes = baseAttributes
+            if let font = baseAttributes[.font] as? NSFont {
+              attributes[.font] = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
+            }
+            appendStyled(range: contentStart..<closingIndex, attributes: attributes)
+            cursor = text.index(after: closingIndex)
+            plainStart = cursor
+            continue
+          }
+        }
+
+        cursor = text.index(after: cursor)
       }
 
-      // Append remaining text after last match
-      if lastEnd < remaining.endIndex {
-        let plainText = String(remaining[lastEnd...])
-        result.append(attributedPlainText(plainText, baseAttributes: baseAttributes, theme: theme))
-      }
+      flushPlain(until: text.endIndex)
 
       return result
+    }
+
+    private func delimiterRunLength(
+      in text: String,
+      from start: String.Index,
+      character: Character
+    ) -> Int {
+      var index = start
+      var count = 0
+      while index < text.endIndex, text[index] == character {
+        count += 1
+        index = text.index(after: index)
+      }
+      return count
     }
 
     private func attributedPlainText(
@@ -358,22 +491,46 @@ struct SelectableTextView: NSViewRepresentable {
       theme: ThemeManager
     ) -> NSAttributedString {
       var attributes = baseAttributes
-      let accent = NSColor(theme.accentColor)
-      attributes[.foregroundColor] = accent
-      attributes[.backgroundColor] = accent.withAlphaComponent(0.12)
+      attributes[.foregroundColor] = NSColor.linkColor
       attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
-      attributes[.underlineColor] = accent.withAlphaComponent(0.65)
-      if let font = baseAttributes[.font] as? NSFont {
-        attributes[.font] = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
-      }
+      attributes[.underlineColor] = NSColor.linkColor.withAlphaComponent(0.72)
 
-      if target.hasPrefix("/") {
-        let path = target.split(separator: "#", maxSplits: 1).first.map(String.init) ?? target
-        attributes[.link] = URL(fileURLWithPath: path)
-      } else if let url = URL(string: target), url.scheme != nil {
+      if let url = referenceURL(for: target) {
         attributes[.link] = url
       }
       return NSAttributedString(string: label, attributes: attributes)
+    }
+
+    private func applyReferenceStyle(to string: NSMutableAttributedString, target: String) {
+      guard string.length > 0 else { return }
+      let range = NSRange(location: 0, length: string.length)
+      string.addAttributes(
+        [
+          .foregroundColor: NSColor.linkColor,
+          .underlineStyle: NSUnderlineStyle.single.rawValue,
+          .underlineColor: NSColor.linkColor.withAlphaComponent(0.72),
+        ],
+        range: range
+      )
+      if let url = referenceURL(for: target) {
+        string.addAttribute(.link, value: url, range: range)
+      }
+    }
+
+    private func referenceURL(for target: String) -> URL? {
+      if target.hasPrefix("/") {
+        let withoutFragment = target.split(separator: "#", maxSplits: 1).first.map(String.init) ?? target
+        let path =
+          withoutFragment.replacingOccurrences(
+            of: #"(?:\s+\(line\s+\d+\)|:\d+)$"#,
+            with: "",
+            options: .regularExpression
+          )
+        return URL(fileURLWithPath: path)
+      }
+
+      guard let url = URL(string: target), url.scheme != nil else { return nil }
+      return url
     }
   }
 }
@@ -386,7 +543,7 @@ class SelectableNSTextView: NSTextView {
     }
     layoutManager.ensureLayout(for: textContainer)
     var size = layoutManager.usedRect(for: textContainer).size
-    size.height += 4  // minimal padding
+    size.height += 1
     return size
   }
 }
@@ -397,4 +554,13 @@ extension ThemeManager {
     "\(textColor.hashValue)-\(backgroundColor.hashValue)"
   }
 
+}
+
+private extension SelectableTextBlock {
+  var isListItem: Bool {
+    if case .listItem = self {
+      return true
+    }
+    return false
+  }
 }

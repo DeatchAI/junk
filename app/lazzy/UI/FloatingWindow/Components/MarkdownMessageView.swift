@@ -20,7 +20,7 @@ struct MarkdownMessageView: View {
   @State private var viewWidth: CGFloat = 468
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
+    VStack(alignment: .leading, spacing: 10) {
       ForEach(segments, id: \.id) { segment in
         switch segment {
         case .textGroup(let blocks):
@@ -32,7 +32,7 @@ struct MarkdownMessageView: View {
 
         case .image(let url, _):
           DownloadableImageView(url: url)
-            .padding(.vertical, 8)
+            .padding(.vertical, 4)
         }
       }
     }
@@ -67,51 +67,113 @@ struct CodeBlockView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      // Header with language and copy button
-      HStack {
-        if let lang = language {
-          Text(lang.uppercased())
-            .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(theme.secondaryTextColor)
+      HStack(spacing: 8) {
+        if let languageName {
+          Text(languageName)
+            .font(.appFont(size: 10.5, weight: .medium))
+            .foregroundStyle(theme.secondaryTextColor.opacity(0.85))
         }
-        Spacer()
-        Button(action: {
-          let pasteboard = NSPasteboard.general
-          pasteboard.clearContents()
-          pasteboard.setString(code, forType: .string)
-          isCopied = true
 
-          DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            isCopied = false
-          }
-        }) {
+        Spacer(minLength: 0)
+
+        Button(action: copyCode) {
           HStack(spacing: 4) {
             Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
-            Text(isCopied ? "Copied" : "Copy")
+            if isCopied {
+              Text("Copied")
+            }
           }
-          .font(.system(size: 10))
+          .font(.appFont(size: 10.5, weight: .medium))
           .foregroundStyle(theme.secondaryTextColor)
+          .padding(.horizontal, isCopied ? 7 : 6)
+          .padding(.vertical, 5)
+          .background(
+            theme.textColor.opacity(isHovering ? 0.07 : 0.035),
+            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+          )
         }
         .buttonStyle(.plain)
+        .help(isCopied ? "Copied" : "Copy code")
+        .accessibilityLabel(isCopied ? "Code copied" : "Copy code")
       }
-      .padding(.horizontal, 12)
-      .padding(.vertical, 8)
-      .background(Color.black.opacity(0.2))
+      .padding(.leading, 13)
+      .padding(.trailing, 8)
+      .padding(.top, 8)
+      .padding(.bottom, languageName == nil ? 0 : 2)
 
-      // Code Content
-      Text(code)
-        .font(.system(size: 13, weight: .regular, design: .monospaced))
-        .foregroundStyle(theme.textColor)
-        .padding(12)
-        .textSelection(.enabled)  // Allow selection within code block
-        .frame(maxWidth: .infinity, alignment: .leading)
+      ScrollView(.horizontal, showsIndicators: false) {
+        Text(code)
+          .font(.system(size: 12.5, weight: .regular, design: .monospaced))
+          .foregroundStyle(theme.textColor.opacity(0.92))
+          .lineSpacing(3)
+          .textSelection(.enabled)
+          .fixedSize(horizontal: true, vertical: true)
+          .padding(.horizontal, 13)
+          .padding(.top, languageName == nil ? 4 : 6)
+          .padding(.bottom, 12)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
-    .background(Color.black.opacity(0.1))
-    .cornerRadius(8)
-    .overlay(
-      RoundedRectangle(cornerRadius: 8)
-        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+    .background(
+      RoundedRectangle(cornerRadius: codeCornerRadius, style: .continuous)
+        .fill(theme.textColor.opacity(0.035))
     )
+    .clipShape(RoundedRectangle(cornerRadius: codeCornerRadius, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: codeCornerRadius, style: .continuous)
+        .stroke(theme.textColor.opacity(0.09), lineWidth: 0.75)
+    }
+    .onHover { hovering in
+      withAnimation(.easeOut(duration: 0.14)) {
+        isHovering = hovering
+      }
+    }
+  }
+
+  private var languageName: String? {
+    guard let language = language?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !language.isEmpty
+    else {
+      return nil
+    }
+
+    let aliases = [
+      "bash": "Shell",
+      "sh": "Shell",
+      "shell": "Shell",
+      "js": "JavaScript",
+      "jsx": "JavaScript",
+      "ts": "TypeScript",
+      "tsx": "TypeScript",
+      "py": "Python",
+      "rb": "Ruby",
+      "rs": "Rust",
+      "swift": "Swift",
+      "json": "JSON",
+      "yaml": "YAML",
+      "yml": "YAML",
+      "html": "HTML",
+      "css": "CSS",
+      "sql": "SQL",
+      "diff": "Diff",
+    ]
+
+    return aliases[language.lowercased()] ?? language.capitalized
+  }
+
+  private var codeCornerRadius: CGFloat {
+    min(max(theme.borderRadius * 0.65, 7), 10)
+  }
+
+  private func copyCode() {
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    pasteboard.setString(code, forType: .string)
+    isCopied = true
+
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+      isCopied = false
+    }
   }
 }
 

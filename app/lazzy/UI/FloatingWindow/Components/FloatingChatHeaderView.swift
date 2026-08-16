@@ -7,6 +7,8 @@ struct FloatingChatHeaderView: View {
   @Binding var activeMessageIndex: Int?
   @Binding var lastCompletedResponse: String
   @Binding var activeMediaJob: MediaJob?
+  let pendingAttachments: [ChatAttachment]
+  var onRemoveAttachment: ((ChatAttachment) -> Void)?
 
   // Internal state for hover effects
   @State private var hoveredContent: String?
@@ -16,6 +18,19 @@ struct FloatingChatHeaderView: View {
   var body: some View {
     ScrollView(.horizontal, showsIndicators: false) {
       HStack(spacing: 8) {
+        ForEach(
+          Array(pendingAttachments.filter(\.isMedia).enumerated()),
+          id: \.element.id
+        ) { index, attachment in
+          MediaAttachmentGlassChip(
+            attachment: attachment,
+            number: index + 1,
+            onRemove: onRemoveAttachment.map { remove in
+              { remove(attachment) }
+            }
+          )
+        }
+
         ForEach(Array(sessionContexts.enumerated()), id: \.offset) { index, ctx in
           GlassChip(
             text: "\(index + 1)",
@@ -83,7 +98,7 @@ struct FloatingChatHeaderView: View {
     let pasteboard = NSPasteboard.general
     pasteboard.clearContents()
     pasteboard.setString(displayContent, forType: .string)
-    print("📋 Copied to clipboard: \(displayContent.prefix(50))...")
+    print("📋 Copied response to clipboard")
   }
 
   private func handleHover(_ isHovering: Bool, content: String) {
@@ -99,6 +114,61 @@ struct FloatingChatHeaderView: View {
         NSCursor.pop()
       }
     }
+  }
+}
+
+/// A compact media pill shown in the same upper strip as the numbered
+/// conversation chips. It keeps the actual thumbnail visible without growing
+/// the composer and gives dropped media an obvious remove affordance.
+private struct MediaAttachmentGlassChip: View {
+  let attachment: ChatAttachment
+  let number: Int
+  var onRemove: (() -> Void)?
+
+  @ObservedObject private var theme = ThemeManager.shared
+
+  var body: some View {
+    HStack(spacing: 5) {
+      Image(nsImage: attachment.thumbnail)
+        .resizable()
+        .aspectRatio(contentMode: .fill)
+        .frame(width: 22, height: 22)
+        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+        .overlay(alignment: .bottomTrailing) {
+          if attachment.fileRequest.mimeType.hasPrefix("video/") {
+            Image(systemName: "play.fill")
+              .font(.system(size: 7, weight: .bold))
+              .foregroundStyle(.white)
+              .padding(3)
+              .background(.black.opacity(0.68), in: Circle())
+              .padding(1)
+          }
+        }
+
+      Text("\(number)")
+        .font(.appFont(size: 11, weight: .semibold))
+        .foregroundStyle(theme.textColor)
+
+      if let onRemove {
+        Button(action: onRemove) {
+          Image(systemName: "xmark")
+            .font(.system(size: 8, weight: .bold))
+            .foregroundStyle(theme.secondaryTextColor)
+        }
+        .buttonStyle(.plain)
+      }
+    }
+    .padding(.horizontal, 7)
+    .padding(.vertical, 4)
+    .background(
+      Group {
+        RoundedRectangle(cornerRadius: theme.borderRadius)
+          .fill(.ultraThinMaterial)
+        RoundedRectangle(cornerRadius: theme.borderRadius)
+          .fill(theme.backgroundColor)
+      }
+    )
+    .help(attachment.fileName)
   }
 }
 
