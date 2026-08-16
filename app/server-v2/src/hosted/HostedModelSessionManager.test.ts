@@ -13,20 +13,22 @@ describe("HostedModelSessionManager", () => {
         body: JSON.parse(String(init?.body)),
       });
       return Response.json({
-        baseURL: "https://detach.example/api/hosted-model/v1",
+        baseURL: "https://detach.example/api/v1",
         token: "scoped-model-token",
         expiresAt,
         defaultModel: "openai/gpt-5.6-terra",
         models: [{
           id: "openai/gpt-5.6-terra",
           displayName: "GPT-5.6 Terra",
-          provider: "vercel",
+          provider: "kie",
           contextWindow: 400000,
           maxOutputTokens: 128000,
+          reasoningLabel: "Effort",
+          reasoningEfforts: ["none", "low", "high"],
         }],
       });
     }) as typeof fetch;
-    const manager = new HostedModelSessionManager({ hostedMode: true, fetcher });
+    const manager = new HostedModelSessionManager({ fetcher });
     manager.configure({
       endpoint: "https://detach.example/",
       accessToken: "supabase-user-token",
@@ -36,6 +38,8 @@ describe("HostedModelSessionManager", () => {
     const second = await manager.session("openai/gpt-5.6-terra");
 
     expect(first.token).toBe("scoped-model-token");
+    expect(first.models[0]?.reasoningLabel).toBe("Effort");
+    expect(first.models[0]?.reasoningEfforts).toEqual(["none", "low", "high"]);
     expect(second).toBe(first);
     expect(requests).toEqual([{
       url: "https://detach.example/api/hosted-model",
@@ -45,7 +49,7 @@ describe("HostedModelSessionManager", () => {
   });
 
   test("does not accept an insecure remote control-plane URL", () => {
-    const manager = new HostedModelSessionManager({ hostedMode: true });
+    const manager = new HostedModelSessionManager();
     manager.configure({
       endpoint: "http://detach.example",
       accessToken: "secret",
