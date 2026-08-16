@@ -45,4 +45,47 @@ describe("activity normalization", () => {
       title: "Inspecting the active Mac app",
     });
   });
+
+  test("turns stale heartbeat diagnostics into a calm working state", () => {
+    expect(normalizeAgentActivity("codex", "Still working", undefined, {
+      agent: "codex",
+      kind: "status",
+      phase: "updated",
+      title: "Still working",
+      subtitle: "35s without a new Codex event",
+      userFacing: true,
+    })).toMatchObject({
+      action: "generic",
+      title: "Working…",
+      subtitle: undefined,
+      userFacing: true,
+    });
+  });
+
+  test("shows a short retry state only for network failures", () => {
+    expect(normalizeAgentActivity("codex", "Codex error", undefined, {
+      agent: "codex",
+      kind: "error",
+      phase: "failed",
+      title: "Codex error",
+      subtitle: "The network connection was reset",
+      userFacing: true,
+    })).toMatchObject({
+      action: "generic",
+      phase: "updated",
+      title: "Retrying…",
+      subtitle: undefined,
+    });
+
+    expect(normalizeAgentActivity("codex", "Codex error", undefined, {
+      agent: "codex",
+      kind: "error",
+      phase: "failed",
+      title: "Codex error",
+      subtitle: "The requested tool failed",
+      userFacing: true,
+    })).toMatchObject({
+      userFacing: false,
+    });
+  });
 });

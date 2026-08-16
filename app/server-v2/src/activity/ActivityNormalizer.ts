@@ -57,13 +57,15 @@ export function normalizeAgentActivity(
   event?: AgentActivityEvent,
 ): AgentActivityEvent {
   const incomingTitle = event?.title?.trim() || status.trim() || "Working";
-  const action = event?.action
+  let action = event?.action
     ?? (event?.kind === "mcp_tool" ? actionForTool(toolName) : undefined)
     ?? actionForKind(event?.kind, incomingTitle)
     ?? actionForTitle(incomingTitle)
     ?? actionForTool(toolName)
     ?? "generic";
   const title = preferredToolTitle(incomingTitle, toolName);
+  const copy = normalizeActivityCopy(action, title, event?.subtitle, event?.kind);
+  action = copy.action;
 
   return {
     ...event,
@@ -71,15 +73,87 @@ export function normalizeAgentActivity(
     agent,
     kind: event?.kind ?? kindForAction(action),
     action,
-    phase: event?.phase ?? "started",
-    title,
-    subtitle: event?.subtitle,
+    phase: copy.phase ?? event?.phase ?? "started",
+    title: copy.title,
+    subtitle: copy.subtitle,
     toolName: event?.toolName ?? toolName,
-    userFacing: event?.userFacing ?? true,
+    userFacing: copy.userFacing ?? event?.userFacing ?? true,
     sourceEventType: event?.sourceEventType,
     sourceItemType: event?.sourceItemType,
     details: event?.details,
   };
+}
+
+/**
+ * Keep lifecycle copy calm and compact. Provider heartbeats often include
+ * transport/debug timing that is useful in logs but reads like an error in the
+ * activity card. Network failures are the one exception: they become a short
+ * retry state without exposing the underlying transport message.
+ */
+function normalizeActivityCopy(
+  action: AgentActivityAction,
+  title: string,
+  subtitle: string | undefined,
+  kind: AgentActivityKind | undefined,
+) {
+  const heartbeat = isStaleHeartbeat(title, subtitle);
+  if (heartbeat) {
+    return {
+      action: "generic" as const,
+      title: "Working…",
+      subtitle: undefined,
+    };
+  }
+
+  if (action === "error" && isRetryableNetworkError(`${title} ${subtitle ?? ""}`)) {
+    return {
+      action: "generic" as const,
+      phase: "updated" as const,
+      title: "Retrying…",
+      subtitle: undefined,
+    };
+  }
+
+  if (action === "prepare" || action === "generic") {
+    return {
+      action,
+      title: "Working…",
+      subtitle: undefined,
+    };
+  }
+
+  if (action === "think") {
+    return {
+      action,
+      title: "Thinking…",
+      subtitle: undefined,
+    };
+  }
+
+  // A provider can mark a lifecycle/status event as an error without a
+  // recoverable network condition. Keep the terminal error in the response
+  // surface instead of duplicating its raw diagnostic in the activity lane.
+  if ((kind === "error" || action === "error") && !isRetryableNetworkError(`${title} ${subtitle ?? ""}`)) {
+    return {
+      action,
+      title,
+      subtitle,
+      userFacing: false,
+    };
+  }
+
+  return { action, title, subtitle };
+}
+
+function isStaleHeartbeat(title: string, subtitle?: string) {
+  const value = `${title} ${subtitle ?? ""}`.toLowerCase();
+  return value.includes("still working")
+    || /without a new .*event/.test(value)
+    || /no new .*event/.test(value);
+}
+
+export function isRetryableNetworkError(value: string) {
+  return /(network|connection|connect|socket|timed? out|timeout|fetch failed|econn|enotfound|dns|temporar|service unavailable|bad gateway|gateway timeout|\b429\b|\b502\b|\b503\b|\b504\b)/i.test(value);
 }
 
 function preferredToolTitle(title: string, toolName?: string) {
