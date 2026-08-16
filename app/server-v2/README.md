@@ -8,29 +8,38 @@ This replaces the legacy Lazzy AI Gateway server with a small process-backed Det
 - no provider registry
 - no Polar
 - no Supabase plan logic
-- no hosted model keys in the Mac app or local runtime
+- no Detach Cloud model keys in the Mac app or local runtime
 
 The runtime supports first-class local agent adapters for:
 
 - Codex via `codex exec --json`
 - Claude via `claude -p --output-format stream-json`
 - Grok via `grok -p --output-format streaming-json`
-- Detach Hosted via the bundled OpenCode ACP harness and the hosted control plane
+- OpenCode through the user's own OpenCode login and provider configuration
+- Detach Cloud via a separate bundled OpenCode ACP harness and the Detach Cloud control plane
 
 The Gemini CLI adapter was removed after the CLI deprecation. Provider-neutral
-hosted models run through OpenCode. The local runtime exchanges the signed-in
+Detach Cloud models run through a separate OpenCode configuration. The local runtime exchanges the signed-in
 user session for a short-lived model-only token, then points OpenCode at the
 Detach proxy. The user's Supabase token and Detach's provider credentials are
 never inherited by the agent process.
 
-Vercel AI Gateway is the first hosted provider. Provider choice lives behind the
-control-plane catalog and router, so adding Kie later does not change the Mac
-protocol, OpenCode adapter, MCP translation, or approval flow.
+Kie.ai is the primary Detach Cloud provider behind Detach's own `/api/v1/responses`
+endpoint. The control plane owns Kie's provider-specific routes and transactional
+credit accounting. The earlier Vercel AI Gateway adapter remains available but
+is not the default Detach Cloud route.
 
-The bundled OpenCode process runs in ACP `--pure` mode with isolated state under
-`~/Library/Application Support/Detach/OpenCode`. Detach injects an inline
-provider configuration for each run, while OpenCode tool permission requests
-continue through the existing native approval UI.
+Detach Cloud image and video generation uses the same scoped session but a separate
+asynchronous media contract. The runtime uploads user-selected references,
+streams durable `media_job` state to SwiftUI, and stores typed media parts in
+SQLite. Provider URLs are replaced by signed Detach storage URLs before they
+enter conversation history.
+
+Standalone OpenCode inherits the user's normal OpenCode configuration, login,
+providers, and model choice. Detach Cloud runs a separate OpenCode process in
+ACP `--pure` mode with isolated state under
+`~/Library/Application Support/Detach/OpenCode`, and injects an inline provider
+configuration for each run. Both routes retain Detach's native tool approval UI.
 
 Chat history, quick actions, and MCP server configs are stored locally in SQLite at:
 
@@ -72,11 +81,12 @@ The macOS v1 tools cover permission status, running apps and windows, app launch
 
 Both built-in servers are represented as ordinary `MCPServerConfig` values. Codex, Claude, Grok/ACP, and future ACP adapters therefore receive the same tools and policy without desktop-specific code in an adapter.
 
-Composio is managed as a first-class MCP session, not as a pasted URL. A local
-development runtime may use its own `COMPOSIO_API_KEY`, but a distributed Detach
-build must provision its session through the hosted control plane. The
-Detach-owned project key must never reach this runtime or the macOS app. Custom
-HTTP/SSE/stdio MCP servers still belong in Settings > MCP > Custom.
+Composio is managed as a first-class MCP session, not as a pasted URL. The
+bundled runtime authenticates to the Detach control plane with the signed-in
+user's token, receives a paid-user Composio session, and connects directly to
+Composio's MCP endpoint. The Detach-owned project key never reaches this
+runtime or the macOS app. Custom HTTP/SSE/stdio MCP servers still belong in
+Settings > MCP > Custom.
 
 For a source build using its own Composio project, see
 [`../../docs/composio-setup.md`](../../docs/composio-setup.md).

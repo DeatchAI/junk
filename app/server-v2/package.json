@@ -4,7 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "bun run src/index.ts",
+    "dev": "DETACH_RUNTIME_TOKEN=detach-development bun run src/index.ts",
     "sync:opencode": "bun run scripts/sync-opencode.ts",
     "build": "bun run sync:opencode && bun build --compile --outfile detach-runtime src/index.ts && codesign --force --options runtime --entitlements entitlements.plist --sign - detach-runtime",
     "test": "bun test",
