@@ -1,5 +1,5 @@
 const NATIVE_HOST = "com.lazzy.browser";
-const RUNTIME_WS_URL = "ws://127.0.0.1:3847/api/browser/native";
+const DEFAULT_RUNTIME_CONFIG = { port: 3847, token: "detach-development" };
 const CONTENT_TARGET = "lazzy-content";
 const COMMAND_TIMEOUT_MS = 20_000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
@@ -211,10 +211,14 @@ function connectBridge(force = false) {
   }
 }
 
-function connectRuntimeSocket() {
+async function connectRuntimeSocket() {
   if (runtimeSocket) return;
 
-  const socket = new WebSocket(RUNTIME_WS_URL);
+  const configuration = await loadRuntimeConfiguration();
+  if (runtimeSocket) return;
+  const runtimeURL = new URL(`ws://127.0.0.1:${configuration.port}/api/browser/native`);
+  runtimeURL.searchParams.set("token", configuration.token);
+  const socket = new WebSocket(runtimeURL.toString());
   runtimeSocket = socket;
 
   socket.addEventListener("open", () => {
@@ -263,6 +267,23 @@ function connectRuntimeSocket() {
     stopRuntimeHeartbeat();
     scheduleRuntimeReconnect();
   });
+}
+
+async function loadRuntimeConfiguration() {
+  try {
+    const response = await fetch(chrome.runtime.getURL("runtime-config.json"), { cache: "no-store" });
+    if (!response.ok) return DEFAULT_RUNTIME_CONFIG;
+    const value = await response.json();
+    if (!Number.isInteger(value.port) || value.port < 1 || value.port > 65535) {
+      return DEFAULT_RUNTIME_CONFIG;
+    }
+    if (typeof value.token !== "string" || value.token.length < 16) {
+      return DEFAULT_RUNTIME_CONFIG;
+    }
+    return { port: value.port, token: value.token };
+  } catch {
+    return DEFAULT_RUNTIME_CONFIG;
+  }
 }
 
 function scheduleRuntimeReconnect() {

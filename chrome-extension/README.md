@@ -4,7 +4,7 @@ Chrome extension for Detach browser automation. It works inside the user's real 
 
 This extension is intentionally dependency-free. Load it directly with Chrome's "Load unpacked" button.
 
-The extension connects directly to the local Detach runtime over `ws://127.0.0.1:3847`. Native messaging remains available as a fallback, but it is not required for normal local testing.
+The extension reads `runtime-config.json` and connects directly to the authenticated Detach runtime on the random loopback port selected for that app launch. Native messaging remains available as a fallback.
 
 The extension has a fixed development ID:
 
@@ -22,7 +22,7 @@ gdobcabflbojkedmocahijccipghgoij
 
 After pulling an extension update, click **Reload** for Detach Browser Agent on `chrome://extensions`.
 
-The direct localhost bridge requires no additional installation. To keep native messaging available as a fallback, optionally run:
+Release builds bundle this directory inside Detach. Onboarding copies it to Application Support and opens that stable folder so it can be selected with **Load unpacked** until the Chrome Web Store listing is live. To keep native messaging available as a fallback during source development, optionally run:
 
 ```bash
 scripts/install-chrome-native-host.sh
