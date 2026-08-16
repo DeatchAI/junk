@@ -34,10 +34,8 @@ jobs:
       APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
       KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
       SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      SUPABASE_URL: https://qymrzmmsroxkteaxbgoo.supabase.co
-      SUPABASE_UPDATES_BUCKET: updates
-      DETACH_UPDATE_BASE_URL: https://qymrzmmsroxkteaxbgoo.supabase.co/storage/v1/object/public/updates
+      DETACH_GITHUB_REPOSITORY: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
 
     steps:
       - name: Check out source
@@ -101,7 +99,7 @@ jobs:
           echo "build=$build" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-      - name: Archive, notarize, package, sign, and publish
+      - name: Archive, notarize, package, sign, and publish to GitHub
         working-directory: app
         run: |
           bash scripts/release.sh \
@@ -112,20 +110,6 @@ jobs:
             --notary-issuer-id "$APPLE_NOTARY_ISSUER_ID" \
             --output "dist/release-${{ steps.release.outputs.version }}-${{ steps.release.outputs.build }}" \
             --publish
-
-      - name: Create the GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          tag="${{ steps.release.outputs.tag }}"
-          dmg="app/dist/release-${{ steps.release.outputs.version }}-${{ steps.release.outputs.build }}/Detach-${{ steps.release.outputs.version }}.dmg"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "$dmg" --clobber
-          else
-            gh release create "$tag" "$dmg" --target "$GITHUB_SHA" --title "Detach ${{ steps.release.outputs.version }}" --generate-notes
-          fi
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
