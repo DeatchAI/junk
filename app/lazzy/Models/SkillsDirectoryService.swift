@@ -108,11 +108,34 @@ final class SkillsDirectoryService: ObservableObject {
   @Published private(set) var installingSkillID: String?
   @Published private(set) var errorMessage: String?
 
+  private static let searchCacheDefaultsKey = "skills.directory.search-cache.v1"
+  private static let searchCacheLifetime: TimeInterval = 15 * 60
+  private static let searchSession: URLSession = {
+    let configuration = URLSessionConfiguration.default
+    configuration.waitsForConnectivity = false
+    configuration.timeoutIntervalForRequest = 10
+    configuration.timeoutIntervalForResource = 12
+    configuration.urlCache = URLCache(
+      memoryCapacity: 2 * 1024 * 1024,
+      diskCapacity: 8 * 1024 * 1024,
+      diskPath: "skills-directory"
+    )
+    configuration.requestCachePolicy = .useProtocolCachePolicy
+    return URLSession(configuration: configuration)
+  }()
+
+  private struct SearchCacheEntry: Codable {
+    let fetchedAt: Date
+    let skills: [RemoteSkill]
+  }
+
+  private var searchCache: [String: SearchCacheEntry]
   private var searchTask: Task<Void, Never>?
   private var searchGeneration = 0
 
   init() {
     installedSkills = InstalledSkillCatalog.discover()
+    searchCache = Self.loadSearchCache()
   }
 
   deinit {
@@ -125,6 +148,20 @@ final class SkillsDirectoryService: ObservableObject {
 
   func clearError() {
     errorMessage = nil
+  }
+
+  func installedSkill(for remoteSkill: RemoteSkill) -> SkillAttachment? {
+    let directory = remoteSkill.selectionName.lowercased()
+    return installedSkills.first(where: {
+      InstalledSkillCatalog.isAppManaged($0) && Self.directoryName(for: $0) == directory
+    }) ?? installedSkills.first(where: { Self.directoryName(for: $0) == directory })
+  }
+
+  private func appManagedInstalledSkill(for remoteSkill: RemoteSkill) -> SkillAttachment? {
+    let directory = remoteSkill.selectionName.lowercased()
+    return installedSkills.first(where: {
+      InstalledSkillCatalog.isAppManaged($0) && Self.directoryName(for: $0) == directory
+    })
   }
 
   func search(query: String) {
@@ -140,6 +177,13 @@ final class SkillsDirectoryService: ObservableObject {
       return
     }
 
+    if let cachedResults = cachedSearchResults(for: normalizedQuery) {
+      searchResults = cachedResults
+      isSearching = false
+      return
+    }
+
+    searchResults = []
     isSearching = true
     searchTask = Task { [weak self] in
       defer {
@@ -150,11 +194,12 @@ final class SkillsDirectoryService: ObservableObject {
       }
 
       do {
-        try await Task.sleep(for: .milliseconds(240))
+        try await Task.sleep(for: .milliseconds(420))
         let results = try await Self.fetchSearchResults(query: normalizedQuery)
         guard !Task.isCancelled else { return }
         guard let self, self.searchGeneration == generation else { return }
         self.searchResults = results
+        self.storeSearchResults(results, for: normalizedQuery)
       } catch is CancellationError {
         // The defer above clears the spinner if this was the active request.
       } catch {
@@ -168,6 +213,10 @@ final class SkillsDirectoryService: ObservableObject {
   func install(_ skill: RemoteSkill) async -> Result<SkillAttachment, Error> {
     guard installingSkillID == nil else {
       return .failure(InstallerError.installInProgress)
+    }
+
+    if let existingAttachment = appManagedInstalledSkill(for: skill) {
+      return .success(existingAttachment)
     }
 
     errorMessage = nil
@@ -192,10 +241,7 @@ final class SkillsDirectoryService: ObservableObject {
       }
 
       refreshInstalledSkills()
-      guard let attachment = installedSkills.first(where: { attachment in
-        InstalledSkillCatalog.isAppManaged(attachment)
-          && Self.directoryName(for: attachment) == skillName.lowercased()
-      }) else {
+      guard let attachment = appManagedInstalledSkill(for: skill) else {
         throw InstallerError.installedSkillNotFound(output: result.output)
       }
 
@@ -212,29 +258,65 @@ final class SkillsDirectoryService: ObservableObject {
       .deletingLastPathComponent() // skill-workspace
   }
 
+  private static func loadSearchCache() -> [String: SearchCacheEntry] {
+    guard let data = UserDefaults.standard.data(forKey: searchCacheDefaultsKey),
+      let decoded = try? JSONDecoder().decode([String: SearchCacheEntry].self, from: data)
+    else {
+      return [:]
+    }
+
+    let now = Date()
+    return decoded.filter { now.timeIntervalSince($0.value.fetchedAt) < searchCacheLifetime }
+  }
+
+  private func cachedSearchResults(for query: String) -> [RemoteSkill]? {
+    guard let entry = searchCache[query] else { return nil }
+    guard Date().timeIntervalSince(entry.fetchedAt) < Self.searchCacheLifetime else {
+      searchCache.removeValue(forKey: query)
+      return nil
+    }
+    return entry.skills
+  }
+
+  private func storeSearchResults(_ results: [RemoteSkill], for query: String) {
+    searchCache[query] = SearchCacheEntry(fetchedAt: Date(), skills: results)
+    if searchCache.count > 32 {
+      let oldestKeys = searchCache
+        .sorted { $0.value.fetchedAt < $1.value.fetchedAt }
+        .prefix(searchCache.count - 32)
+        .map(\.key)
+      for key in oldestKeys {
+        searchCache.removeValue(forKey: key)
+      }
+    }
+
+    if let data = try? JSONEncoder().encode(searchCache) {
+      UserDefaults.standard.set(data, forKey: Self.searchCacheDefaultsKey)
+    }
+  }
+
   private nonisolated static func fetchSearchResults(query: String) async throws -> [RemoteSkill] {
     guard var components = URLComponents(string: "https://skills.sh/api/search") else {
       throw DirectoryError.invalidURL
     }
     components.queryItems = [
       URLQueryItem(name: "q", value: query),
-      URLQueryItem(name: "limit", value: "20"),
+      URLQueryItem(name: "limit", value: "10"),
     ]
 
     guard let url = components.url else { throw DirectoryError.invalidURL }
     var request = URLRequest(url: url)
     request.httpMethod = "GET"
-    request.timeoutInterval = 15
+    request.timeoutInterval = 10
+    request.cachePolicy = .useProtocolCachePolicy
     request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.waitsForConnectivity = false
-    configuration.timeoutIntervalForRequest = 15
-    configuration.timeoutIntervalForResource = 20
-    let session = URLSession(configuration: configuration)
-    defer { session.invalidateAndCancel() }
-
-    let (data, response) = try await session.data(for: request)
+    let (data, response): (Data, URLResponse)
+    do {
+      (data, response) = try await searchSession.data(for: request)
+    } catch let error as URLError where error.code == .timedOut {
+      throw DirectoryError.timedOut
+    }
     guard let response = response as? HTTPURLResponse else {
       throw DirectoryError.invalidResponse
     }
@@ -288,14 +370,54 @@ final class SkillsDirectoryService: ObservableObject {
     process.currentDirectoryURL = workspaceURL
 
     var environment = ProcessInfo.processInfo.environment
+    environment["HOME"] = FileManager.default.homeDirectoryForCurrentUser.path
     environment["DISABLE_TELEMETRY"] = "1"
     environment["NO_COLOR"] = "1"
+    environment["CI"] = "1"
+    environment["GIT_TERMINAL_PROMPT"] = "0"
     environment["NPM_CONFIG_UPDATE_NOTIFIER"] = "false"
+    environment["NPM_CONFIG_AUDIT"] = "false"
+    environment["NPM_CONFIG_FUND"] = "false"
+    environment["NPM_CONFIG_PROGRESS"] = "false"
+    environment["NPM_CONFIG_FETCH_RETRIES"] = "1"
+    environment["NPM_CONFIG_FETCH_RETRY_MINTIMEOUT"] = "1000"
+    environment["NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT"] = "5000"
+    environment["NPM_CONFIG_FETCH_TIMEOUT"] = "30000"
+
+    var pathEntries = environment["PATH"]?.split(separator: ":").map(String.init) ?? []
+    for path in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"] {
+      if !pathEntries.contains(path) { pathEntries.append(path) }
+    }
+    environment["PATH"] = pathEntries.joined(separator: ":")
     process.environment = environment
 
-    let outputPipe = Pipe()
-    process.standardOutput = outputPipe
-    process.standardError = outputPipe
+    // A pipe must be drained while the process is running. The skills CLI can
+    // emit enough git/npm output to fill a pipe buffer, which would block the
+    // child process forever while this thread waits for it to exit. A temporary
+    // file keeps the installer non-blocking and still preserves diagnostics.
+    let outputURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent("detach-skills-installer-\(UUID().uuidString).log")
+    guard FileManager.default.createFile(atPath: outputURL.path, contents: nil) else {
+      throw InstallerError.processLaunchFailed("Could not create a temporary installer log.")
+    }
+
+    let outputHandle: FileHandle
+    do {
+      outputHandle = try FileHandle(forWritingTo: outputURL)
+    } catch {
+      try? FileManager.default.removeItem(at: outputURL)
+      throw InstallerError.processLaunchFailed(error.localizedDescription)
+    }
+    defer {
+      try? outputHandle.close()
+      try? FileManager.default.removeItem(at: outputURL)
+    }
+
+    // --yes covers the skills CLI prompts. A null stdin also prevents npx,
+    // git, or npm from waiting on an invisible GUI-app terminal prompt.
+    process.standardInput = FileHandle.nullDevice
+    process.standardOutput = outputHandle
+    process.standardError = outputHandle
 
     do {
       try process.run()
@@ -303,7 +425,7 @@ final class SkillsDirectoryService: ObservableObject {
       throw InstallerError.processLaunchFailed(error.localizedDescription)
     }
 
-    let deadline = Date().addingTimeInterval(180)
+    let deadline = Date().addingTimeInterval(90)
     while process.isRunning && Date() < deadline {
       Thread.sleep(forTimeInterval: 0.1)
     }
@@ -314,8 +436,7 @@ final class SkillsDirectoryService: ObservableObject {
       throw InstallerError.timedOut
     }
 
-    let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-    let output = String(data: outputData, encoding: .utf8) ?? ""
+    let output = (try? String(contentsOf: outputURL, encoding: .utf8)) ?? ""
     return InstallerResult(exitCode: process.terminationStatus, output: output)
   }
 
@@ -378,6 +499,7 @@ final class SkillsDirectoryService: ObservableObject {
     case invalidURL
     case invalidResponse
     case httpStatus(Int)
+    case timedOut
 
     var errorDescription: String? {
       switch self {
@@ -387,6 +509,8 @@ final class SkillsDirectoryService: ObservableObject {
         return "The skills directory returned an invalid response."
       case .httpStatus(let status):
         return "The skills directory returned HTTP " + String(status) + "."
+      case .timedOut:
+        return "skills.sh took too long to respond. Try the search again."
       }
     }
   }
@@ -413,7 +537,7 @@ final class SkillsDirectoryService: ObservableObject {
       case .installedSkillNotFound(let output):
         return installerOutputMessage("The installer finished, but Lazzy could not find the installed skill.", output: output)
       case .timedOut:
-        return "The skills installer timed out after three minutes."
+        return "The skills installer timed out after 90 seconds."
       case .installInProgress:
         return "Another skill is still installing."
       }

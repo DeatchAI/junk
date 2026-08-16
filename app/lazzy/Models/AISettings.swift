@@ -64,6 +64,7 @@ struct DetachSettings {
   private enum Keys {
     static let selectedAgent = "detach_selected_agent"
     static let selectedModelPrefix = "detach_selected_model_"
+    static let selectedModelSettingsPrefix = "detach_selected_model_settings_"
     static let migratedHostedOpenCodeSelection = "detach_migrated_hosted_opencode_selection_v1"
   }
 
@@ -86,7 +87,29 @@ struct DetachSettings {
     }
   }
 
-  /// Until Hosted AI was split out, its persisted agent identifier was
+  static func modelSettings(for agent: String, model: String?) -> AgentModelSettings? {
+    guard let data = UserDefaults.standard.data(forKey: modelSettingsKey(agent: agent, model: model)) else {
+      return nil
+    }
+    return try? JSONDecoder().decode(AgentModelSettings.self, from: data)
+  }
+
+  static func setModelSettings(_ settings: AgentModelSettings?, for agent: String, model: String?) {
+    let key = modelSettingsKey(agent: agent, model: model)
+    guard let settings, settings.reasoningEffort?.isEmpty == false,
+          let data = try? JSONEncoder().encode(settings) else {
+      UserDefaults.standard.removeObject(forKey: key)
+      return
+    }
+    UserDefaults.standard.set(data, forKey: key)
+  }
+
+  private static func modelSettingsKey(agent: String, model: String?) -> String {
+    let modelKey = model?.isEmpty == false ? model! : "__default__"
+    return Keys.selectedModelSettingsPrefix + agent + "_" + modelKey
+  }
+
+  /// Until Detach Cloud was split out, its persisted agent identifier was
   /// `opencode`. Preserve that existing choice once, then leave future
   /// standalone OpenCode selections untouched.
   static func migrateLegacyHostedOpenCodeSelection(availableAgentIDs: Set<String>) {

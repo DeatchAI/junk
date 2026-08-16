@@ -5,6 +5,7 @@
 //  User-configurable keyboard shortcuts persisted in UserDefaults
 //
 
+import AppKit
 import Carbon.HIToolbox
 import SwiftUI
 
@@ -65,6 +66,17 @@ struct KeyShortcut: Equatable {
     case kVK_ANSI_9: return "9"
     default: return "Code \(keyCode)"
     }
+  }
+}
+
+extension NSEvent {
+  func matches(_ shortcut: KeyShortcut) -> Bool {
+    var carbonModifiers = 0
+    if modifierFlags.contains(.shift) { carbonModifiers |= shiftKey }
+    if modifierFlags.contains(.control) { carbonModifiers |= controlKey }
+    if modifierFlags.contains(.option) { carbonModifiers |= optionKey }
+    if modifierFlags.contains(.command) { carbonModifiers |= cmdKey }
+    return Int(keyCode) == shortcut.keyCode && carbonModifiers == shortcut.modifiers
   }
 }
 
