@@ -2,6 +2,86 @@ import AppKit
 import Combine
 import Foundation
 
+#if DEBUG
+private final class DebugDemoShortcutRouter {
+  weak var workspace: FloatingWindowWorkspaceController?
+
+  private var keyDownMonitor: Any?
+  private var functionKeyMonitor: Any?
+  private var functionKeyUpMonitor: Any?
+  private var mouseMoveMonitor: Any?
+  private weak var hoveredWindow: NSWindow?
+  private var isFunctionKeyDown = false
+
+  init() {
+    functionKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) {
+      [weak self] event in
+      guard let self, event.keyCode == 63 else { return event }
+      self.isFunctionKeyDown = event.modifierFlags.contains(.function)
+        || event.cgEvent?.flags.contains(.maskSecondaryFn) == true
+      return event
+    }
+
+    functionKeyUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyUp) {
+      [weak self] event in
+      if event.keyCode == 63 {
+        self?.isFunctionKeyDown = false
+      }
+      return event
+    }
+
+    mouseMoveMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) {
+      [weak self] event in
+      self?.hoveredWindow = event.window
+      return event
+    }
+
+    keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
+      [weak self] event in
+      if event.keyCode == 63 {
+        self?.isFunctionKeyDown = true
+        return event
+      }
+
+      guard let self,
+        let workspace = self.workspace,
+        let task = workspace.tasks.first(where: {
+          guard let hoveredWindow = self.hoveredWindow,
+            $0.controller.isVisible
+          else {
+            return false
+          }
+          return $0.controller.ownsDebugWindow(hoveredWindow)
+        }) ?? workspace.tasks.first(where: { $0.controller.containsPointer() }),
+        let handler = task.controller.onDebugDemoKeyDown
+      else {
+        return event
+      }
+
+      let functionIsDown = self.isFunctionKeyDown
+        || event.modifierFlags.contains(.function)
+        || event.cgEvent?.flags.contains(.maskSecondaryFn) == true
+      return handler(event, functionIsDown) ? nil : event
+    }
+  }
+
+  deinit {
+    if let keyDownMonitor {
+      NSEvent.removeMonitor(keyDownMonitor)
+    }
+    if let functionKeyMonitor {
+      NSEvent.removeMonitor(functionKeyMonitor)
+    }
+    if let functionKeyUpMonitor {
+      NSEvent.removeMonitor(functionKeyUpMonitor)
+    }
+    if let mouseMoveMonitor {
+      NSEvent.removeMonitor(mouseMoveMonitor)
+    }
+  }
+}
+#endif
+
 /// Owns the independent composer windows that make up the floating agent
 /// workspace. A task is retained after its panel closes so an in-flight agent
 /// can continue streaming activity to the notch.
@@ -19,14 +99,21 @@ final class FloatingWindowWorkspaceController: ObservableObject {
   }
 
   @Published private(set) var tasks: [Task] = []
-  /// The notch is only useful after every floating chat panel is closed. This
-  /// deliberately uses visibility rather than key-window status: a visible
-  /// chat still gives the user a full activity surface even when it is not key.
-  @Published private(set) var isAnyComposerVisible = false
   private var lastActiveTaskID: Task.ID?
+#if DEBUG
+  private let debugDemoShortcutRouter: DebugDemoShortcutRouter
+#endif
 
   var configureTask: ((Task) -> Void)?
   var onTaskCreated: ((Task) -> Void)?
+
+  init() {
+#if DEBUG
+    let router = DebugDemoShortcutRouter()
+    debugDemoShortcutRouter = router
+    router.workspace = self
+#endif
+  }
 
   @discardableResult
   func openNewTask(
@@ -44,15 +131,11 @@ final class FloatingWindowWorkspaceController: ObservableObject {
     let controller = FloatingWindowController(wsManager: wsManager)
     let task = Task(controller: controller, wsManager: wsManager)
 
-    controller.onDismiss = { [weak self] in
-      self?.refreshComposerVisibility()
-    }
     controller.onVisibilityChanged = { [weak self, weak task] in
       guard let self, let task else { return }
       if controller.isVisible {
         self.markTaskActive(task)
       }
-      self.refreshComposerVisibility()
     }
     controller.onFrontmostStateChanged = { [weak self, weak task] in
       guard let self, let task else { return }
@@ -75,7 +158,6 @@ final class FloatingWindowWorkspaceController: ObservableObject {
       with: content
     )
     markTaskActive(task)
-    refreshComposerVisibility()
     return task
   }
 
@@ -93,7 +175,6 @@ final class FloatingWindowWorkspaceController: ObservableObject {
     }
     task.controller.bringToFront()
     markTaskActive(task)
-    refreshComposerVisibility()
     return true
   }
 
@@ -107,13 +188,12 @@ final class FloatingWindowWorkspaceController: ObservableObject {
 
     task.controller.bringToFront()
     markTaskActive(task)
-    refreshComposerVisibility()
     return true
   }
 
   /// Voice input follows the user's active task instead of leaking text into a
-  /// different retained composer. From a clean workspace, holding Fn creates
-  /// the first task so the gesture is useful from anywhere on macOS.
+  /// different retained composer. A focused composer takes priority over the
+  /// global App Shot Fn action.
   @discardableResult
   func prepareForVoiceInput(at location: NSPoint) -> Task {
     let task = lastActiveTaskID.flatMap { id in tasks.first { $0.id == id } }
@@ -127,7 +207,6 @@ final class FloatingWindowWorkspaceController: ObservableObject {
 
     task.controller.bringToFront()
     markTaskActive(task)
-    refreshComposerVisibility()
     return task
   }
 
@@ -135,10 +214,4 @@ final class FloatingWindowWorkspaceController: ObservableObject {
     lastActiveTaskID = task.id
   }
 
-  private func refreshComposerVisibility() {
-    let value = tasks.contains { $0.controller.isVisible }
-    if isAnyComposerVisible != value {
-      isAnyComposerVisible = value
-    }
-  }
 }

@@ -11,6 +11,10 @@ struct VoiceDictationInsertion: Equatable {
 /// Controller for the floating AI chat window
 class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
 
+#if DEBUG
+  private static weak var debugPointerTarget: FloatingWindowController?
+#endif
+
   private var chatWindow: NSPanel?
   let taskId = UUID()
   @Published private(set) var isVisible = false
@@ -18,9 +22,12 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
   @Published var isExpanded = false
   @Published var selectedAgent: String
   @Published var selectedModel: String?
+  @Published var selectedModelSettings: AgentModelSettings?
   @Published private(set) var voiceDictationState: VoiceDictationState = .idle
   @Published private(set) var voicePartialTranscript = ""
   @Published private(set) var dictationInsertion: VoiceDictationInsertion?
+  private var voiceFunctionKeyMonitor: Any?
+  private var isVoiceFunctionKeyHeld = false
 
   // Stable anchor to prevent drifting during resize
   private var stableTopVisibleY: CGFloat?
@@ -49,6 +56,13 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
 
   // Callback when user starts a new chat
   var onNewChat: (() -> Void)?
+  var onVoiceInputBegan: (() -> Void)?
+  var onVoiceInputEnded: (() -> Void)?
+  var onVoiceInputToggled: (() -> Void)?
+  var onVoiceInputCancelled: (() -> Void)?
+#if DEBUG
+  var onDebugDemoKeyDown: ((NSEvent, Bool) -> Bool)?
+#endif
   var onDismiss: (() -> Void)?
   /// Returns the on-screen notch frame when this composer should visibly hand
   /// off to a detached run. A nil result keeps ordinary close behavior.
@@ -59,8 +73,14 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
   var onVisibilityChanged: (() -> Void)?
 
   // Window configuration
-  private let windowWidth: CGFloat = 520
-  private let windowHeight: CGFloat = 200
+  /// The compact composer is deliberately fixed-width. Without a width
+  /// contract, NSHostingView can re-fit a borderless panel when a media view
+  /// changes from its loading state to its natural video size.
+  static let compactWindowWidth: CGFloat = 520
+  private let windowWidth: CGFloat = FloatingWindowController.compactWindowWidth
+  // Keep the compact composer stable while attachments are added or removed.
+  // Responses may still extend the window beyond this baseline.
+  private let windowHeight: CGFloat = 280
 
   init(
     wsManager: WebSocketManager,
@@ -70,7 +90,14 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
     self.wsManager = wsManager
     self.selectedAgent = selectedAgent
     self.selectedModel = selectedModel
+    self.selectedModelSettings = DetachSettings.modelSettings(for: selectedAgent, model: selectedModel)
     super.init()
+  }
+
+  deinit {
+    if let voiceFunctionKeyMonitor {
+      NSEvent.removeMonitor(voiceFunctionKeyMonitor)
+    }
   }
 
   // MARK: - Show/Hide
@@ -132,6 +159,8 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
 
   /// Hide the chat window
   func hide() {
+    updateDebugPointerHover(false)
+    cancelVoiceInputIfNeeded()
     chatWindow?.orderOut(nil)
     isVisible = false
     onVisibilityChanged?()
@@ -142,6 +171,8 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
   /// Dismisses only this composer. Any active run keeps its dedicated connection
   /// and remains visible through the shared notch task list.
   func dismiss() {
+    updateDebugPointerHover(false)
+    cancelVoiceInputIfNeeded()
     guard let window = chatWindow, isVisible, let destination = onDismissTransition?() else {
       hide()
       onDismiss?()
@@ -184,6 +215,7 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
   func showWithConversation(at location: NSPoint) {
     // Force recreate window so onAppear fires and loads the conversation
     if chatWindow != nil {
+      cancelVoiceInputIfNeeded()
       chatWindow?.close()
       chatWindow = nil
     }
@@ -248,9 +280,9 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
       let currentFrame = window.frame
       let compactFrame = NSRect(
         x: currentFrame.minX,
-        y: currentFrame.maxY - 200,  // Approximate re-positioning
+        y: currentFrame.maxY - windowHeight,
         width: windowWidth,
-        height: 200
+        height: windowHeight
       )
       window.setFrame(compactFrame, display: true, animate: true)
     }
@@ -260,12 +292,18 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
 
   private func createChatWindow() {
     // Create a floating panel - borderless for clean look
-    let panel = KeyablePanel(
+    let panel = FloatingComposerPanel(
       contentRect: NSRect(x: 0, y: 0, width: windowWidth, height: windowHeight),
       styleMask: [.borderless, .nonactivatingPanel],
       backing: .buffered,
       defer: false
     )
+
+    // Keep AppKit from adopting the hosting view's intrinsic width. Height
+    // remains managed by updateWindowHeight below.
+    panel.fixedContentWidth = windowWidth
+    panel.minSize = NSSize(width: windowWidth, height: windowHeight)
+    panel.maxSize = NSSize(width: windowWidth, height: .greatestFiniteMagnitude)
 
     panel.isMovableByWindowBackground = true
     panel.level = .floating
@@ -273,7 +311,12 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
     panel.hidesOnDeactivate = false
     panel.backgroundColor = .clear
     panel.isOpaque = false
-    panel.hasShadow = true
+#if DEBUG
+    panel.acceptsMouseMovedEvents = true
+#endif
+    // The visible composer draws its own rounded shadow. Letting AppKit shadow
+    // this transparent panel adds a rectangular halo around the whole window.
+    panel.hasShadow = false
 
     // Create the chat view
     let chatView = FloatingChatView(
@@ -299,6 +342,40 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
 
     chatWindow = panel
     panel.delegate = self
+    installLocalVoiceFunctionKeyMonitor()
+  }
+
+  /// Fn is intentionally local to the focused composer. This avoids a global
+  /// key-tap race with App Shot and prevents a hidden task from recording.
+  private func installLocalVoiceFunctionKeyMonitor() {
+    // Voice mode is temporarily disabled while its UX is finalized. Do not
+    // install a monitor or consume Fn events until the feature is re-enabled.
+    guard FeatureFlags.voiceModeEnabled else { return }
+    guard voiceFunctionKeyMonitor == nil else { return }
+
+    voiceFunctionKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) {
+      [weak self] event in
+      guard let self,
+        self.isVisible,
+        self.chatWindow?.isKeyWindow == true,
+        event.keyCode == 63
+      else {
+        return event
+      }
+
+      let functionIsDown = event.modifierFlags.contains(.function)
+      if functionIsDown && !self.isVoiceFunctionKeyHeld {
+        self.isVoiceFunctionKeyHeld = true
+        self.onVoiceInputBegan?()
+      } else if !functionIsDown && self.isVoiceFunctionKeyHeld {
+        self.isVoiceFunctionKeyHeld = false
+        self.onVoiceInputEnded?()
+      }
+
+      // The focused composer owns Fn, so it should not also trigger the
+      // system Emoji/Dictation action.
+      return nil
+    }
   }
 
   /// Update window height with animation
@@ -326,8 +403,8 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
 
     let currentFrame = window.frame
     let screenFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? NSRect.zero
-    let maximumHeight = max(120, screenFrame.height)
-    let newHeight = min(max(requestedHeight, 120), maximumHeight)
+    let maximumHeight = max(windowHeight, screenFrame.height)
+    let newHeight = min(max(requestedHeight, windowHeight), maximumHeight)
 
     // Capture the anchors if we don't have them
     if stableTopVisibleY == nil || stableBottomVisibleY == nil {
@@ -361,7 +438,7 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
     let newFrame = NSRect(
       x: currentFrame.origin.x,
       y: newOriginY,
-      width: currentFrame.width,
+      width: windowWidth,
       height: newHeight
     )
 
@@ -389,6 +466,11 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
     resetAnchor()
   }
 
+  func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+    guard sender === chatWindow else { return frameSize }
+    return NSSize(width: windowWidth, height: frameSize.height)
+  }
+
   func windowDidBecomeKey(_ notification: Notification) {
     // Optional: Refresh anchor when we focus to be extra safe
     resetAnchor()
@@ -396,6 +478,10 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
   }
 
   func windowDidResignKey(_ notification: Notification) {
+    if isVoiceFunctionKeyHeld {
+      isVoiceFunctionKeyHeld = false
+      onVoiceInputEnded?()
+    }
     updateFrontmostState()
   }
 
@@ -463,5 +549,88 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
       isFrontmost = newValue
       onFrontmostStateChanged?()
     }
+  }
+
+  /// Debug demo shortcuts follow the panel under the pointer. This matters
+  /// when several retained floating composers are visible at once: keyboard
+  /// events otherwise reach every local monitor and the first panel wins.
+  func updateDebugPointerHover(_ isHovering: Bool) {
+#if DEBUG
+    if isHovering {
+      Self.debugPointerTarget = self
+    } else if Self.debugPointerTarget === self {
+      Self.debugPointerTarget = nil
+    }
+#endif
+  }
+
+  func ownsDebugWindow(_ window: NSWindow) -> Bool {
+#if DEBUG
+    return chatWindow === window
+#else
+    return false
+#endif
+  }
+
+  func containsPointer(_ point: NSPoint = NSEvent.mouseLocation) -> Bool {
+    guard isVisible, let window = chatWindow else { return false }
+
+#if DEBUG
+    // SwiftUI's hover hit-test is the authoritative target when panels
+    // overlap. It follows the actual visible surface rather than the order in
+    // which the AppKit local key monitors were installed.
+    if let debugPointerTarget = Self.debugPointerTarget {
+      if debugPointerTarget.isVisible {
+        return debugPointerTarget === self
+      }
+      Self.debugPointerTarget = nil
+    }
+#endif
+
+    guard window.frame.contains(point) else { return false }
+
+    // Several panels can overlap while retained tasks are being restored. In
+    // that case only the panel the user can actually see at this point should
+    // consume the Debug shortcut.
+    return NSWindow.windowNumber(at: point, belowWindowWithWindowNumber: 0)
+      == window.windowNumber
+  }
+
+  private func cancelVoiceInputIfNeeded() {
+    let shouldCancel = isVoiceFunctionKeyHeld || voiceDictationState != .idle
+    isVoiceFunctionKeyHeld = false
+    guard shouldCancel else { return }
+    onVoiceInputCancelled?()
+  }
+}
+
+/// AppKit can ask a borderless hosting window to adopt its content's fitting
+/// width even when the panel is not user-resizable. Keep the composer width
+/// stable while allowing the response area to grow vertically.
+private final class FloatingComposerPanel: KeyablePanel {
+  var fixedContentWidth: CGFloat = 0
+
+  override func setFrame(
+    _ frameRect: NSRect,
+    display flag: Bool,
+    animate animateFlag: Bool
+  ) {
+    guard fixedContentWidth > 0 else {
+      super.setFrame(frameRect, display: flag, animate: animateFlag)
+      return
+    }
+
+    var fixedFrame = frameRect
+    fixedFrame.size.width = fixedContentWidth
+    super.setFrame(fixedFrame, display: flag, animate: animateFlag)
+  }
+
+  override func setContentSize(_ size: NSSize) {
+    guard fixedContentWidth > 0 else {
+      super.setContentSize(size)
+      return
+    }
+
+    super.setContentSize(NSSize(width: fixedContentWidth, height: size.height))
   }
 }
