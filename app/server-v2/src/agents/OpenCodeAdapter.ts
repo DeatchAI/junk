@@ -12,7 +12,34 @@ import { ACPAgentProcess } from "./ACPAgentProcess";
 
 export class OpenCodeAdapter implements AgentAdapter {
   readonly id = "opencode" as const;
-  readonly displayName = "Hosted AI";
+  readonly displayName = "OpenCode";
+
+  async isAvailable() {
+    return Boolean(await findExecutable("opencode"));
+  }
+
+  run(request: ChatRequest, callbacks: AgentStreamCallbacks): AgentRun {
+    return runOpenCodeACP({
+      request,
+      callbacks,
+      activity: "Starting OpenCode with your configured providers",
+      args: ["acp"],
+      model: request.model?.trim(),
+      modelSettings: request.modelSettings,
+      env: standaloneOpenCodeEnvironment(),
+      unavailableMessage: "OpenCode is unavailable. Reinstall or update Detach.",
+    });
+  }
+}
+
+/**
+ * Detach Cloud deliberately uses a distinct OpenCode configuration and a
+ * short-lived model token. It must never read or overwrite a user's OpenCode
+ * credentials, models, or plugins used by the standalone adapter above.
+ */
+export class HostedOpenCodeAdapter implements AgentAdapter {
+  readonly id = "hosted" as const;
+  readonly displayName = "Detach Cloud";
 
   constructor(private readonly hostedModels: HostedModelSessionManager) {}
 
@@ -21,58 +48,114 @@ export class OpenCodeAdapter implements AgentAdapter {
   }
 
   run(request: ChatRequest, callbacks: AgentStreamCallbacks): AgentRun {
-    let cancelled = false;
-    let process: ACPAgentProcess | undefined;
+    return runOpenCodeACP({
+      request,
+      callbacks,
+      activity: "Connecting to Detach Cloud",
+      args: ["acp", "--pure"],
+      modelSettings: request.modelSettings,
+      unavailableMessage: "The bundled OpenCode harness is unavailable. Reinstall or update Detach.",
+      prepare: async () => {
+        const executable = await findExecutable("opencode");
+        if (!executable) {
+          throw new Error("The bundled OpenCode harness is unavailable. Reinstall or update Detach.");
+        }
 
-    const finished = (async () => {
-      const executable = await findExecutable("opencode");
-      if (!executable) {
-        throw new Error("The bundled OpenCode harness is unavailable. Reinstall or update Detach.");
-      }
+        const session = await this.hostedModels.session(request.model);
+        const model = request.model?.trim() || session.defaultModel;
+        const modelCapability = session.models.find((item) => item.id === model);
+        if (!modelCapability) {
+          throw new Error(`Detach Cloud model '${model}' is not available for this Detach build.`);
+        }
 
-      callbacks.onActivity("Connecting to hosted models");
-      const session = await this.hostedModels.session(request.model);
-      const model = request.model?.trim() || session.defaultModel;
-      const modelCapability = session.models.find((item) => item.id === model);
-      if (!modelCapability) {
-        throw new Error(`Hosted model '${model}' is not available for this Detach build.`);
-      }
+        callbacks.onActivity(`Using ${modelCapability.displayName}`);
+        return {
+          executable,
+          // ACP's model config value is provider-qualified. The hosted
+          // session catalog IDs are intentionally provider-neutral; ACP
+          // applies the selected reasoning effort through its separate
+          // `effort` config option.
+          model: hostedOpenCodeModelReference(model),
+          env: {
+            ...openCodeStateEnvironment(),
+            DETACH_HOSTED_MODEL_TOKEN: session.token,
+            OPENCODE_CONFIG_CONTENT: JSON.stringify(buildOpenCodeConfig(session, model)),
+            OPENCODE_DISABLE_AUTOUPDATE: "true",
+            NO_COLOR: "1",
+          },
+        };
+      },
+    });
+  }
+}
 
-      process = new ACPAgentProcess({
-        command: executable,
-        args: ["acp", "--pure"],
-        cwd: resolveWorkspace(request.workspacePath),
-        env: {
-          ...openCodeStateEnvironment(),
-          DETACH_HOSTED_MODEL_TOKEN: session.token,
-          OPENCODE_CONFIG_CONTENT: JSON.stringify(buildOpenCodeConfig(session, model)),
-          OPENCODE_DISABLE_AUTOUPDATE: "true",
-          NO_COLOR: "1",
-        },
-        mcpServers: request.mcpServers,
-        callbacks,
-      });
+/**
+ * Do not set XDG paths or OPENCODE_CONFIG_CONTENT here: standalone OpenCode
+ * must inherit the same login, providers, model and plugins the user chose.
+ */
+export function standaloneOpenCodeEnvironment() {
+  return {
+    OPENCODE_DISABLE_AUTOUPDATE: "true",
+    NO_COLOR: "1",
+  };
+}
 
-      callbacks.onActivity(`Using ${modelCapability.displayName}`);
-      const result = await withTimeout(
-        process.run(buildAgentPrompt(request)),
-        resolveOpenCodeTimeout(request.timeoutMs),
-        () => {
-          cancelled = true;
-          process?.cancel();
-        },
-      );
-      return { text: result.text };
-    })();
+interface OpenCodeRunOptions {
+  request: ChatRequest;
+  callbacks: AgentStreamCallbacks;
+  activity: string;
+  args: string[];
+  model?: string;
+  modelSettings?: ChatRequest["modelSettings"];
+  env?: Record<string, string | undefined>;
+  unavailableMessage: string;
+  prepare?: () => Promise<{
+    executable: string;
+    model?: string;
+    env?: Record<string, string | undefined>;
+  }>;
+}
 
-    return {
-      cancel() {
+function runOpenCodeACP(options: OpenCodeRunOptions): AgentRun {
+  let cancelled = false;
+  let process: ACPAgentProcess | undefined;
+
+  const finished = (async () => {
+    options.callbacks.onActivity(options.activity);
+    const prepared = options.prepare
+      ? await options.prepare()
+      : { executable: await findExecutable("opencode"), model: options.model, env: options.env };
+    if (!prepared.executable) throw new Error(options.unavailableMessage);
+
+    process = new ACPAgentProcess({
+      command: prepared.executable,
+      args: options.args,
+      cwd: resolveWorkspace(options.request.workspacePath),
+      env: prepared.env,
+      mcpServers: options.request.mcpServers,
+      model: prepared.model ?? options.model,
+      modelSettings: options.modelSettings,
+      activityAgent: options.request.agent ?? "opencode",
+      callbacks: options.callbacks,
+    });
+    const result = await withTimeout(
+      process.run(buildAgentPrompt(options.request)),
+      resolveOpenCodeTimeout(options.request.timeoutMs),
+      () => {
         cancelled = true;
         process?.cancel();
       },
-      finished: finished.then((result) => cancelled ? { text: result.text } : result),
-    };
-  }
+    );
+    return { text: result.text };
+  })();
+
+  return {
+    cancel() {
+      cancelled = true;
+      process?.cancel();
+    },
+    finished: finished.then((result) => cancelled ? { text: result.text } : result),
+  };
 }
 
 function openCodeStateEnvironment(): Record<string, string | undefined> {
@@ -95,7 +178,7 @@ export function buildOpenCodeConfig(session: HostedModelSession, selectedModel: 
     model.id,
     openCodeModelConfig(model),
   ]));
-  const model = `detach-hosted/${selectedModel}`;
+  const model = hostedOpenCodeModelReference(selectedModel);
 
   return {
     $schema: "https://opencode.ai/config.json",
@@ -105,8 +188,11 @@ export function buildOpenCodeConfig(session: HostedModelSession, selectedModel: 
     share: "disabled",
     provider: {
       "detach-hosted": {
-        npm: "@ai-sdk/openai-compatible",
-        name: "Detach Hosted",
+        // The Detach control plane intentionally exposes only /v1/responses.
+        // OpenCode documents @ai-sdk/openai as the Responses-capable provider;
+        // @ai-sdk/openai-compatible would silently use /chat/completions.
+        npm: "@ai-sdk/openai",
+        name: "Detach Cloud",
         options: {
           baseURL: session.baseURL,
           apiKey: "{env:DETACH_HOSTED_MODEL_TOKEN}",
@@ -128,6 +214,11 @@ export function buildOpenCodeConfig(session: HostedModelSession, selectedModel: 
   };
 }
 
+export function hostedOpenCodeModelReference(selectedModel: string) {
+  const model = selectedModel.trim();
+  return model.startsWith("detach-hosted/") ? model : `detach-hosted/${model}`;
+}
+
 function openCodeModelConfig(model: HostedModelCapability) {
   const limit = model.contextWindow || model.maxOutputTokens
     ? {
@@ -136,9 +227,21 @@ function openCodeModelConfig(model: HostedModelCapability) {
       }
     : undefined;
 
+  const reasoningEfforts = model.reasoningEfforts ?? [];
+  const variants = Object.fromEntries(
+    reasoningEfforts.map((effort) => [effort, {
+      reasoningEffort: effort,
+      // Keep the setting explicit at the request-body boundary as well. This
+      // makes the hosted Responses bridge work with OpenCode provider package
+      // versions that do not forward the generic reasoningEffort option.
+      body: { reasoning: { effort } },
+    }]),
+  );
+
   return {
     name: model.displayName,
     ...(limit ? { limit } : {}),
+    ...(Object.keys(variants).length > 0 ? { variants } : {}),
   };
 }
 

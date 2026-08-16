@@ -5,6 +5,7 @@ import type { AgentAdapter, AgentRun, AgentStreamCallbacks } from "./AgentAdapte
 import { buildAgentPrompt, resolveWorkspace } from "./AgentPrompt";
 import { asStringRecord, consumeJsonLines, createTempJsonFile, getString, summarizeShellCommand, withTimeout } from "./CliAdapterUtils";
 import { buildClaudeAllowedTools, buildClaudeMCPConfig, enabledMCPServers } from "./MCPConfig";
+import { isRetryableNetworkError } from "../activity/ActivityNormalizer";
 
 export class ClaudeAdapter implements AgentAdapter {
   readonly id = "claude" as const;
@@ -82,13 +83,12 @@ export class ClaudeAdapter implements AgentAdapter {
         },
       });
 
-      callbacks.onActivity("Claude is thinking");
+      callbacks.onActivity("Thinking…");
 
       heartbeat = setInterval(() => {
         if (cancelled) return;
-        const idleSeconds = Math.floor((Date.now() - lastActivityAt) / 1000);
-        if (idleSeconds >= 15) {
-          callbacks.onActivity(`Claude is still working (${idleSeconds}s)`);
+        if (Date.now() - lastActivityAt >= 15_000) {
+          callbacks.onActivity("Working…");
         }
       }, 15_000);
 
@@ -144,7 +144,7 @@ function resolveAgentTimeout(requested: number | undefined, agentOverride: strin
   return Number.isFinite(value) ? Math.max(30_000, Math.min(value, 3_600_000)) : 900_000;
 }
 
-function buildClaudeArgs(prompt: string, request: ChatRequest) {
+export function buildClaudeArgs(prompt: string, request: ChatRequest) {
   const args = [
     "-p",
     prompt,
@@ -159,6 +159,11 @@ function buildClaudeArgs(prompt: string, request: ChatRequest) {
 
   if (request.model?.trim()) {
     args.push("--model", request.model.trim());
+  }
+
+  const reasoningEffort = request.modelSettings?.reasoningEffort?.trim();
+  if (reasoningEffort && ["low", "medium", "high", "xhigh", "max"].includes(reasoningEffort)) {
+    args.push("--effort", reasoningEffort);
   }
 
   return args;
@@ -229,7 +234,7 @@ function activityForToolUse(name: string, input: unknown) {
 function summarizeClaudeStderr(chunk: string) {
   const line = chunk.trim().split(/\r?\n/).map((item) => item.trim()).filter(Boolean).at(-1);
   if (!line) return undefined;
-  if (line.toLowerCase().includes("error")) return line;
+  if (isRetryableNetworkError(line)) return "Retrying…";
   return undefined;
 }
 

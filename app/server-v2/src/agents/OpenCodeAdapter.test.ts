@@ -5,31 +5,62 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
 import { HostedModelSessionManager } from "../hosted/HostedModelSessionManager";
-import { buildOpenCodeConfig, OpenCodeAdapter } from "./OpenCodeAdapter";
+import {
+  buildOpenCodeConfig,
+  HostedOpenCodeAdapter,
+  hostedOpenCodeModelReference,
+  standaloneOpenCodeEnvironment,
+} from "./OpenCodeAdapter";
 
 describe("OpenCode hosted configuration", () => {
+  test("qualifies hosted ACP model references", () => {
+    expect(hostedOpenCodeModelReference("openai/gpt-5.6-luna")).toBe(
+      "detach-hosted/openai/gpt-5.6-luna",
+    );
+  });
+
+  test("keeps standalone OpenCode attached to the user's own configuration", () => {
+    const environment = standaloneOpenCodeEnvironment();
+
+    expect(environment).toEqual({
+      OPENCODE_DISABLE_AUTOUPDATE: "true",
+      NO_COLOR: "1",
+    });
+    expect(environment).not.toHaveProperty("OPENCODE_CONFIG_CONTENT");
+    expect(environment).not.toHaveProperty("DETACH_HOSTED_MODEL_TOKEN");
+    expect(environment).not.toHaveProperty("XDG_CONFIG_HOME");
+  });
+
   test("pins the provider to the Detach proxy and reads only the scoped token from env", () => {
     const config = buildOpenCodeConfig({
-      baseURL: "https://detach.example/api/hosted-model/v1",
+      baseURL: "https://detach.example/api/v1",
       token: "must-not-be-written-to-config",
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
       defaultModel: "openai/gpt-5.6-terra",
       models: [{
         id: "openai/gpt-5.6-terra",
         displayName: "GPT-5.6 Terra",
-        provider: "vercel",
+        provider: "kie",
         contextWindow: 400000,
         maxOutputTokens: 128000,
+        reasoningEfforts: ["none", "low", "high"],
       }],
     }, "openai/gpt-5.6-terra");
 
     expect(config.model).toBe("detach-hosted/openai/gpt-5.6-terra");
+    expect(config.provider["detach-hosted"].npm).toBe("@ai-sdk/openai");
     expect(config.provider["detach-hosted"].options).toEqual({
-      baseURL: "https://detach.example/api/hosted-model/v1",
+      baseURL: "https://detach.example/api/v1",
       apiKey: "{env:DETACH_HOSTED_MODEL_TOKEN}",
     });
     expect(JSON.stringify(config)).not.toContain("must-not-be-written-to-config");
     expect(config.permission["*"]).toBe("ask");
+    const provider = config.provider["detach-hosted"]!;
+    expect(provider.models["openai/gpt-5.6-terra"]!.variants).toEqual({
+      none: { reasoningEffort: "none", body: { reasoning: { effort: "none" } } },
+      low: { reasoningEffort: "low", body: { reasoning: { effort: "low" } } },
+      high: { reasoningEffort: "high", body: { reasoning: { effort: "high" } } },
+    });
   });
 
   test("completes a real OpenCode ACP turn through the hosted proxy contract", async () => {
@@ -46,36 +77,84 @@ describe("OpenCode hosted configuration", () => {
     if (!await Bun.file(executable).exists()) return;
 
     let receivedModel = "";
+    let receivedReasoningEffort = "";
+    let receivedPath = "";
     const gateway = Bun.serve({
       port: await availablePort(),
       hostname: "127.0.0.1",
       async fetch(request) {
-        const body = await request.json() as { model?: string };
+        receivedPath = new URL(request.url).pathname;
+        const body = await request.json() as {
+          model?: string;
+          reasoning?: { effort?: string };
+        };
         receivedModel = body.model ?? "";
-        const now = Math.floor(Date.now() / 1_000);
-        const chunks = [
-          {
-            id: "chatcmpl-detach-test",
-            object: "chat.completion.chunk",
-            created: now,
-            model: receivedModel,
-            choices: [{
-              index: 0,
-              delta: { role: "assistant", content: "ACP gateway OK" },
-              finish_reason: null,
+        receivedReasoningEffort = body.reasoning?.effort ?? "";
+        const response = {
+          id: "resp_detach_test",
+          object: "response",
+          created_at: Math.floor(Date.now() / 1_000),
+          status: "completed",
+          model: receivedModel,
+          output: [{
+            id: "msg_detach_test",
+            type: "message",
+            status: "completed",
+            role: "assistant",
+            content: [{
+              type: "output_text",
+              text: "ACP gateway OK",
+              annotations: [],
             }],
+          }],
+          usage: { input_tokens: 10, output_tokens: 3, total_tokens: 13 },
+        };
+        const events = [
+          {
+            type: "response.created",
+            response: { ...response, status: "in_progress", output: [], usage: null },
           },
           {
-            id: "chatcmpl-detach-test",
-            object: "chat.completion.chunk",
-            created: now,
-            model: receivedModel,
-            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-            usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 },
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              id: "msg_detach_test",
+              type: "message",
+              status: "in_progress",
+              role: "assistant",
+              content: [],
+            },
           },
+          {
+            type: "response.content_part.added",
+            item_id: "msg_detach_test",
+            output_index: 0,
+            content_index: 0,
+            part: { type: "output_text", text: "", annotations: [] },
+          },
+          {
+            type: "response.output_text.delta",
+            item_id: "msg_detach_test",
+            output_index: 0,
+            content_index: 0,
+            delta: "ACP gateway OK",
+          },
+          {
+            type: "response.output_text.done",
+            item_id: "msg_detach_test",
+            output_index: 0,
+            content_index: 0,
+            text: "ACP gateway OK",
+          },
+          {
+            type: "response.output_item.done",
+            output_index: 0,
+            item: response.output[0],
+          },
+          { type: "response.completed", response },
         ];
         return new Response(
-          `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("")}data: [DONE]\n\n`,
+          `${events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
           { headers: { "content-type": "text/event-stream" } },
         );
       },
@@ -88,7 +167,6 @@ describe("OpenCode hosted configuration", () => {
     Bun.env.DETACH_OPENCODE_DATA_DIR = state;
 
     const manager = new HostedModelSessionManager({
-      hostedMode: true,
       fetcher: (async (_input: string | URL | Request, _init?: RequestInit) => Response.json({
         baseURL: `http://127.0.0.1:${gateway.port}/v1`,
         token: "short-lived-test-token",
@@ -97,9 +175,10 @@ describe("OpenCode hosted configuration", () => {
         models: [{
           id: "openai/gpt-5.6-terra",
           displayName: "GPT-5.6 Terra",
-          provider: "vercel",
+          provider: "kie",
           contextWindow: 1_050_000,
           maxOutputTokens: 128_000,
+          reasoningEfforts: ["low"],
         }],
       })) as unknown as typeof fetch,
     });
@@ -110,20 +189,28 @@ describe("OpenCode hosted configuration", () => {
 
     try {
       const chunks: string[] = [];
-      const run = new OpenCodeAdapter(manager).run({
+      const run = new HostedOpenCodeAdapter(manager).run({
         type: "chat",
         text: "Reply exactly with: ACP gateway OK",
         workspacePath: workspace,
         model: "openai/gpt-5.6-terra",
+        modelSettings: { reasoningEffort: "low" },
       }, {
         onActivity() {},
         onChunk(text) { chunks.push(text); },
         async onPermission() { return false; },
       });
 
-      await expect(run.finished).resolves.toEqual({ text: "ACP gateway OK" });
+      const result = await run.finished.catch((error) => {
+        throw new Error(
+          `OpenCode Responses handshake failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+      expect(result).toEqual({ text: "ACP gateway OK" });
       expect(chunks.join("")).toBe("ACP gateway OK");
       expect(receivedModel).toBe("openai/gpt-5.6-terra");
+      expect(receivedReasoningEffort).toBe("low");
+      expect(receivedPath).toBe("/v1/responses");
     } finally {
       gateway.stop(true);
       Bun.env.DETACH_OPENCODE_PATH = previousExecutable;

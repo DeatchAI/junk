@@ -50,6 +50,129 @@ describe("ACP tool approval mapping", () => {
 });
 
 describe("ACPAgentProcess", () => {
+  test("sets the selected model and reasoning effort through ACP configuration", async () => {
+    const fakeAgent = createTempTextFile("detach-model-acp-", "agent.ts", `
+let buffer = "";
+let modelSet = false;
+let effortSet = false;
+function send(message) { process.stdout.write(JSON.stringify(message) + "\\n"); }
+for await (const chunk of Bun.stdin.stream()) {
+  buffer += Buffer.from(chunk).toString("utf8");
+  const lines = buffer.split(/\\r?\\n/);
+  buffer = lines.pop() || "";
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const message = JSON.parse(line);
+    if (message.method === "initialize") {
+      send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: 1, agentCapabilities: {} } });
+    } else if (message.method === "session/new") {
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          sessionId: "model-session",
+          configOptions: [
+            { id: "model", category: "model" },
+            { id: "effort", category: "thought_level" },
+          ],
+        },
+      });
+    } else if (message.method === "session/set_config_option") {
+      if (message.params.configId === "model") {
+        if (message.params.value !== "opencode/deepseek-v4-flash-free") process.exit(4);
+        modelSet = true;
+      } else if (message.params.configId === "effort") {
+        if (message.params.value !== "high") process.exit(5);
+        effortSet = true;
+      } else {
+        process.exit(6);
+      }
+      send({ jsonrpc: "2.0", id: message.id, result: { configOptions: [] } });
+    } else if (message.method === "session/prompt") {
+      if (!modelSet || !effortSet) process.exit(7);
+      send({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "model-session",
+          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "OK" } }
+        }
+      });
+      send({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+    }
+  }
+}
+`);
+    const agentProcess = new ACPAgentProcess({
+      command: process.execPath,
+      args: [fakeAgent.path],
+      cwd: process.cwd(),
+      model: "opencode/deepseek-v4-flash-free",
+      modelSettings: { reasoningEffort: "high" },
+      activityAgent: "opencode",
+      callbacks: { onActivity() {}, onChunk() {} },
+    });
+
+    try {
+      await expect(agentProcess.run("Reply with OK")).resolves.toEqual({ text: "OK" });
+    } finally {
+      fakeAgent.cleanup();
+    }
+  });
+  test("rejects a tool turn that completes without a final assistant response", async () => {
+    const fakeAgent = createTempTextFile("detach-empty-acp-", "agent.ts", `
+let buffer = "";
+function send(message) { process.stdout.write(JSON.stringify(message) + "\\n"); }
+for await (const chunk of Bun.stdin.stream()) {
+  buffer += Buffer.from(chunk).toString("utf8");
+  const lines = buffer.split(/\\r?\\n/);
+  buffer = lines.pop() || "";
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const message = JSON.parse(line);
+    if (message.method === "initialize") {
+      send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: 1, agentCapabilities: {} } });
+    } else if (message.method === "session/new") {
+      send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "empty-session" } });
+    } else if (message.method === "session/prompt") {
+      send({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "empty-session",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "tool-empty",
+            title: "Read memory",
+            rawInput: { command: "test -f .detach/memory/MEMORY.md" }
+          }
+        }
+      });
+      send({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+    }
+  }
+}
+`);
+    const agent = new ACPAgentProcess({
+      command: process.execPath,
+      args: [fakeAgent.path],
+      cwd: process.cwd(),
+      activityAgent: "hosted",
+      callbacks: {
+        onActivity() {},
+        onChunk() {},
+      },
+    });
+
+    try {
+      await expect(agent.run("hello")).rejects.toThrow(
+        "completed its tool call but returned no final response",
+      );
+    } finally {
+      fakeAgent.cleanup();
+    }
+  });
+
   test("injects MCP servers, streams text, and auto-approves a trusted tool", async () => {
     const fakeAgent = createTempTextFile("detach-fake-acp-", "agent.ts", `
 let buffer = "";
@@ -124,6 +247,7 @@ for await (const chunk of Bun.stdin.stream()) {
       command: process.execPath,
       args: [fakeAgent.path],
       cwd: process.cwd(),
+      activityAgent: "opencode",
       mcpServers: [{
         id: "detach-browser-tools",
         name: "Detach Browser",

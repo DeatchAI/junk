@@ -1,5 +1,6 @@
 import type { ChatRequest } from "../protocol/messages";
 import browserSkill from "../browser/skill/SKILL.md" with { type: "text" };
+import { CAPABILITY_BROKER_ID } from "../capabilities/CapabilityConstants";
 
 export function buildAgentPrompt(request: ChatRequest) {
   const sections: string[] = [];
@@ -28,6 +29,10 @@ export function buildAgentPrompt(request: ChatRequest) {
     sections.push(macOSToolInstructions());
   }
 
+  if (hasDetachCapabilityBroker(request)) {
+    sections.push(capabilityToolInstructions());
+  }
+
   if (request.mcpServers?.some((server) => server.enabled && server.id === "detach-secrets-tools")) {
     sections.push([
       "Secure credentials:",
@@ -48,6 +53,21 @@ export function hasDetachBrowserTools(request: ChatRequest) {
 
 export function hasDetachMacOSTools(request: ChatRequest) {
   return request.mcpServers?.some((server) => server.enabled && server.id === "detach-macos-tools") ?? false;
+}
+
+export function hasDetachCapabilityBroker(request: ChatRequest) {
+  return request.mcpServers?.some((server) => server.enabled && server.id === CAPABILITY_BROKER_ID) ?? false;
+}
+
+export function capabilityToolInstructions() {
+  return [
+    "Detach capability directory:",
+    "- Detach provides Browser, macOS, and Secrets capabilities through one compact broker; do not ask the user to attach an MCP server before trying them.",
+    "- Call detach_capabilities_list when you need to find the right capability or verify its connection.",
+    "- Call detach_capability_describe for only the capability you need. Its response contains the operation schemas; do not assume unrelated operations are available without describing them.",
+    "- Call detach_capability_invoke with the described capability ID, operation name, and arguments. Browser calls use the user's focused signed-in Chrome; macOS calls use the connected Detach app; Secrets uses the dedicated Touch ID flow and never returns credential values.",
+    "- Use Browser for web-page DOM work and macOS for native app UI. If a capability reports needs_connection, surface the exact connection hint after the invocation/list check.",
+  ].join("\n");
 }
 
 export function browserToolInstructions() {

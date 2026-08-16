@@ -69,6 +69,19 @@ describe("CodexAdapter MCP configuration", () => {
     expect(args).not.toContain("/tmp/notes.txt");
   });
 
+  test("passes the selected reasoning effort through Codex config", () => {
+    const args = buildCodexExecArgs(
+      "",
+      "gpt-5.6-sol",
+      [],
+      [],
+      { reasoningEffort: "xhigh" },
+    );
+
+    expect(args).toContain("-c");
+    expect(args).toContain('model_reasoning_effort="xhigh"');
+  });
+
   test("instructs Codex to use direct Composio tools instead of multi-execute loops", () => {
     const prompt = buildCodexPrompt({
       type: "chat",

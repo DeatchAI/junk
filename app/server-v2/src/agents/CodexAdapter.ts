@@ -2,7 +2,7 @@ import type { AgentActivityEvent, ChatRequest, MCPServerConfig } from "../protoc
 import type { AgentAdapter, AgentRun, AgentStreamCallbacks } from "./AgentAdapter";
 import { findExecutable } from "../runtime/CapabilityDetector";
 import { runProcess } from "../runtime/ProcessRunner";
-import { browserToolInstructions, hasDetachBrowserTools, hasDetachMacOSTools, macOSToolInstructions } from "./AgentPrompt";
+import { browserToolInstructions, capabilityToolInstructions, hasDetachBrowserTools, hasDetachCapabilityBroker, hasDetachMacOSTools, macOSToolInstructions } from "./AgentPrompt";
 import { autoApprovedMCPServers } from "./MCPConfig";
 
 export class CodexAdapter implements AgentAdapter {
@@ -26,7 +26,13 @@ export class CodexAdapter implements AgentAdapter {
 
       const prompt = buildCodexPrompt(request);
       const cwd = resolveWorkspace(request.workspacePath);
-      const args = buildCodexExecArgs(prompt, request.model, request.mcpServers, request.files);
+      const args = buildCodexExecArgs(
+        prompt,
+        request.model,
+        request.mcpServers,
+        request.files,
+        request.modelSettings,
+      );
       const env = buildCodexMCPEnv(request.mcpServers);
       const imageAttachments = imageAttachmentPaths(request.files);
 
@@ -103,14 +109,13 @@ export class CodexAdapter implements AgentAdapter {
 
       heartbeat = setInterval(() => {
         if (cancelled) return;
-        const idleSeconds = Math.floor((Date.now() - lastActivityAt) / 1000);
-        if (idleSeconds >= 15) {
-          activityCallbacks.onActivity("Still working", undefined, {
+        if (Date.now() - lastActivityAt >= 15_000) {
+          activityCallbacks.onActivity("Working…", undefined, {
             agent: "codex",
             kind: "status",
+            action: "generic",
             phase: "updated",
-            title: "Still working",
-            subtitle: `${idleSeconds}s without a new Codex event`,
+            title: "Working…",
             userFacing: true,
           });
         }
@@ -198,12 +203,18 @@ export function buildCodexExecArgs(
   _prompt: string,
   model?: string,
   mcpServers: MCPServerConfig[] = [],
-  files: Array<{ path: string; mimeType?: string }> = []
+  files: Array<{ path: string; mimeType?: string }> = [],
+  modelSettings?: ChatRequest["modelSettings"]
 ) {
   const args = ["exec", "--json", "--skip-git-repo-check", "--ephemeral", "--color", "never"];
 
   if (model?.trim()) {
     args.push("--model", model.trim());
+  }
+
+  const reasoningEffort = modelSettings?.reasoningEffort?.trim();
+  if (reasoningEffort && ["low", "medium", "high", "xhigh", "max", "ultra"].includes(reasoningEffort)) {
+    args.push("-c", `model_reasoning_effort=${tomlString(reasoningEffort)}`);
   }
 
   for (const path of imageAttachmentPaths(files)) {
@@ -740,6 +751,10 @@ export function buildCodexPrompt(request: ChatRequest) {
 
   if (hasDetachMacOSTools(request)) {
     sections.push(macOSToolInstructions());
+  }
+
+  if (hasDetachCapabilityBroker(request)) {
+    sections.push(capabilityToolInstructions());
   }
 
   const composioInstructions = composioMCPInstructions(request.mcpServers);

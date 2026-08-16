@@ -4,7 +4,12 @@ import {
   buildACPMCPServers,
   type ACPMCPServer,
 } from "./MCPConfig";
-import type { MCPServerConfig } from "../protocol/messages";
+import type {
+  AgentActivityEvent,
+  AgentKind,
+  MCPServerConfig,
+} from "../protocol/messages";
+import type { AgentModelSettings } from "../protocol/messages";
 
 export interface ACPAgentProcessOptions {
   command: string;
@@ -12,6 +17,10 @@ export interface ACPAgentProcessOptions {
   cwd: string;
   env?: Record<string, string | undefined>;
   mcpServers?: MCPServerConfig[];
+  /** OpenCode selects the model and optional reasoning effort through ACP after creating the session. */
+  model?: string;
+  modelSettings?: AgentModelSettings;
+  activityAgent: AgentKind;
   callbacks: AgentStreamCallbacks;
 }
 
@@ -76,10 +85,40 @@ export class ACPAgentProcess {
         throw new Error("ACP agent did not return a session ID.");
       }
 
+      const model = this.options.model?.trim();
+      if (model) {
+        await this.request("session/set_config_option", {
+          sessionId: this.sessionId,
+          configId: "model",
+          value: model,
+        });
+
+        const effort = openCodeReasoningEffort(this.options.modelSettings);
+        const effortConfigID = effort ? reasoningConfigOptionID(session) : undefined;
+        if (effort && !effortConfigID) {
+          throw new Error("OpenCode did not expose a reasoning control for the selected model.");
+        }
+        if (effortConfigID) {
+          await this.request("session/set_config_option", {
+            sessionId: this.sessionId,
+            configId: effortConfigID,
+            value: effort,
+          });
+        }
+      }
+
       await this.request("session/prompt", {
         sessionId: this.sessionId,
         prompt: [{ type: "text", text: prompt }],
       });
+
+      if (!this.fullText.trim()) {
+        throw new Error(
+          this.toolCalls.size > 0
+            ? "The agent completed its tool call but returned no final response."
+            : "The agent completed without returning a response.",
+        );
+      }
 
       return { text: this.fullText };
     } finally {
@@ -211,7 +250,12 @@ export class ACPAgentProcess {
       const toolCallId = getString(update?.toolCallId);
       if (toolCallId) this.toolCalls.set(toolCallId, update as ACPToolCall);
       const title = getString(update?.title) || "Using a tool";
-      this.callbacks.onActivity(title, toolIdentity(update ?? {}));
+      const toolName = toolIdentity(update ?? {});
+      this.callbacks.onActivity(
+        title,
+        toolName,
+        acpToolActivity(this.options.activityAgent, update ?? {}, "started"),
+      );
       return;
     }
 
@@ -219,7 +263,15 @@ export class ACPAgentProcess {
       const toolCallId = getString(update?.toolCallId);
       if (toolCallId) {
         const prior = this.toolCalls.get(toolCallId) ?? {};
-        this.toolCalls.set(toolCallId, { ...prior, ...update });
+        const merged = { ...prior, ...update };
+        this.toolCalls.set(toolCallId, merged);
+        const title = getString(merged.title) || "Using a tool";
+        const toolName = toolIdentity(merged);
+        this.callbacks.onActivity(
+          title,
+          toolName,
+          acpToolActivity(this.options.activityAgent, merged, acpToolPhase(merged)),
+        );
       }
     }
   }
@@ -269,6 +321,28 @@ export class ACPAgentProcess {
     for (const pending of this.pending.values()) pending.reject(error);
     this.pending.clear();
   }
+}
+
+function openCodeReasoningEffort(settings: AgentModelSettings | undefined) {
+  const effort = settings?.reasoningEffort?.trim().toLowerCase();
+  if (!effort || effort === "none" || effort === "auto") return undefined;
+  if (!/^[a-z0-9_-]+$/.test(effort)) return undefined;
+  return effort;
+}
+
+function reasoningConfigOptionID(session: Record<string, unknown>) {
+  const options = Array.isArray(session.configOptions) ? session.configOptions : [];
+  const option = options
+    .filter((value): value is Record<string, unknown> => Boolean(value) && typeof value === "object")
+    .find((value) => {
+      const id = getString(value.id)?.toLowerCase();
+      const category = getString(value.category)?.toLowerCase();
+      return id === "effort"
+        || id === "thinking"
+        || category === "thought_level"
+        || category === "thinking";
+    });
+  return getString(option?.id);
 }
 
 export function isAutoApprovedACPToolCall(toolCall: Record<string, unknown>, identities: string[]) {
@@ -343,6 +417,34 @@ function collectIdentityValues(value: unknown, output: Set<string>, depth: numbe
 
 function toolIdentity(toolCall: Record<string, unknown>) {
   return identityCandidates(toolCall).find((item) => item !== getString(toolCall.title));
+}
+
+function acpToolActivity(
+  agent: AgentKind,
+  toolCall: Record<string, unknown>,
+  phase: AgentActivityEvent["phase"],
+): AgentActivityEvent {
+  const title = getString(toolCall.title) || "Using a tool";
+  const toolName = toolIdentity(toolCall);
+  return {
+    id: getString(toolCall.toolCallId),
+    agent,
+    kind: "mcp_tool",
+    phase,
+    title,
+    subtitle: getString(toolCall.status),
+    toolName,
+    userFacing: true,
+    sourceEventType: "acp.session.update",
+    sourceItemType: "tool_call",
+  };
+}
+
+function acpToolPhase(toolCall: Record<string, unknown>): AgentActivityEvent["phase"] {
+  const status = getString(toolCall.status)?.toLowerCase();
+  if (status && /(fail|error|cancel|reject)/.test(status)) return "failed";
+  if (status && /(complete|completed|success|succeeded|done)/.test(status)) return "completed";
+  return "updated";
 }
 
 function normalizeIdentity(value: string) {

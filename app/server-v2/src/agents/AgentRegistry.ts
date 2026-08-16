@@ -4,7 +4,7 @@ import type { AgentAdapter } from "./AgentAdapter";
 import { ClaudeAdapter } from "./ClaudeAdapter";
 import { CodexAdapter } from "./CodexAdapter";
 import { GrokAdapter } from "./GrokAdapter";
-import { OpenCodeAdapter } from "./OpenCodeAdapter";
+import { HostedOpenCodeAdapter, OpenCodeAdapter } from "./OpenCodeAdapter";
 
 export class AgentRegistry {
   private adapters = new Map<AgentKind, AgentAdapter>();
@@ -14,7 +14,8 @@ export class AgentRegistry {
     this.register(new CodexAdapter());
     this.register(new ClaudeAdapter());
     this.register(new GrokAdapter());
-    this.register(new OpenCodeAdapter(hostedModels));
+    this.register(new OpenCodeAdapter());
+    this.register(new HostedOpenCodeAdapter(hostedModels));
   }
 
   register(adapter: AgentAdapter) {

@@ -2,8 +2,9 @@ import type { MCPServerConfig } from "../protocol/messages";
 
 /**
  * Older clients omit `selectedIds`, which preserves the historical behavior of
- * loading every enabled server. The rich composer always sends an array, so an
- * empty array intentionally attaches no MCP capability to that request.
+ * loading every enabled server. The current runtime resolves omitted macOS
+ * selections to the compact Detach capability broker before this function is
+ * called. An explicit empty array intentionally attaches no MCP capability.
  */
 export function selectMCPServers(
   available: MCPServerConfig[],

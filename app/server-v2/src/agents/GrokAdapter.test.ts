@@ -19,4 +19,22 @@ describe("GrokAdapter", () => {
       model: "grok-build",
     })).toEqual(["agent", "--no-leader", "--model", "grok-build", "stdio"]);
   });
+
+  test("passes the selected reasoning effort to Grok", () => {
+    expect(buildGrokACPArgs({
+      type: "chat",
+      text: "test",
+      agent: "grok",
+      model: "grok-4.5",
+      modelSettings: { reasoningEffort: "high" },
+    })).toEqual([
+      "agent",
+      "--no-leader",
+      "--model",
+      "grok-4.5",
+      "--reasoning-effort",
+      "high",
+      "stdio",
+    ]);
+  });
 });

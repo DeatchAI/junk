@@ -56,15 +56,15 @@ export class GrokAdapter implements AgentAdapter {
           GROK_CLAUDE_MCPS_ENABLED: "false",
         },
         mcpServers: request.mcpServers,
+        activityAgent: "grok",
         callbacks: activityCallbacks,
       });
 
-      activityCallbacks.onActivity("Grok is thinking");
+      activityCallbacks.onActivity("Thinking…");
       heartbeat = setInterval(() => {
         if (cancelled) return;
-        const idleSeconds = Math.floor((Date.now() - lastActivityAt) / 1000);
-        if (idleSeconds >= 15) {
-          callbacks.onActivity(`Grok is still working (${idleSeconds}s)`);
+        if (Date.now() - lastActivityAt >= 15_000) {
+          callbacks.onActivity("Working…");
         }
       }, 15_000);
 
@@ -112,6 +112,11 @@ export function buildGrokACPArgs(request: ChatRequest) {
 
   if (request.model?.trim()) {
     args.push("--model", request.model.trim());
+  }
+
+  const reasoningEffort = request.modelSettings?.reasoningEffort?.trim();
+  if (reasoningEffort && ["low", "medium", "high"].includes(reasoningEffort)) {
+    args.push("--reasoning-effort", reasoningEffort);
   }
 
   args.push("stdio");

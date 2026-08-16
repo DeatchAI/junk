@@ -30,6 +30,20 @@ describe("agent tool instructions", () => {
     expect(prompt).not.toContain("# Hugging Face login");
     expect(prompt).not.toContain('input[autocomplete="username"]');
   });
+
+  test("teaches the agent to discover capabilities through the compact broker", () => {
+    const request: ChatRequest = {
+      type: "chat",
+      text: "Inspect the page in Chrome",
+      mcpServers: [mcpServer("detach-capability-tools")],
+    };
+
+    const prompt = buildAgentPrompt(request);
+    expect(prompt).toContain("detach_capabilities_list");
+    expect(prompt).toContain("detach_capability_describe");
+    expect(prompt).toContain("detach_capability_invoke");
+    expect(prompt).not.toContain("detach_browser_execute");
+  });
 });
 
 function mcpServer(id: string): MCPServerConfig {

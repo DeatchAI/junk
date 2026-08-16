@@ -6,7 +6,7 @@ import type { MCPServerConfig } from "../protocol/messages";
 describe("composer MCP selection", () => {
   const available = [server("detach-browser-tools"), server("detach-macos-tools"), server("github")];
 
-  test("preserves legacy all-enabled behavior when a client omits selection", () => {
+  test("keeps every enabled server available for legacy callers", () => {
     expect(selectMCPServers(available).map((server) => server.id)).toEqual(available.map((server) => server.id));
   });
 
