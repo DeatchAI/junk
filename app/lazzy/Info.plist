@@ -30,7 +30,7 @@
 	<key>SUAutomaticallyUpdate</key>
 	<true/>
 	<key>SUFeedURL</key>
-	<string>https://qymrzmmsroxkteaxbgoo.supabase.co/storage/v1/object/public/updates/appcast.xml</string>
+	<string>https://github.com/DeatchAI/App/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>HtZQDM1f4zVCQzNh5FJo03cHUKid/z/9vG2GIOb7lPI=</string>
 	<key>UIAppFonts</key>

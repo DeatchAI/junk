@@ -5,7 +5,7 @@ import SwiftUI
 
 private enum OnboardingState {
   // Increment only when a new first-run flow must be shown to existing installs.
-  static let currentVersion = 1
+  static let currentVersion = 2
   static let completionVersionKey = "onboarding_completion_version"
 }
 
@@ -126,17 +126,6 @@ class AppCoordinator: ObservableObject {
         .sendCommandApprovalResponse(requestId: requestId, approved: approved)
     }
 
-    floatingWorkspace.$isAnyComposerVisible
-      .removeDuplicates()
-      .sink { [weak self] isComposerVisible in
-        guard let self = self else { return }
-        self.activityIsland.setComposerVisible(isComposerVisible)
-        if !isComposerVisible && self.detachedRunStore.hasActiveRuns {
-          self.activityIsland.show()
-        }
-      }
-      .store(in: &cancellables)
-
     observeRunEvents(on: wsManager)
   }
 
@@ -152,21 +141,24 @@ class AppCoordinator: ObservableObject {
       task.controller.onNewChat = { [weak task] in
         task?.wsManager.startNewConversation()
       }
-      task.controller.onVoiceInputBegan = { [weak self, weak task] in
-        guard let self, let task else { return }
-        self.beginVoiceDictation(in: task.controller)
-      }
-      task.controller.onVoiceInputEnded = { [weak self] in
-        self?.voiceDictation.endPushToTalk()
-      }
-      task.controller.onVoiceInputToggled = { [weak self, weak task] in
-        guard let self, let task else { return }
-        self.toggleVoiceDictation(in: task.controller)
-      }
-      task.controller.onVoiceInputCancelled = { [weak self, weak task] in
-        guard let self, let task, self.voiceTargetController === task.controller else { return }
-        self.voiceDictation.stop()
-        self.voiceTargetController = nil
+      // Voice mode is intentionally disabled until its UX pass is complete.
+      if FeatureFlags.voiceModeEnabled {
+        task.controller.onVoiceInputBegan = { [weak self, weak task] in
+          guard let self, let task else { return }
+          self.beginVoiceDictation(in: task.controller)
+        }
+        task.controller.onVoiceInputEnded = { [weak self] in
+          self?.voiceDictation.endPushToTalk()
+        }
+        task.controller.onVoiceInputToggled = { [weak self, weak task] in
+          guard let self, let task else { return }
+          self.toggleVoiceDictation(in: task.controller)
+        }
+        task.controller.onVoiceInputCancelled = { [weak self, weak task] in
+          guard let self, let task, self.voiceTargetController === task.controller else { return }
+          self.voiceDictation.stop()
+          self.voiceTargetController = nil
+        }
       }
       task.controller.onDismissTransition = { [weak self] in
         self?.activityIsland.beginComposerHandoff()
@@ -179,6 +171,8 @@ class AppCoordinator: ObservableObject {
   }
 
   private func setupVoiceDictation() {
+    guard FeatureFlags.voiceModeEnabled else { return }
+
     voiceDictation.onStateChanged = { [weak self] state, partialTranscript in
       self?.voiceTargetController?.updateVoiceDictation(
         state: state,
@@ -192,11 +186,13 @@ class AppCoordinator: ObservableObject {
   }
 
   private func beginVoiceDictation(in controller: FloatingWindowController) {
+    guard FeatureFlags.voiceModeEnabled else { return }
     voiceTargetController = controller
     voiceDictation.beginPushToTalk()
   }
 
   private func toggleVoiceDictation(in controller: FloatingWindowController) {
+    guard FeatureFlags.voiceModeEnabled else { return }
     switch voiceDictation.state {
     case .idle, .failed:
       beginVoiceDictation(in: controller)
@@ -209,7 +205,13 @@ class AppCoordinator: ObservableObject {
     manager.addChatSentListener { [weak self] request in
       guard let self else { return }
       self.detachedRunStore.begin(request)
-      self.activityIsland.prepareForNewRun()
+      self.activityIsland.show()
+    }
+
+    manager.addMediaRunStartedListener { [weak self] start in
+      guard let self else { return }
+      self.detachedRunStore.beginMedia(start)
+      self.activityIsland.show()
     }
 
     manager.addAgentActivityListener { [weak self] update in
@@ -394,7 +396,7 @@ class AppCoordinator: ObservableObject {
 
     do {
       try pngData.write(to: fileURL)
-      print("📸 Screenshot saved to: \(fileURL.path)")
+      print("📸 Screenshot saved")
     } catch {
       print("❌ Failed to save screenshot: \(error)")
       return nil
@@ -485,7 +487,8 @@ class AppCoordinator: ObservableObject {
               mcpServerIds: action.mcpServerIds ?? [],
               skills: action.skills,
               agent: task.controller.selectedAgent,
-              model: task.controller.selectedModel
+              model: task.controller.selectedModel,
+              modelSettings: task.controller.selectedModelSettings
             )
           }
         }
@@ -520,7 +523,8 @@ class AppCoordinator: ObservableObject {
         mcpServerIds: workflow.mcpServerIds ?? [],
         skills: workflow.skills,
         agent: task.controller.selectedAgent,
-        model: task.controller.selectedModel
+        model: task.controller.selectedModel,
+        modelSettings: task.controller.selectedModelSettings
       )
     }
   }
@@ -570,7 +574,6 @@ class AppCoordinator: ObservableObject {
   /// Drives local notch previews without starting an agent or spending tokens.
   func showNotchDebugScenario(_ scenario: NotchDebugScenario) {
     detachedRunStore.showDebugScenario(scenario)
-    activityIsland.prepareForNewRun()
     if scenario == .clear {
       activityIsland.hide()
     } else if detachedRunStore.hasPendingApproval {
@@ -640,14 +643,6 @@ class AppCoordinator: ObservableObject {
     UserDefaults.standard.set(OnboardingState.currentVersion, forKey: OnboardingState.completionVersionKey)
     hasCompletedOnboarding = true
     onboardingWindow.close()
-
-    // Show settings as requested
-    DispatchQueue.main.async {
-      MenuBarContentView.showSettings(
-        wsManager: self.wsManager,
-        onRunWorkflow: self.runWorkflow
-      )
-    }
 
     // Start the app normally
     performCoreStart()

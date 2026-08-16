@@ -277,7 +277,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "if [ \"${CONFIGURATION}\" = \"Debug\" ]; then\n  set -eu\n  cd \"${SRCROOT}/server-v2\"\n  /usr/bin/env bun run build\n  /usr/bin/ditto \"${SRCROOT}/server-v2/detach-runtime\" \"${SRCROOT}/lazzy/detach-runtime\"\n  /bin/mkdir -p \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\n  /usr/bin/ditto \"${SRCROOT}/server-v2/detach-runtime\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/detach-runtime\"\nfi\n";
+			shellScript = "set -eu\nif [ \"${CONFIGURATION}\" = \"Debug\" ]; then\n  cd \"${SRCROOT}/server-v2\"\n  /usr/bin/env bun run build\n  /usr/bin/ditto \"${SRCROOT}/server-v2/detach-runtime\" \"${SRCROOT}/lazzy/detach-runtime\"\n  /bin/mkdir -p \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\n  /usr/bin/ditto \"${SRCROOT}/server-v2/detach-runtime\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/detach-runtime\"\nfi\nEXTENSION_SOURCE=\"${SRCROOT}/../chrome-extension\"\nEXTENSION_DESTINATION=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/chrome-extension\"\n/bin/rm -rf \"${EXTENSION_DESTINATION}\"\n/bin/mkdir -p \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\n/usr/bin/ditto \"${EXTENSION_SOURCE}\" \"${EXTENSION_DESTINATION}\"\n";
 		};
 		A20000000000000000000001 /* Sign Bundled OpenCode */ = {
 			isa = PBXShellScriptBuildPhase;

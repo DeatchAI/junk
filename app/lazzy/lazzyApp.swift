@@ -77,19 +77,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
   func application(_ application: NSApplication, open urls: [URL]) {
     for url in urls {
-      print("🔗 AppDelegate Received URL: \(url)")
+      print("🔗 AppDelegate received app URL")
       guard url.scheme == "lazzy" || url.scheme == "detach", let coordinator else {
         continue
       }
 
       // Supabase returns both OAuth and magic-link sign-ins here. This must be
-      // handled before the onboarding gate: the account step is intentionally
-      // available before setup is complete, and it advances by observing the
+      // handled before the onboarding gate: the hosted branch observes the
       // authenticated session that this callback establishes.
       if url.host?.lowercased() == "login-callback" {
-        AuthManager.shared.handleDeeplink(url)
+        if !AuthManager.shared.handleOAuthCallback(url) {
+          AuthManager.shared.handleDeeplink(url)
+        }
         DispatchQueue.main.async {
-          coordinator.onboardingWindow.show()
+          NSApp.activate(ignoringOtherApps: true)
+          if coordinator.hasCompletedOnboarding {
+            MenuBarContentView.showSettings(
+              wsManager: coordinator.wsManager,
+              onRunWorkflow: coordinator.runWorkflow,
+              launchIntent: .account
+            )
+          } else {
+            coordinator.onboardingWindow.show()
+          }
         }
         continue
       }
@@ -98,10 +108,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         NotificationCenter.default.post(name: .detachHostedCreditsDidChange, object: nil)
         DispatchQueue.main.async {
           NSApp.activate(ignoringOtherApps: true)
-          MenuBarContentView.showSettings(
-            wsManager: coordinator.wsManager,
-            onRunWorkflow: coordinator.runWorkflow
-          )
+          if coordinator.hasCompletedOnboarding {
+            MenuBarContentView.showSettings(
+              wsManager: coordinator.wsManager,
+              onRunWorkflow: coordinator.runWorkflow
+            )
+          } else {
+            coordinator.onboardingWindow.show()
+          }
         }
         continue
       }
@@ -222,21 +236,21 @@ struct MenuBarContentView: View {
       //   FIFinderSyncController.showExtensionManagementInterface()
       // }
 
-      // Menu("Notch Debug") {
-      //   Button("Thinking") { coordinator.showNotchDebugScenario(.thinking) }
-      //   Button("Terminal command") { coordinator.showNotchDebugScenario(.command) }
-      //   Button("File change") { coordinator.showNotchDebugScenario(.fileChange) }
-      //   Button("MCP tool") { coordinator.showNotchDebugScenario(.mcpTool) }
-      //   Button("Plan update") { coordinator.showNotchDebugScenario(.plan) }
-      //   Divider()
-      //   Button("Approval request") { coordinator.showNotchDebugScenario(.approval) }
-      //   Button("Failure") { coordinator.showNotchDebugScenario(.failure) }
-      //   Button("Completed") { coordinator.showNotchDebugScenario(.completed) }
-      //   Button("Multiple agents") { coordinator.showNotchDebugScenario(.multiAgent) }
-      //   Button("Multiple states") { coordinator.showNotchDebugScenario(.multiMixedStates) }
-      //   Divider()
-      //   Button("Clear notch") { coordinator.showNotchDebugScenario(.clear) }
-      // }
+      Menu("Notch Debug") {
+        Button("Thinking") { coordinator.showNotchDebugScenario(.thinking) }
+        Button("Terminal command") { coordinator.showNotchDebugScenario(.command) }
+        Button("File change") { coordinator.showNotchDebugScenario(.fileChange) }
+        Button("MCP tool") { coordinator.showNotchDebugScenario(.mcpTool) }
+        Button("Plan update") { coordinator.showNotchDebugScenario(.plan) }
+        Divider()
+        Button("Approval request") { coordinator.showNotchDebugScenario(.approval) }
+        Button("Failure") { coordinator.showNotchDebugScenario(.failure) }
+        Button("Completed") { coordinator.showNotchDebugScenario(.completed) }
+        Button("Multiple agents") { coordinator.showNotchDebugScenario(.multiAgent) }
+        Button("Multiple states") { coordinator.showNotchDebugScenario(.multiMixedStates) }
+        Divider()
+        Button("Clear notch") { coordinator.showNotchDebugScenario(.clear) }
+      }
 
       Divider()
 
@@ -330,23 +344,23 @@ private struct HostedCreditsMenuSection: View {
   let onRunWorkflow: (QuickAction) -> Void
 
   var body: some View {
-    if let credits = hostedSubscription.credits,
+    if hostedSubscription.credits != nil,
       let progress = hostedSubscription.availableCreditProgress,
       let percentage = hostedSubscription.availableCreditPercentage
     {
       VStack(alignment: .leading, spacing: 7) {
-        Text("Hosted AI credits")
+        Text("Detach Cloud credits")
           .font(.caption)
           .foregroundColor(.secondary)
 
         HostedCreditsProgressView(progress: progress, percentage: percentage)
           .frame(width: 230)
 
-        Text("\(credits.available) credits remaining")
+        Text("\(percentage)% of allowance remaining")
           .font(.caption2)
           .foregroundColor(.secondary)
 
-        Button("Manage credits…") {
+        Button("Manage allowance…") {
           MenuBarContentView.showSettings(
             wsManager: wsManager,
             onRunWorkflow: onRunWorkflow,
@@ -359,7 +373,7 @@ private struct HostedCreditsMenuSection: View {
         Task { await hostedSubscription.refresh() }
       }
     } else if hostedSubscription.isLoading {
-      Text("Loading hosted credits…")
+      Text("Loading Detach Cloud credits…")
         .font(.caption)
         .foregroundColor(.secondary)
     }

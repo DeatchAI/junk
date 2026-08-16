@@ -5,9 +5,20 @@ enum Mode {
   case prod
 }
 
+enum FeatureFlags {
+  /// Voice mode is temporarily disabled while its composer UX is finalized.
+  /// Keep the implementation in place so it can be re-enabled without a
+  /// migration once the voice surface is ready to ship.
+  static let voiceModeEnabled = false
+}
+
 /// Configuration for the local Detach runtime connection
 enum ServerConfig {
   static let mode = Mode.prod
+
+  /// A short-lived shared secret for the app and its child runtime. This is
+  /// regenerated for every app launch and is never sent to a remote service.
+  static let runtimeToken = UUID().uuidString.replacingOccurrences(of: "-", with: "")
 
   /// Fallback port in case dynamic selection fails
   private static let defaultPort = 3847
@@ -25,7 +36,19 @@ enum ServerConfig {
 
   /// WebSocket URL
   static var wsURL: URL {
-    URL(string: "ws://localhost:\(port)")!
+    var components = URLComponents()
+    components.scheme = "ws"
+    components.host = "127.0.0.1"
+    components.port = port
+    components.path = "/"
+    components.queryItems = [URLQueryItem(name: "token", value: runtimeToken)]
+    return components.url!
+  }
+
+  static var authorizationHeaderValue: String { "Bearer \(runtimeToken)" }
+
+  static func authorize(_ request: inout URLRequest) {
+    request.setValue(authorizationHeaderValue, forHTTPHeaderField: "Authorization")
   }
 
   /// Path to the local runtime binary.

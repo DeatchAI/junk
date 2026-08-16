@@ -4,7 +4,7 @@ import Foundation
 ///
 /// A Supabase publishable key identifies the project; it is not a provider
 /// credential and is safe to ship when Row Level Security is configured. All
-/// Detach-owned provider keys belong in the hosted control plane instead.
+/// Detach-owned provider keys belong in the Detach Cloud control plane instead.
 enum AppConfiguration {
   static let supabaseURL = "https://qymrzmmsroxkteaxbgoo.supabase.co"
   static let supabasePublishableKey = "sb_publishable_aWjjz60k2uciZe45sFGzSg_11quNmaV"
