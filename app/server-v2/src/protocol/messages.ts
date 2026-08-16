@@ -1,5 +1,15 @@
 export type ClientMessage =
   | ChatRequest
+  | { type: "list_media_models" }
+  | {
+      type: "quote_media";
+      requestId: string;
+      model: string;
+      prompt: string;
+      config: Record<string, unknown>;
+      inputRoles?: string[];
+    }
+  | MediaGenerateRequest
   | { type: "ping" }
   | { type: "stop_stream" }
   | { type: "capabilities" }
@@ -100,7 +110,11 @@ export type ClientMessage =
     }
   | { type: "delete_slash_command"; commandId: string };
 
-export type AgentKind = "codex" | "claude" | "grok" | "opencode";
+/**
+ * `opencode` uses the customer's own OpenCode configuration and credentials.
+ * `hosted` is Detach's separately authenticated, provider-neutral proxy.
+ */
+export type AgentKind = "codex" | "claude" | "grok" | "opencode" | "hosted";
 
 export type ComposerMode = "explain_only" | "plan_only" | "review_only" | "debug_only";
 
@@ -136,19 +150,105 @@ export interface ChatRequest {
   /** Optional per-run wall-clock limit, used by benchmark and long automation tasks. */
   timeoutMs?: number;
   model?: string;
+  /** Optional model-specific controls selected in the floating composer. */
+  modelSettings?: AgentModelSettings;
   agent?: AgentKind;
   workspacePath?: string;
   actionId?: string;
-  /** Omitted values allow conversation-remembered MCPs or legacy auto-discovery; an explicit empty list means no MCPs. */
+  /** Omitted values select the compact capability broker plus remembered attachments; an explicit empty list means no MCPs. */
   mcpServerIds?: string[];
   mcpServers?: MCPServerConfig[];
   skills?: SkillAttachment[];
+  /** Chrome tabs explicitly selected from the native composer attachment menu. */
+  browserTabs?: BrowserTabAttachment[];
 }
 
 export interface FileAttachmentRequest {
   path: string;
   mimeType?: string;
 }
+
+export interface BrowserTabAttachment {
+  id: number;
+  windowId?: number;
+  active: boolean;
+  title: string;
+  url: string;
+}
+
+export interface MediaGenerateRequest {
+  type: "generate_media";
+  /** Stable client-generated identity for notch/background progress. */
+  runId?: string;
+  /** Debug builds can route exact image/video prompts to local demo assets. */
+  demoMode?: boolean;
+  /** Output kind is explicit for the native composer and debug media routing. */
+  kind?: "image" | "video";
+  requestKey: string;
+  prompt: string;
+  model: string;
+  config: Record<string, unknown>;
+  inputs?: MediaInputRequest[];
+  conversationId?: string;
+}
+
+export interface MediaInputRequest {
+  path: string;
+  mimeType: string;
+  role: string;
+}
+
+export interface MediaConfigOption {
+  id: string;
+  label: string;
+}
+
+export interface MediaModelCapability {
+  id: string;
+  displayName: string;
+  kind: "image" | "video";
+  description?: string;
+  aspectRatios: MediaConfigOption[];
+  resolutions: MediaConfigOption[];
+  durations?: number[];
+  supportsAudio: boolean;
+  outputFormats: MediaConfigOption[];
+  defaults: Record<string, unknown>;
+  inputRoles: string[];
+  maxInputs: number;
+  maxInputsByRole?: Record<string, number>;
+}
+
+export interface MediaAsset {
+  id: string;
+  kind: "image" | "video";
+  mimeType: string;
+  url: string;
+  byteSize?: number;
+  width?: number;
+  height?: number;
+  durationSeconds?: number;
+}
+
+export interface MediaJob {
+  id: string;
+  kind: "image" | "video";
+  model: string;
+  state: string;
+  progress: number;
+  prompt?: string;
+  config: Record<string, unknown>;
+  quote?: { kieCredits: string; detachCredits: string };
+  actual?: { kieCredits: string; detachCredits: string };
+  error?: { code: string; message: string };
+  assets: MediaAsset[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type MessagePart =
+  | { type: "text"; text: string }
+  | { type: "media_job"; job: MediaJob };
 
 export interface SkillAttachment {
   id: string;
@@ -186,6 +286,7 @@ export interface Message {
   conversation_id: string;
   role: "user" | "assistant";
   content: string;
+  parts?: MessagePart[];
   created_at: number;
 }
 
@@ -197,6 +298,20 @@ export interface ConversationContextMessage {
 export type ServerMessage =
   | { type: "pong" }
   | { type: "capabilities"; agents: AgentCapability[]; defaultAgent: AgentKind }
+  | { type: "media_models"; models: MediaModelCapability[] }
+  | {
+      type: "media_quote";
+      requestId: string;
+      quote: { kieCredits?: string; detachCredits?: string; summary?: string };
+    }
+  | {
+      type: "media_job";
+      runId?: string;
+      conversationId: string;
+      userMessageId: string;
+      assistantMessageId: string;
+      job: MediaJob;
+    }
   | {
       type: "activity";
       runId?: string;
@@ -284,6 +399,16 @@ export interface AgentCapability {
 export interface AgentModelCapability {
   id: string;
   displayName: string;
+  /** Reasoning/effort values advertised by the provider for this model. */
+  reasoningEfforts?: string[];
+  defaultReasoningEffort?: string;
+  /** Human-facing name for the provider's reasoning control. */
+  reasoningLabel?: string;
+}
+
+export interface AgentModelSettings {
+  /** Provider-native reasoning/effort value, for example `high` or `xhigh`. */
+  reasoningEffort?: string;
 }
 
 export type AgentActivityKind =
@@ -302,10 +427,42 @@ export type AgentActivityPhase =
   | "completed"
   | "failed";
 
+/**
+ * Stable semantic actions used by native clients to choose presentation.
+ * Keep these independent from provider event names and platform icon names.
+ */
+export type AgentActivityAction =
+  | "prepare"
+  | "think"
+  | "plan"
+  | "search"
+  | "read"
+  | "create"
+  | "edit"
+  | "delete"
+  | "terminal"
+  | "build"
+  | "test"
+  | "browser.navigate"
+  | "browser.inspect"
+  | "browser.interact"
+  | "browser.type"
+  | "browser.capture"
+  | "desktop.inspect"
+  | "desktop.interact"
+  | "image"
+  | "connector"
+  | "credential"
+  | "approval"
+  | "wait"
+  | "error"
+  | "generic";
+
 export interface AgentActivityEvent {
   id?: string;
   agent: AgentKind;
   kind: AgentActivityKind;
+  action?: AgentActivityAction;
   phase: AgentActivityPhase;
   title: string;
   subtitle?: string;
