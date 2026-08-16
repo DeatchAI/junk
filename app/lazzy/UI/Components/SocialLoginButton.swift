@@ -61,6 +61,7 @@ struct SocialLoginButton: View {
       )
     }
     .buttonStyle(.plain)
+    .disabled(auth.isLoading)
     .onHover { isHovered = $0 }
   }
 }

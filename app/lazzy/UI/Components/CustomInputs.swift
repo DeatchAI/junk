@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 /// A custom-styled menu that uses a popover for a premium feel
@@ -15,6 +14,7 @@ struct CustomMenu: View {
   var backgroundColor: Color? = nil
   var borderRadius: CGFloat? = nil
   var showBorder: Bool = true
+  var opensOnHover: Bool = false
 
   @State private var isPopoverPresented = false
   @State private var isHovered = false
@@ -54,7 +54,12 @@ struct CustomMenu: View {
       )
     }
     .buttonStyle(.plain)
-    .onHover { isHovered = $0 }
+    .onHover { hovering in
+      isHovered = hovering
+      if opensOnHover && hovering {
+        isPopoverPresented = true
+      }
+    }
     .background {
       DropdownPanelAnchor(
         isPresented: $isPopoverPresented,
@@ -81,8 +86,8 @@ struct CustomMenu: View {
           RoundedRectangle(cornerRadius: 16, style: .continuous)
             .stroke(theme.textColor.opacity(0.1), lineWidth: 0.5)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: .black.opacity(0.15), radius: 20, x: 0, y: 8)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous)),
+        opensOnHover: opensOnHover
       )
     }
   }
@@ -169,6 +174,8 @@ struct ModelMenu: View {
   var backgroundColor: Color? = nil
   var borderRadius: CGFloat? = nil
   var showBorder: Bool = true
+  var unavailableHelp: String = "Model only available to Pro users, upgrade to select"
+  var opensOnHover: Bool = false
 
   @State private var isPopoverPresented = false
   @State private var isHovered = false
@@ -206,7 +213,12 @@ struct ModelMenu: View {
       )
     }
     .buttonStyle(.plain)
-    .onHover { isHovered = $0 }
+    .onHover { hovering in
+      isHovered = hovering
+      if opensOnHover && hovering {
+        isPopoverPresented = true
+      }
+    }
     .background {
       DropdownPanelAnchor(
         isPresented: $isPopoverPresented,
@@ -218,6 +230,7 @@ struct ModelMenu: View {
                 title: item.model,
                 isSelected: selectedOption == item.model,
                 isAvailable: item.isAvailable,
+                unavailableHelp: unavailableHelp,
                 action: {
                   if item.isAvailable {
                     selectedOption = item.model
@@ -236,8 +249,8 @@ struct ModelMenu: View {
           RoundedRectangle(cornerRadius: 16, style: .continuous)
             .stroke(theme.textColor.opacity(0.1), lineWidth: 0.5)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: .black.opacity(0.15), radius: 20, x: 0, y: 8)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous)),
+        opensOnHover: opensOnHover
       )
     }
   }
@@ -263,6 +276,7 @@ struct ModelMenu: View {
     let title: String
     let isSelected: Bool
     let isAvailable: Bool
+    let unavailableHelp: String
     let action: () -> Void
 
     @State private var isHovered = false
@@ -297,7 +311,7 @@ struct ModelMenu: View {
       .buttonStyle(.plain)
       .disabled(!isAvailable)
       .onHover { isHovered = $0 }
-      .help(isAvailable ? "" : "Model only available to Pro users, upgrade to select")
+      .help(isAvailable ? "" : unavailableHelp)
     }
     
     private var textColor: Color {
@@ -453,139 +467,5 @@ struct CustomSegmentedPicker<T: Hashable>: View {
       RoundedRectangle(cornerRadius: theme.borderRadius / 1.5)
         .stroke(theme.borderColor, lineWidth: 0.5)
     )
-  }
-}
-
-/// Hosts dropdown content in its own borderless panel.
-struct DropdownPanelAnchor<MenuContent: View>: NSViewRepresentable {
-  @Binding var isPresented: Bool
-  let menuWidth: CGFloat
-  let menu: MenuContent
-
-  func makeCoordinator() -> Coordinator {
-    Coordinator(isPresented: $isPresented)
-  }
-
-  func makeNSView(context: Context) -> NSView {
-    let view = NSView()
-    view.postsFrameChangedNotifications = true
-    return view
-  }
-
-  func updateNSView(_ anchorView: NSView, context: Context) {
-    if isPresented {
-      context.coordinator.present(menu: menu, menuWidth: menuWidth, from: anchorView)
-    } else {
-      context.coordinator.dismiss()
-    }
-  }
-
-  static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
-    coordinator.dismiss()
-  }
-
-  @MainActor
-  final class Coordinator {
-    @Binding var isPresented: Bool
-    private var panel: NSPanel?
-    private weak var parentWindow: NSWindow?
-    private var clickMonitor: Any?
-
-    init(isPresented: Binding<Bool>) {
-      self._isPresented = isPresented
-    }
-
-    func present(menu: MenuContent, menuWidth: CGFloat, from anchorView: NSView) {
-      guard let window = anchorView.window else { return }
-
-      let hostingView = NSHostingView(rootView: menu.padding(22))
-      hostingView.layer?.backgroundColor = NSColor.clear.cgColor
-
-      let menuPanel: NSPanel
-      if let panel {
-        menuPanel = panel
-        menuPanel.contentView = hostingView
-      } else {
-        menuPanel = NSPanel(
-          contentRect: .zero,
-          styleMask: [.borderless, .nonactivatingPanel],
-          backing: .buffered,
-          defer: false
-        )
-        menuPanel.isOpaque = false
-        menuPanel.backgroundColor = .clear
-        menuPanel.hasShadow = false
-        menuPanel.hidesOnDeactivate = false
-        menuPanel.isFloatingPanel = true
-        menuPanel.becomesKeyOnlyIfNeeded = true
-        menuPanel.level = window.level
-        menuPanel.collectionBehavior = [.transient, .moveToActiveSpace, .fullScreenAuxiliary]
-        menuPanel.contentView = hostingView
-        panel = menuPanel
-        
-        setupClickMonitor(panel: menuPanel)
-      }
-
-      if parentWindow !== window {
-        parentWindow?.removeChildWindow(menuPanel)
-        window.addChildWindow(menuPanel, ordered: .above)
-        parentWindow = window
-      }
-
-      hostingView.frame.size.width = menuWidth + 44
-      hostingView.layoutSubtreeIfNeeded()
-      let fittingHeight = min(max(hostingView.fittingSize.height, 40), 320)
-      menuPanel.setContentSize(NSSize(width: menuWidth + 44, height: fittingHeight))
-      position(menuPanel, relativeTo: anchorView)
-      menuPanel.orderFront(nil)
-    }
-
-    func dismiss() {
-      removeClickMonitor()
-      guard let panel else { return }
-      parentWindow?.removeChildWindow(panel)
-      panel.orderOut(nil)
-      self.panel = nil
-      parentWindow = nil
-    }
-
-    private func position(_ panel: NSPanel, relativeTo anchorView: NSView) {
-      guard let window = anchorView.window else { return }
-      let boundsInWindow = anchorView.convert(anchorView.bounds, to: nil)
-      let boundsInScreen = window.convertToScreen(boundsInWindow)
-      let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
-      let panelSize = panel.frame.size
-
-      // Align visual left edge of menu (origin.x + 22) with left of button (boundsInScreen.minX)
-      var originX = boundsInScreen.minX - 22
-
-      // Position the visual top edge of menu (origin.y + panelSize.height - 22) just below the button (boundsInScreen.minY - 4)
-      var originY = boundsInScreen.minY - panelSize.height + 18
-
-      originX = min(max(originX, visibleFrame.minX), visibleFrame.maxX - panelSize.width)
-      originY = min(max(originY, visibleFrame.minY), visibleFrame.maxY - panelSize.height)
-      panel.setFrameOrigin(NSPoint(x: originX, y: originY))
-    }
-
-    private func setupClickMonitor(panel: NSPanel) {
-      guard clickMonitor == nil else { return }
-      clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-        guard let self = self else { return event }
-        // If click is outside the panel window, dismiss
-        if !panel.frame.contains(NSEvent.mouseLocation) {
-          DispatchQueue.main.async {
-            self.isPresented = false
-          }
-        }
-        return event
-      }
-    }
-
-    private func removeClickMonitor() {
-      if let clickMonitor {
-        NSEvent.removeMonitor(clickMonitor)
-        self.clickMonitor = nil
-      }
-    }
   }
 }
