@@ -14,7 +14,9 @@ export function workspaceMemorySystemInstruction() {
 
 Detach workspace memory:
 - All memory for this workspace lives below \`${WORKSPACE_MEMORY_ROOT}/\`, relative to your current working directory.
-- At the start of a task, check whether \`${WORKSPACE_MEMORY_PATH}\` exists. If it does, read it first, then open only the backing pages it references and that are relevant to the task. Do not load the whole memory tree blindly.
+- Workspace memory is an optional capability, not a mandatory startup step. Read it whenever the current request could benefit from prior workspace decisions, user preferences, project history, recurring procedures, or other durable context.
+- Do not check or read memory for greetings, casual conversation, simple self-contained questions, or tasks whose required context is already present.
+- When memory is relevant, check whether \`${WORKSPACE_MEMORY_PATH}\` exists and read it before opening only the backing pages it references that are needed for the current request. Do not load the whole memory tree blindly.
 - \`${WORKSPACE_MEMORY_PATH}\` and \`${WORKSPACE_USER_MEMORY_PATH}\` are compact L1 summaries, derived from the backing records. Keep them short enough to read at the start of a task.
 - Durable semantic pages live in \`${WORKSPACE_MEMORY_ROOT}/{${semanticDirectories.join(",")}}/\`. Each page has frontmatter plus a \`Current\` section for stable understanding and an append-only \`History\` section with references to supporting episodic files when available.
 - Store sparse, event-like, uncertain, or session-specific observations in \`${WORKSPACE_MEMORY_ROOT}/episodic/YYYY-MM-DD.md\` as append-only entries. Promote them to a semantic page only when repeated observations or strong evidence establish durable understanding.
