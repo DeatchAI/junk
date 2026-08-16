@@ -6,7 +6,11 @@ import {
   type ActionRunTraceEntry,
 } from "./actions/ActionSkillManager";
 import { BrowserBridge } from "./browser/BrowserBridge";
-import { BrowserAutomation } from "./browser/BrowserAutomation";
+import { BrowserAutomation, type BrowserActivityUpdate } from "./browser/BrowserAutomation";
+import {
+  browserTabSystemInstruction,
+  normalizeBrowserTabAttachments,
+} from "./browser/BrowserTabContext";
 import { BROWSER_TOOL_NAMES, runBrowserMCPServer } from "./browser/BrowserMCPServer";
 import {
   learnBrowserSkillFromArtifacts,
@@ -20,16 +24,38 @@ import { composerModeSystemInstruction } from "./composer/composerModes";
 import { DesktopBridge } from "./desktop/DesktopBridge";
 import { MACOS_TOOL_NAMES, runDesktopMCPServer } from "./desktop/DesktopMCPServer";
 import { createDemoRun, matchDemoScenario } from "./demo/DemoScenarios";
+import {
+  demoMediaPath,
+  demoMediaURL,
+  matchDemoMediaScenario,
+  type DemoMediaScenario,
+} from "./demo/DemoMediaScenarios";
 import { getCapabilities } from "./runtime/CapabilityDetector";
+import { isAllowedRuntimeSocketOrigin, isAuthorizedRuntimeRequest } from "./runtime/RuntimeAuth";
 import { SqliteHistory } from "./history/SqliteHistory";
 import { SqliteMCPServers, statusForServer } from "./history/SqliteMCPServers";
 import { SqliteQuickActions } from "./history/SqliteQuickActions";
 import { SqliteSlashCommands } from "./history/SqliteSlashCommands";
 import { ToolBroker } from "./tools/ToolBroker";
+import { CapabilityBroker } from "./capabilities/CapabilityBroker";
+import { CAPABILITY_BROKER_ID } from "./capabilities/CapabilityConstants";
+import { CAPABILITY_TOOL_NAMES, runCapabilityMCPServer } from "./capabilities/CapabilityMCPServer";
 import { resolveSelectedSkillInstructions } from "./skills/SkillResolver";
 import { workspaceMemorySystemInstruction } from "./workspace/WorkspaceMemory";
 import { HostedModelSessionManager } from "./hosted/HostedModelSessionManager";
-import type { ActionDefinition, ChatRequest, ClientMessage, MCPServerConfig, Message, ServerMessage } from "./protocol/messages";
+import { HostedMediaManager } from "./hosted/HostedMediaManager";
+import { normalizeAgentActivity } from "./activity/ActivityNormalizer";
+import type {
+  ActionDefinition,
+  ChatRequest,
+  ClientMessage,
+  MCPServerConfig,
+  MediaGenerateRequest,
+  MediaJob,
+  Message,
+  ServerMessage,
+  AgentKind,
+} from "./protocol/messages";
 import type { AgentPermissionRequest } from "./agents/AgentAdapter";
 
 if (process.argv.includes("--native-browser-host")) {
@@ -52,10 +78,23 @@ if (process.argv.includes("--mcp-secrets-tools")) {
   process.exit(0);
 }
 
+if (process.argv.includes("--mcp-capability-tools")) {
+  await runCapabilityMCPServer();
+  process.exit(0);
+}
+
 const PORT = Number(Bun.env.PORT || 3847);
+function requiredRuntimeToken(): string {
+  const token = Bun.env.DETACH_RUNTIME_TOKEN?.trim();
+  if (!token) throw new Error("DETACH_RUNTIME_TOKEN is required");
+  return token;
+}
+
+const RUNTIME_TOKEN = requiredRuntimeToken();
 const BROWSER_EXTENSION_ORIGIN = "chrome-extension://gdobcabflbojkedmocahijccipghgoij";
 
 const hostedModels = new HostedModelSessionManager();
+const hostedMedia = new HostedMediaManager(hostedModels);
 const agents = new AgentRegistry(hostedModels);
 const history = new SqliteHistory();
 const quickActions = new SqliteQuickActions();
@@ -67,6 +106,7 @@ const browserBridge = new BrowserBridge();
 const browserAutomation = new BrowserAutomation(browserBridge);
 const desktopBridge = new DesktopBridge();
 const secretBridge = new SecretBridge();
+const capabilityBroker = new CapabilityBroker(browserAutomation, browserBridge, desktopBridge, secretBridge);
 const activeRuns = new WeakMap<ServerWebSocket, ReturnType<ReturnType<typeof agents.get>["run"]>>();
 const pendingAgentPermissions = new Map<string, {
   ws: ServerWebSocket;
@@ -82,8 +122,54 @@ const server = Bun.serve<{ kind: "app" | "browser-native" }>({
   async fetch(req, server) {
     const url = new URL(req.url);
 
+    if (!isAuthorizedRuntimeRequest(req, url, RUNTIME_TOKEN)) {
+      return jsonResponse({ error: "Unauthorized local runtime request" }, 401);
+    }
+
     if (url.pathname === "/api/capabilities") {
       return jsonResponse(await capabilities());
+    }
+
+    if (url.pathname === "/api/agent/capabilities" && req.method === "GET") {
+      try {
+        return jsonResponse({
+          ok: true,
+          capabilities: await capabilityBroker.list(url.searchParams.get("query") ?? undefined),
+        });
+      } catch (error) {
+        return jsonResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }, 400);
+      }
+    }
+
+    if (url.pathname === "/api/agent/capabilities/describe" && req.method === "POST") {
+      try {
+        const body = await req.json() as { capabilityId?: string };
+        return jsonResponse({ ok: true, result: await capabilityBroker.describe(body.capabilityId ?? "") });
+      } catch (error) {
+        return jsonResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }, 400);
+      }
+    }
+
+    if (url.pathname === "/api/agent/capabilities/invoke" && req.method === "POST") {
+      try {
+        const body = await req.json() as {
+          capabilityId?: string;
+          toolName?: string;
+          arguments?: Record<string, unknown>;
+          runId?: string;
+        };
+        return jsonResponse({
+          ok: true,
+          result: await capabilityBroker.invoke({
+            capabilityId: body.capabilityId ?? "",
+            toolName: body.toolName ?? "",
+            arguments: body.arguments,
+            runId: body.runId,
+          }),
+        });
+      } catch (error) {
+        return jsonResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }, 400);
+      }
     }
 
     if (url.pathname === "/api/browser/status" && req.method === "GET") {
@@ -129,45 +215,8 @@ const server = Bun.serve<{ kind: "app" | "browser-native" }>({
     if (url.pathname === "/api/secrets/command" && req.method === "POST") {
       try {
         const body = await req.json() as { command?: "search" | "use"; payload?: Record<string, unknown> };
-        const payload = body.payload ?? {};
-        if (body.command === "search") {
-          const resultJson = await secretBridge.execute({ command: "secrets.search", payload });
-          return jsonResponse({ ok: true, result: JSON.parse(resultJson) });
-        }
-        if (body.command === "use") {
-          const prepared = await browserBridge.execute({ command: "browser.prepare_secret_fill", payload });
-          const resultJson = await secretBridge.execute({ command: "secrets.use_browser", payload: { ...payload, prepared } });
-          const authorized = JSON.parse(resultJson) as { approved?: boolean; username?: string; password?: string };
-          const username = authorized.username;
-          const password = authorized.password;
-          authorized.username = undefined;
-          authorized.password = undefined;
-          if (authorized.approved !== true || typeof username !== "string" || typeof password !== "string") {
-            throw new Error("Touch ID completed without a valid credential payload.");
-          }
-          const filled = await browserBridge.execute({
-            command: "browser.secure_fill",
-            payload: { ...payload, username, password },
-          }) as {
-            filled?: boolean;
-            submitted?: boolean;
-            inspection?: string;
-            navigation?: { changed?: boolean; documentReloaded?: boolean; beforeUrl?: string; afterUrl?: string; title?: string; status?: string };
-            next?: string;
-          };
-          if (!filled.filled) throw new Error("Chrome did not confirm the secure credential fill.");
-          return jsonResponse({
-            ok: true,
-            result: {
-              filled: true,
-              submitted: filled.submitted === true,
-              inspection: filled.inspection || "locked_until_navigation",
-              navigation: filled.navigation,
-              next: filled.next || (filled.submitted ? "wait_for_navigation" : "submit_required"),
-            },
-          });
-        }
-        return jsonResponse({ ok: false, error: "Unknown secure credential command" }, 400);
+        const result = await capabilityBroker.executeSecretCommand(body.command ?? "", body.payload ?? {});
+        return jsonResponse({ ok: true, result });
       } catch (error) {
         return jsonResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }, 400);
       }
@@ -179,9 +228,13 @@ const server = Bun.serve<{ kind: "app" | "browser-native" }>({
         endpoint: Bun.env.DETACH_HOSTED_CONTROL_PLANE_URL,
         accessToken: typeof body?.accessToken === "string" ? body.accessToken : undefined,
       };
-      composio.configureHostedControlPlane(hostedControlPlane);
+      // Hosted model sessions and Composio both use the signed-in profile sync.
+      // The Composio project key stays on the hosted control plane; this local
+      // runtime receives only the user's bearer token and MCP session details.
       hostedModels.configure(hostedControlPlane);
-      return jsonResponse({ success: true });
+      composio.configureHostedControlPlane(hostedControlPlane);
+      const composioAvailable = await composio.refreshAccess({ force: true });
+      return jsonResponse({ success: true, composioAvailable });
     }
 
     if (url.pathname === "/api/usage" && req.method === "GET") {
@@ -203,7 +256,7 @@ const server = Bun.serve<{ kind: "app" | "browser-native" }>({
 
     if (url.pathname === "/api/browser/native") {
       const origin = req.headers.get("origin");
-      if (origin && origin !== BROWSER_EXTENSION_ORIGIN) {
+      if (!isAllowedRuntimeSocketOrigin(url.pathname, origin, BROWSER_EXTENSION_ORIGIN)) {
         return jsonResponse({ error: "Browser bridge origin is not allowed" }, 403);
       }
       if (server.upgrade(req, { data: { kind: "browser-native" } })) {
@@ -211,6 +264,11 @@ const server = Bun.serve<{ kind: "app" | "browser-native" }>({
       }
     }
 
+    // URLSession does not send an Origin header. Browsers do, so reject any
+    // browser-originated attempt to attach as the privileged app socket.
+    if (!isAllowedRuntimeSocketOrigin(url.pathname, req.headers.get("origin"), BROWSER_EXTENSION_ORIGIN)) {
+      return jsonResponse({ error: "App WebSocket origin is not allowed" }, 403);
+    }
     if (server.upgrade(req, { data: { kind: "app" } })) {
       return;
     }
@@ -279,6 +337,30 @@ async function handleMessage(ws: ServerWebSocket, raw: string) {
         await handleChat(ws, message);
         return;
 
+      case "list_media_models":
+        send(ws, { type: "media_models", models: await hostedMedia.models() });
+        return;
+
+      case "quote_media":
+        send(ws, {
+          type: "media_quote",
+          requestId: message.requestId,
+          quote: await hostedMedia.quote({
+            model: message.model,
+            prompt: message.prompt || "Media generation quote",
+            config: message.config,
+            inputs: (message.inputRoles ?? []).map((role) => ({
+              uploadId: crypto.randomUUID(),
+              role,
+            })),
+          }),
+        });
+        return;
+
+      case "generate_media":
+        await handleMediaGenerate(ws, message);
+        return;
+
       case "stop_stream":
         activeRuns.get(ws)?.cancel();
         activeRuns.delete(ws);
@@ -314,7 +396,11 @@ async function handleMessage(ws: ServerWebSocket, raw: string) {
           send(ws, { type: "error", error: "Conversation not found" });
           return;
         }
-        send(ws, { type: "conversation", conversation: entry.conversation, messages: entry.messages });
+        send(ws, {
+          type: "conversation",
+          conversation: entry.conversation,
+          messages: await refreshConversationMedia(entry.messages),
+        });
         return;
       }
 
@@ -466,7 +552,13 @@ async function handleMessage(ws: ServerWebSocket, raw: string) {
         return;
 
       case "list_mcp_servers":
-        send(ws, { type: "mcp_servers_list", servers: mcpServers.listWithStatus() });
+        await composio.refreshAccess();
+        send(ws, {
+          type: "mcp_servers_list",
+          servers: mcpServers.listWithStatus().filter(
+            (server) => server.name !== "Composio MCP" || composio.isAccessAllowed(),
+          ),
+        });
         return;
 
       case "add_mcp_server": {
@@ -580,7 +672,7 @@ async function handleMessage(ws: ServerWebSocket, raw: string) {
         return;
 
       case "disconnect_composio_account":
-        await composio.disconnect(message.connectionId);
+        await composio.disconnect(message.connectionId, message.userId);
         send(ws, { type: "composio_disconnected", connectionId: message.connectionId });
         return;
 
@@ -614,6 +706,249 @@ async function handleMessage(ws: ServerWebSocket, raw: string) {
   }
 }
 
+async function handleMediaGenerate(
+  ws: ServerWebSocket,
+  message: MediaGenerateRequest,
+) {
+  const runId = message.runId ?? crypto.randomUUID();
+  const prompt = message.prompt.trim();
+  if (!prompt) {
+    send(ws, { type: "error", error: "Enter a prompt for the media generation.", runId });
+    return;
+  }
+
+  const userEntry = history.addUserMessage(message.conversationId, prompt);
+  const kind = message.kind === "video" ? "video" : "image";
+  const demoScenario = matchDemoMediaScenario(prompt, message.demoMode === true, kind);
+  if (demoScenario) {
+    await handleDemoMediaGenerate(
+      ws,
+      message,
+      runId,
+      prompt,
+      demoScenario,
+      userEntry.conversation.id,
+      userEntry.message.id,
+    );
+    return;
+  }
+
+  let assistantMessage: Message | undefined;
+  try {
+    const initial = await hostedMedia.create({
+      requestKey: message.requestKey,
+      model: message.model,
+      prompt,
+      config: message.config,
+      inputs: message.inputs ?? [],
+    });
+    assistantMessage = history.addMediaMessage(
+      userEntry.conversation.id,
+      "assistant",
+      mediaJobSummary(initial),
+      [{ type: "media_job", job: initial }],
+    );
+
+    const publish = (job: MediaJob) => publishMediaJob(
+      ws,
+      runId,
+      userEntry.conversation.id,
+      userEntry.message.id,
+      assistantMessage!.id,
+      job,
+    );
+    const completed = await hostedMedia.waitForCompletion(initial, publish);
+    if (completed.state === "succeeded") {
+      send(ws, {
+        type: "done",
+        runId,
+        conversationId: userEntry.conversation.id,
+        messageId: assistantMessage.id,
+        userMessageId: userEntry.message.id,
+      });
+    } else {
+      send(ws, {
+        type: "error",
+        runId,
+        error: completed.error?.message ?? "Media generation could not be completed.",
+      });
+    }
+  } catch (error) {
+    const messageText = error instanceof Error ? error.message : String(error);
+    if (assistantMessage) {
+      history.updateMessageParts(assistantMessage.id, messageText, []);
+    } else {
+      assistantMessage = history.addAssistantMessage(userEntry.conversation.id, messageText);
+    }
+    send(ws, { type: "error", error: messageText, runId });
+  }
+}
+
+async function handleDemoMediaGenerate(
+  ws: ServerWebSocket,
+  message: MediaGenerateRequest,
+  runId: string,
+  prompt: string,
+  scenario: DemoMediaScenario,
+  conversationId: string,
+  userMessageId: string,
+) {
+  const mediaPath = demoMediaPath(scenario.kind, scenario.mediaNumber);
+  const mediaFile = Bun.file(mediaPath);
+  if (!(await mediaFile.exists())) {
+    const errorMessage = `Demo ${scenario.kind} is missing: ${mediaPath}`;
+    history.addAssistantMessage(conversationId, errorMessage);
+    send(ws, { type: "error", error: errorMessage, runId });
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const jobId = `demo_media_${scenario.id}_${crypto.randomUUID()}`;
+  const initial: MediaJob = {
+    id: jobId,
+    kind: scenario.kind,
+    model: `demo-${scenario.kind}`,
+    state: "waiting",
+    progress: 0,
+    prompt,
+    config: message.config,
+    assets: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+  const mimeType = scenario.kind === "image" ? "image/png" : "video/mp4";
+  const asset = {
+    id: `${jobId}_asset`,
+    kind: scenario.kind,
+    mimeType,
+    url: demoMediaURL(scenario.kind, scenario.mediaNumber),
+  };
+  const assistantMessage = history.addMediaMessage(
+    conversationId,
+    "assistant",
+    mediaJobSummary(initial),
+    [{ type: "media_job", job: initial }],
+  );
+  const publish = (job: MediaJob) => publishMediaJob(
+    ws,
+    runId,
+    conversationId,
+    userMessageId,
+    assistantMessage.id,
+    job,
+  );
+
+  publish(initial);
+
+  let job = initial;
+  for (const stage of [
+    { delayMs: 1_300, state: "generating", progress: 18 },
+    { delayMs: 1_600, state: "generating", progress: 54 },
+    { delayMs: 1_300, state: "generating", progress: 82 },
+    { delayMs: 900, state: "persisting", progress: 96 },
+    { delayMs: 650, state: "succeeded", progress: 100 },
+  ] as const) {
+    await new Promise<void>((resolve) => setTimeout(resolve, stage.delayMs));
+    job = {
+      ...job,
+      state: stage.state,
+      progress: stage.progress,
+      assets: stage.state === "succeeded" ? [asset] : [],
+      updatedAt: new Date().toISOString(),
+    };
+    publish(job);
+  }
+
+  send(ws, {
+    type: "done",
+    runId,
+    conversationId,
+    messageId: assistantMessage.id,
+    userMessageId,
+  });
+}
+
+function publishMediaJob(
+  ws: ServerWebSocket,
+  runId: string,
+  conversationId: string,
+  userMessageId: string,
+  assistantMessageId: string,
+  job: MediaJob,
+) {
+  history.updateMessageParts(
+    assistantMessageId,
+    mediaJobSummary(job),
+    [{ type: "media_job", job }],
+  );
+  send(ws, {
+    type: "media_job",
+    runId,
+    conversationId,
+    userMessageId,
+    assistantMessageId,
+    job,
+  });
+  send(ws, {
+    type: "activity",
+    runId,
+    conversationId,
+    activityStatus: mediaActivityStatus(job),
+    event: {
+      agent: "hosted",
+      kind: job.state === "failed" || job.state === "reconciliation_required" ? "error" : "status",
+      action: job.kind === "image" ? "image" : "create",
+      phase: job.state === "succeeded"
+        ? "completed"
+        : job.state === "failed" || job.state === "reconciliation_required"
+          ? "failed"
+          : "updated",
+      title: mediaActivityStatus(job),
+      subtitle: `${job.progress}% complete`,
+      userFacing: true,
+    },
+  });
+}
+
+function mediaActivityStatus(job: MediaJob) {
+  if (job.state === "succeeded") return `${job.kind === "image" ? "Image" : "Video"} ready`;
+  if (job.state === "failed" || job.state === "reconciliation_required") {
+    return `${job.kind === "image" ? "Image" : "Video"} generation failed`;
+  }
+  if (job.state === "persisting") return "Saving generated media";
+  return `Generating ${job.kind} · ${job.progress}%`;
+}
+
+function mediaJobSummary(job: MediaJob) {
+  if (job.state === "succeeded") {
+    if (job.model === "demo-image" || job.model === "demo-video") {
+      return `Generated a demo ${job.kind}.`;
+    }
+    return `Generated ${job.assets.length === 1 ? `a ${job.kind}` : `${job.assets.length} ${job.kind} assets`} with ${job.model}.`;
+  }
+  if (job.state === "failed" || job.state === "reconciliation_required") {
+    return job.error?.message ?? "Media generation could not be completed.";
+  }
+  if (job.state === "persisting") return "Saving generated media…";
+  return `Generating ${job.kind}… ${job.progress}%`;
+}
+
+async function refreshConversationMedia(messages: Message[]) {
+  return Promise.all(messages.map(async (message) => {
+    const mediaPart = message.parts?.find((part) => part.type === "media_job");
+    if (!mediaPart || mediaPart.type !== "media_job") return message;
+    try {
+      const job = await hostedMedia.get(mediaPart.job.id);
+      const content = mediaJobSummary(job);
+      const parts = [{ type: "media_job" as const, job }];
+      history.updateMessageParts(message.id, content, parts);
+      return { ...message, content, parts };
+    } catch {
+      return message;
+    }
+  }));
+}
+
 async function handleChat(ws: ServerWebSocket, message: ChatRequest) {
   const startTime = Date.now();
   const runId = message.runId ?? crypto.randomUUID();
@@ -625,13 +960,19 @@ async function handleChat(ws: ServerWebSocket, message: ChatRequest) {
   const action = message.actionId ? quickActions.get(message.actionId) : undefined;
   const slashCommand = message.slashCommandId ? slashCommands.get(message.slashCommandId) : undefined;
   const learnedSkill = action ? learnedActionSkillAttachment(action) : undefined;
+  const attachedBrowserTabs = normalizeBrowserTabAttachments(message.browserTabs);
   let requestSkills = learnedSkill ? [learnedSkill, ...(message.skills ?? [])] : message.skills;
+  const requestedMCPServerIds = attachedBrowserTabs.length > 0
+    ? uniqueStrings([...(message.mcpServerIds ?? []), "detach-browser-tools"])
+    : message.mcpServerIds;
   const effectiveMCPServerIds = resolveConversationMCPServerIds(
     conversation.conversation.id,
-    message.mcpServerIds,
+    requestedMCPServerIds,
     Boolean(message.runId)
   );
+  await composio.refreshAccess();
   const agentMCPServers = buildAgentMCPServers(effectiveMCPServerIds, runId);
+  const capabilityBrokerActive = agentMCPServers.some((server) => server.enabled && server.id === CAPABILITY_BROKER_ID);
   let fullText = "";
   let firstChunkAt: number | undefined;
   const actionTrace: ActionRunTraceEntry[] = [];
@@ -644,6 +985,7 @@ async function handleChat(ws: ServerWebSocket, message: ChatRequest) {
     event: {
       agent: agent.id,
       kind: "lifecycle",
+      action: "prepare",
       phase: "started",
       title: `${agent.displayName} is working`,
       subtitle: "Preparing your task",
@@ -657,7 +999,7 @@ async function handleChat(ws: ServerWebSocket, message: ChatRequest) {
       await browserAutomation.beginTask(runId, [
         ...(message.workspacePath ? [message.workspacePath] : []),
         ...(message.files?.map((file) => file.path) ?? []),
-      ]);
+      ], (activity) => sendBrowserActivity(ws, runId, conversation.conversation.id, agent.id, activity));
       const browserContext = await browserAutomation.getTaskContext(runId).catch(() => undefined);
       requestSkills = uniqueSkillAttachments([
         ...(requestSkills ?? []),
@@ -683,6 +1025,16 @@ async function handleChat(ws: ServerWebSocket, message: ChatRequest) {
     }
   }
 
+  if (capabilityBrokerActive) {
+    capabilityBroker.registerRun(runId, {
+      allowedUploadPaths: [
+        ...(message.workspacePath ? [message.workspacePath] : []),
+        ...(message.files?.map((file) => file.path) ?? []),
+      ],
+      activitySink: (activity) => sendBrowserActivity(ws, runId, conversation.conversation.id, agent.id, activity),
+    });
+  }
+
   const agentRequest: ChatRequest = {
     ...message,
     runId,
@@ -692,6 +1044,7 @@ async function handleChat(ws: ServerWebSocket, message: ChatRequest) {
     contextMessages: buildContextMessages(priorMessages),
     systemPrompt: mergeSystemInstructions(
       workspaceMemorySystemInstruction(),
+      browserTabSystemInstruction(attachedBrowserTabs),
       message.systemPrompt,
       composerModeSystemInstruction(message.composerMode ?? slashCommand?.mode),
       slashCommand?.promptInstruction,
@@ -699,20 +1052,23 @@ async function handleChat(ws: ServerWebSocket, message: ChatRequest) {
       resolveSelectedSkillInstructions(requestSkills)
     ),
     mcpServers: agentMCPServers,
+    browserTabs: attachedBrowserTabs.length > 0 ? attachedBrowserTabs : undefined,
   };
 
   const streamCallbacks = {
     onActivity(status, toolName, event) {
+      const normalizedEvent = normalizeAgentActivity(agent.id, status, toolName, event);
       if (action) {
-        actionTrace.push({ status, toolName, event });
+        actionTrace.push({ status: normalizedEvent.title, toolName, event: normalizedEvent });
       }
+      if (!normalizedEvent.userFacing) return;
       send(ws, {
         type: "activity",
         runId,
         conversationId: conversation.conversation.id,
-        activityStatus: status,
+        activityStatus: normalizedEvent.title,
         toolName,
-        event,
+        event: normalizedEvent,
       });
     },
     onChunk(text) {
@@ -735,7 +1091,7 @@ async function handleChat(ws: ServerWebSocket, message: ChatRequest) {
   } satisfies Parameters<typeof agent.run>[1];
 
   // Exact demo prompts from Debug app builds exercise the real streaming/activity
-  // UI while deliberately bypassing every installed or hosted AI agent.
+  // UI while deliberately bypassing every installed or Detach Cloud agent.
   const run = demoScenario
     ? createDemoRun(demoScenario, agent.id, streamCallbacks)
     : agent.run(agentRequest, streamCallbacks);
@@ -746,6 +1102,9 @@ async function handleChat(ws: ServerWebSocket, message: ChatRequest) {
     const result = await run.finished;
     fullText = fullText || result.text;
     let browserArtifacts;
+    if (capabilityBrokerActive) {
+      browserArtifacts = await capabilityBroker.endRun(runId);
+    }
     if (browserTaskActive) {
       await browserAutomation.endTask(runId);
       browserTaskActive = false;
@@ -780,6 +1139,7 @@ async function handleChat(ws: ServerWebSocket, message: ChatRequest) {
       }
     }
   } catch (error) {
+    if (capabilityBrokerActive) await capabilityBroker.endRun(runId).catch(() => undefined);
     if (browserTaskActive) {
       await browserAutomation.endTask(runId).catch(() => undefined);
       browserTaskActive = false;
@@ -798,6 +1158,7 @@ async function handleChat(ws: ServerWebSocket, message: ChatRequest) {
       durationMs: Date.now() - startTime,
     });
   } finally {
+    if (capabilityBrokerActive) await capabilityBroker.endRun(runId).catch(() => undefined);
     if (browserTaskActive) await browserAutomation.endTask(runId).catch(() => undefined);
     activeRuns.delete(ws);
   }
@@ -813,6 +1174,35 @@ async function capabilities(): Promise<ServerMessage> {
 
 function send(ws: ServerWebSocket, message: ServerMessage) {
   ws.send(JSON.stringify(message));
+}
+
+function sendBrowserActivity(
+  ws: ServerWebSocket,
+  runId: string,
+  conversationId: string,
+  agentId: AgentKind,
+  activity: BrowserActivityUpdate,
+) {
+  send(ws, {
+    type: "activity",
+    runId,
+    conversationId,
+    activityStatus: activity.title,
+    toolName: "detach_browser_execute",
+    event: {
+      id: activity.id,
+      agent: agentId,
+      kind: activity.action === "error" ? "error" : "mcp_tool",
+      action: activity.action,
+      phase: activity.phase,
+      title: activity.title,
+      subtitle: activity.subtitle,
+      toolName: "detach_browser_execute",
+      userFacing: true,
+      sourceEventType: activity.sourceEventType,
+      sourceItemType: "browser_primitive",
+    },
+  });
 }
 
 function requestAgentPermission(
@@ -860,8 +1250,11 @@ function jsonResponse(body: unknown, status = 200) {
 }
 
 function buildAgentMCPServers(selectedIds?: string[], runId?: string): MCPServerConfig[] {
+  const persistedServers = mcpServers.listEnabled().filter(
+    (server) => server.name !== "Composio MCP" || composio.isAccessAllowed(),
+  );
   return selectMCPServers(
-    [browserMCPServerConfig(runId), desktopMCPServerConfig(), secretsMCPServerConfig(), ...mcpServers.listEnabled()],
+    [capabilityMCPServerConfig(runId), browserMCPServerConfig(runId), desktopMCPServerConfig(), secretsMCPServerConfig(), ...persistedServers],
     selectedIds
   );
 }
@@ -871,19 +1264,20 @@ function resolveConversationMCPServerIds(conversationId: string, requestedIds?: 
   const requested = requestedIds ? uniqueStrings(requestedIds) : undefined;
 
   if (requested && requested.length > 0) {
-    const merged = uniqueStrings([...rememberedIds, ...requested]);
+    const merged = uniqueStrings([CAPABILITY_BROKER_ID, ...rememberedIds, ...requested]);
     history.mergeMCPServerIds(conversationId, merged);
     return merged;
+  }
+
+  // Current macOS clients always send runId. When they omit MCP ids, attach only
+  // the compact capability broker; operation schemas are loaded by the agent on demand.
+  if (!requestedIds && modernClient) {
+    return uniqueStrings([CAPABILITY_BROKER_ID, ...rememberedIds]);
   }
 
   if (!requestedIds && rememberedIds.length > 0) {
     return rememberedIds;
   }
-
-  // Current macOS clients always send runId. When they omit MCP ids on a new
-  // conversation, that means no attachment—not the pre-v2 "load everything"
-  // fallback retained for clients without runId.
-  if (!requestedIds && modernClient) return [];
 
   return requestedIds;
 }
@@ -982,10 +1376,32 @@ function browserMCPServerConfig(runId?: string): MCPServerConfig {
     args: [...runtime.args, "--mcp-browser-tools"],
     env: {
       DETACH_RUNTIME_URL: `http://127.0.0.1:${PORT}`,
+      DETACH_RUNTIME_TOKEN: RUNTIME_TOKEN,
       ...(runId ? { DETACH_BROWSER_RUN_ID: runId } : {}),
     },
     approvalPolicy: "auto-approve",
     toolNames: BROWSER_TOOL_NAMES,
+    enabled: true,
+    created_at: 0,
+    updated_at: 0,
+  };
+}
+
+function capabilityMCPServerConfig(runId?: string): MCPServerConfig {
+  const runtime = currentRuntimeCommand();
+  return {
+    id: CAPABILITY_BROKER_ID,
+    name: "Detach capabilities",
+    transport: "stdio",
+    command: runtime.command,
+    args: [...runtime.args, "--mcp-capability-tools"],
+    env: {
+      DETACH_RUNTIME_URL: `http://127.0.0.1:${PORT}`,
+      DETACH_RUNTIME_TOKEN: RUNTIME_TOKEN,
+      ...(runId ? { DETACH_CAPABILITY_RUN_ID: runId } : {}),
+    },
+    approvalPolicy: "auto-approve",
+    toolNames: CAPABILITY_TOOL_NAMES,
     enabled: true,
     created_at: 0,
     updated_at: 0,
@@ -1002,6 +1418,7 @@ function desktopMCPServerConfig(): MCPServerConfig {
     args: [...runtime.args, "--mcp-macos-tools"],
     env: {
       DETACH_RUNTIME_URL: `http://127.0.0.1:${PORT}`,
+      DETACH_RUNTIME_TOKEN: RUNTIME_TOKEN,
     },
     approvalPolicy: "auto-approve",
     toolNames: MACOS_TOOL_NAMES,
@@ -1019,7 +1436,10 @@ function secretsMCPServerConfig(): MCPServerConfig {
     transport: "stdio",
     command: runtime.command,
     args: [...runtime.args, "--mcp-secrets-tools"],
-    env: { DETACH_RUNTIME_URL: `http://127.0.0.1:${PORT}` },
+    env: {
+      DETACH_RUNTIME_URL: `http://127.0.0.1:${PORT}`,
+      DETACH_RUNTIME_TOKEN: RUNTIME_TOKEN,
+    },
     approvalPolicy: "auto-approve",
     toolNames: SECRETS_TOOL_NAMES,
     enabled: true,
