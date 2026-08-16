@@ -146,7 +146,7 @@ class BrowserMCPServer {
   }
 
   private async callBrowserTool(name: string, args: Record<string, unknown>) {
-    const command = TOOL_COMMANDS[name] ?? name.replace(/^detach_/, "browser.");
+    const command = BROWSER_TOOL_COMMANDS[name] ?? name.replace(/^detach_/, "browser.");
     const response = await fetch(`${this.runtimeUrl}/api/browser/command`, {
       method: "POST",
       headers: runtimeHeaders(),
@@ -177,7 +177,7 @@ interface MCPRequest {
   params?: unknown;
 }
 
-const TOOL_COMMANDS: Record<string, string> = {
+export const BROWSER_TOOL_COMMANDS: Record<string, string> = {
   detach_browser_execute: "browser.execute_code",
 };
 

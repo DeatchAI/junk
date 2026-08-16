@@ -129,6 +129,10 @@ export class BrowserAutomation {
     };
   }
 
+  isTaskActive(runId: string) {
+    return this.activeTasks.has(runId);
+  }
+
   async endTask(runId: string, captureFinal = true) {
     if (!this.activeTasks.has(runId)) return;
     const artifacts = this.ensureArtifacts(runId);
