@@ -86,7 +86,7 @@ struct AccountSettingsView: View {
 
   private var hostedSubscriptionSection: some View {
     VStack(alignment: .leading, spacing: 16) {
-      Text("Hosted AI credits")
+      Text("Detach Cloud credits")
         .font(.appFont(size: 13, weight: .semibold))
         .foregroundColor(theme.textColor)
 
@@ -95,7 +95,7 @@ struct AccountSettingsView: View {
           ProgressView()
             .controlSize(.small)
             .frame(maxWidth: .infinity, alignment: .center)
-        } else if let credits = hostedSubscription.credits {
+        } else if hostedSubscription.credits != nil {
           HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 8) {
               Text("Available")
@@ -108,9 +108,11 @@ struct AccountSettingsView: View {
                 HostedCreditsProgressView(progress: progress, percentage: percentage)
               }
 
-              Text("\(credits.available) credits remaining")
-                .font(.appFont(size: 20, weight: .bold))
-                .foregroundColor(theme.textColor)
+              if let percentage = hostedSubscription.availableCreditPercentage {
+                Text("\(percentage)% of allowance remaining")
+                  .font(.appFont(size: 20, weight: .bold))
+                  .foregroundColor(theme.textColor)
+              }
             }
             Spacer()
             if let subscription = hostedSubscription.subscription {
@@ -124,14 +126,14 @@ struct AccountSettingsView: View {
             }
           }
 
-          if credits.reserved != "0" {
-            Text("\(credits.reserved) credits are reserved for active hosted tasks.")
+          if hostedSubscription.hasReservedCredits {
+            Text("Some credits are reserved for active Detach Cloud tasks.")
               .font(.appFont(size: 10))
               .foregroundColor(theme.textColor.opacity(0.5))
           }
 
-          if credits.amountDue != "0" {
-            Text("\(credits.amountDue) credits are pending reconciliation.")
+          if hostedSubscription.hasAmountDue {
+            Text("Some allowance is pending reconciliation.")
               .font(.appFont(size: 10))
               .foregroundColor(.orange)
           }
@@ -152,12 +154,12 @@ struct AccountSettingsView: View {
           .cornerRadius(theme.borderRadius / 1.5)
           .disabled(hostedSubscription.isLoading)
         } else if hostedSubscription.hasHostedCredits {
-          Text("Hosted access is active. Subscription details are still syncing.")
+          Text("Detach Cloud access is active. Subscription details are still syncing.")
             .font(.appFont(size: 10))
             .foregroundColor(theme.textColor.opacity(0.55))
         } else if !hostedSubscription.plans.isEmpty {
           VStack(alignment: .leading, spacing: 8) {
-            Text("Choose a monthly allocation")
+            Text("Choose a monthly allowance")
               .font(.appFont(size: 11))
               .foregroundColor(theme.textColor.opacity(0.6))
             ForEach(hostedSubscription.plans) { plan in
@@ -168,7 +170,7 @@ struct AccountSettingsView: View {
                   VStack(alignment: .leading, spacing: 2) {
                     Text(plan.displayName)
                       .font(.appFont(size: 12, weight: .semibold))
-                    Text("\(plan.monthlyCredits.formatted()) hosted credits / month")
+                    Text("Agent, Image & Video on Detach Cloud / month")
                       .font(.appFont(size: 10))
                       .foregroundColor(theme.textColor.opacity(0.55))
                   }
@@ -237,7 +239,7 @@ struct AccountSettingsView: View {
                 Text("AI Usage:")
                   .font(.appFont(size: 11))
                 Spacer()
-                Text("\(Int(usage.creditsUsed)) / \(usage.creditLimit) credits")
+                Text("\(Int(((1 - usage.usageProgress) * 100).rounded()))% remaining")
                   .font(.appFont(size: 11))
               }
               .foregroundColor(theme.textColor.opacity(0.6))
@@ -253,7 +255,7 @@ struct AccountSettingsView: View {
                   .frame(width: 240 * CGFloat(usage.usageProgress), height: 6)
               }
 
-              Text("Credits reset on \(usage.formattedResetDate)")
+              Text("Allowance resets on \(usage.formattedResetDate)")
                 .font(.appFont(size: 10))
                 .foregroundColor(theme.textColor.opacity(0.4))
                 .padding(.top, 2)
@@ -281,7 +283,7 @@ struct AccountSettingsView: View {
           .foregroundColor(theme.textColor)
 
         Text(
-          "Use Detach-hosted models and manage your monthly credit allocation. Local agents remain available without an account."
+          "Use Detach Cloud and manage your monthly credits. Existing AI accounts remain available without a Detach account."
         )
           .font(.appFont(size: 13))
           .foregroundColor(theme.textColor.opacity(0.6))
@@ -388,7 +390,7 @@ struct HostedCreditsProgressView: View {
       }
       .frame(height: 8)
 
-      Text("\(percentage)% left")
+      Text("\(percentage)% / 100%")
         .font(.appFont(size: 12, weight: .medium))
         .foregroundColor(theme.textColor.opacity(0.65))
         .fixedSize()

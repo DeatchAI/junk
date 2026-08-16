@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The small purchase decision shown before a person switches to Hosted AI.
+/// The small purchase decision shown before a person switches to Detach Cloud.
 /// Polar Checkout itself stays in the browser; this window never receives a card.
 struct HostedPricingSheet: View {
   let onClose: () -> Void
@@ -11,9 +11,9 @@ struct HostedPricingSheet: View {
   @ObservedObject private var theme = ThemeManager.shared
 
   private let fallbackPlans = [
-    HostedSubscriptionPlan(id: "pro_lite", displayName: "Pro Lite", monthlyPriceCents: 1_000, monthlyCredits: 1_500),
-    HostedSubscriptionPlan(id: "pro", displayName: "Pro", monthlyPriceCents: 2_000, monthlyCredits: 3_000),
-    HostedSubscriptionPlan(id: "more_pro", displayName: "More Pro", monthlyPriceCents: 10_000, monthlyCredits: 17_000),
+    HostedSubscriptionPlan(id: "pro_lite", displayName: "Pro Lite", monthlyPriceCents: 1_000, monthlyCredits: 750),
+    HostedSubscriptionPlan(id: "pro", displayName: "Pro", monthlyPriceCents: 2_000, monthlyCredits: 1_500),
+    HostedSubscriptionPlan(id: "more_pro", displayName: "More Pro", monthlyPriceCents: 10_000, monthlyCredits: 8_500),
   ]
 
   private var plans: [HostedSubscriptionPlan] {
@@ -24,7 +24,7 @@ struct HostedPricingSheet: View {
     VStack(alignment: .leading, spacing: 16) {
       HStack(alignment: .top, spacing: 12) {
         VStack(alignment: .leading, spacing: 4) {
-          Text("Hosted AI")
+          Text("Detach Cloud")
             .font(.appFont(size: 20, weight: .bold))
             .foregroundColor(theme.textColor)
           Text(headerSubtitle)
@@ -62,7 +62,7 @@ struct HostedPricingSheet: View {
           .foregroundColor(.red)
       }
 
-      Text("Monthly credits are added after payment confirmation. Cancel anytime from your account.")
+      Text("Your monthly Detach Cloud credits are added after payment confirmation. Cancel anytime from your account.")
         .font(.appFont(size: 10))
         .foregroundColor(theme.secondaryTextColor.opacity(0.8))
         .fixedSize(horizontal: false, vertical: true)
@@ -82,9 +82,9 @@ struct HostedPricingSheet: View {
 
   private var headerSubtitle: String {
     if !auth.isAuthenticated {
-      return "Sign in to choose a monthly credit allocation."
+      return "Sign in to choose a Detach Cloud plan."
     }
-    return "Choose a monthly credit allocation for Detach-hosted models."
+      return "Choose a Detach Cloud plan for Agent, Image, and Video."
   }
 
   private func planButton(_ plan: HostedSubscriptionPlan) -> some View {
@@ -100,7 +100,7 @@ struct HostedPricingSheet: View {
           Text(plan.displayName)
             .font(.appFont(size: 13, weight: .semibold))
             .foregroundColor(theme.textColor)
-          Text("\(plan.monthlyCredits.formatted()) hosted credits / month")
+          Text("Agent, Image & Video on Detach Cloud / month")
             .font(.appFont(size: 10))
             .foregroundColor(theme.secondaryTextColor)
         }
@@ -139,8 +139,8 @@ struct HostedPricingSheet: View {
           Text("\(subscription.displayName) is active")
             .font(.appFont(size: 13, weight: .semibold))
             .foregroundColor(theme.textColor)
-          if let credits = hostedSubscription.credits {
-            Text("\(credits.available) credits available")
+          if let percentage = hostedSubscription.availableCreditPercentage {
+            Text("\(percentage)% of allowance remaining")
               .font(.appFont(size: 10))
               .foregroundColor(theme.secondaryTextColor)
           }
@@ -168,11 +168,11 @@ struct HostedPricingSheet: View {
   private var creditedAccess: some View {
     HStack(spacing: 12) {
       VStack(alignment: .leading, spacing: 2) {
-        Text("Hosted AI is ready")
+        Text("Detach Cloud is ready")
           .font(.appFont(size: 13, weight: .semibold))
           .foregroundColor(theme.textColor)
-        if let credits = hostedSubscription.credits {
-          Text("\(credits.available) credits available")
+        if let percentage = hostedSubscription.availableCreditPercentage {
+          Text("\(percentage)% of allowance remaining")
             .font(.appFont(size: 10))
             .foregroundColor(theme.secondaryTextColor)
         }

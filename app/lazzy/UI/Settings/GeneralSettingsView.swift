@@ -20,7 +20,10 @@ struct GeneralSettingsView: View {
   private var agentOptions: [(model: String, isAvailable: Bool)] {
     let capabilities = wsManager.agentCapabilities
     if capabilities.isEmpty {
-      return [("Codex", true), ("Claude", false), ("Grok", false), ("OpenCode", false), ("Hosted AI", true)]
+      // Capability discovery is asynchronous. An empty list is not evidence
+      // that the local providers are missing, so keep them selectable until
+      // the runtime returns the authoritative result.
+      return [("Codex", true), ("Claude", true), ("Grok", true), ("OpenCode", true), ("Detach Cloud", true)]
     }
     return capabilities.map { ($0.displayName, $0.id == "hosted" || $0.installed) }
   }
@@ -30,7 +33,14 @@ struct GeneralSettingsView: View {
   }
 
   private var modelOptions: [(model: String, isAvailable: Bool)] {
-    [("Default", true)] + (selectedCapability?.models.map { ($0.displayName, true) } ?? [])
+    let models = selectedCapability?.models ?? []
+    if !models.isEmpty {
+      return [("Default", true)] + models.map { ($0.displayName, true) }
+    }
+    if wsManager.isLoadingCapabilities || wsManager.agentCapabilities.isEmpty {
+      return [("Default", true), ("Loading models…", false)]
+    }
+    return [("Default", true), ("No models detected", false)]
   }
 
   var body: some View {
@@ -88,7 +98,7 @@ struct GeneralSettingsView: View {
     VStack(alignment: .leading, spacing: 10) {
       SettingsSectionHeader(
         title: "Agent runtime",
-        subtitle: "Use your existing coding-agent or OpenCode account, or choose Detach-hosted models."
+        subtitle: "Use your existing coding-agent or OpenCode account, or use Detach Cloud."
       )
 
       SettingsCard {
@@ -141,31 +151,29 @@ struct GeneralSettingsView: View {
           .frame(width: 170)
         }
 
-        if !modelOptions.dropFirst().isEmpty {
-          SettingsCardDivider()
+        SettingsCardDivider()
 
-          SettingsRow(
-            title: "Model",
-            subtitle: "Saved separately for each agent"
-          ) {
-            ModelMenu(
-              modelsWithAvailability: modelOptions,
-              selectedOption: $selectedModelName,
-              onSelect: { newValue in
-                let model = selectedCapability?.models.first(where: { $0.displayName == newValue })?.id
-                DetachSettings.setSelectedModel(model, for: selectedAgent)
-                wsManager.updateAISettings(
-                  agent: selectedAgent,
-                  model: model,
-                  imageModel: nil,
-                  temperature: nil,
-                  maxSteps: nil,
-                  systemPrompt: nil
-                )
-              }
-            )
-            .frame(width: 170)
-          }
+        SettingsRow(
+          title: "Model",
+          subtitle: "Saved separately for each agent"
+        ) {
+          ModelMenu(
+            modelsWithAvailability: modelOptions,
+            selectedOption: $selectedModelName,
+            onSelect: { newValue in
+              let model = selectedCapability?.models.first(where: { $0.displayName == newValue })?.id
+              DetachSettings.setSelectedModel(model, for: selectedAgent)
+              wsManager.updateAISettings(
+                agent: selectedAgent,
+                model: model,
+                imageModel: nil,
+                temperature: nil,
+                maxSteps: nil,
+                systemPrompt: nil
+              )
+            }
+          )
+          .frame(width: 170)
         }
 
         if !wsManager.agentCapabilities.isEmpty {
@@ -241,7 +249,7 @@ struct GeneralSettingsView: View {
     case "claude": return "Claude"
     case "grok": return "Grok"
     case "opencode": return "OpenCode"
-    case "hosted": return "Hosted AI"
+    case "hosted": return "Detach Cloud"
     default: return "Codex"
     }
   }
@@ -269,16 +277,9 @@ struct AgentCapabilityRow: View {
         .foregroundColor(capability.installed ? .green : .orange)
         .font(.appFont(size: 14))
 
-      VStack(alignment: .leading, spacing: 3) {
         Text(capability.displayName)
           .font(.appFont(size: 13, weight: .medium))
           .foregroundColor(theme.textColor)
-
-        Text(capability.installed ? capability.executablePath ?? "Installed" : capability.authHint ?? "Not installed")
-          .font(.appFont(size: 11))
-          .foregroundColor(theme.secondaryTextColor)
-          .lineLimit(2)
-      }
 
       Spacer()
     }

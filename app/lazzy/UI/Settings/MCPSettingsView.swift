@@ -13,12 +13,15 @@ import SwiftUI
 struct MCPSettingsContentView: View {
   @ObservedObject var wsManager: WebSocketManager
   @ObservedObject private var theme = ThemeManager.shared
+  @ObservedObject private var authManager = AuthManager.shared
+  @StateObject private var hostedSubscription = HostedSubscriptionManager.shared
 
   @State private var searchText = ""
   @State private var isAddingServer = false
   @State private var currentOffset = 0
   private let pageSize = 10
   @State private var searchTask: Task<Void, Never>? = nil
+  @State private var hasLoadedEntitlement = false
 
   enum MCPType: String, CaseIterable, Identifiable {
     case builtin = "Built-in"
@@ -138,11 +141,18 @@ struct MCPSettingsContentView: View {
           // List Section
           ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-              if wsManager.isLoadingComposio && wsManager.mcpServers.isEmpty
-                && wsManager.composioIntegrations.isEmpty
+              if selectedType == .builtin
+                && (!authManager.isReady || (!authManager.isPro && !hasLoadedEntitlement))
               {
                 loadingView
-              } else if let error = wsManager.composioError {
+              } else if selectedType == .builtin && authManager.isReady && !hasComposioAccess {
+                composioPaidPlanGate
+              } else if !wsManager.isConnected
+                || (selectedType == .builtin && wsManager.isLoadingComposio)
+                || (selectedType == .custom && wsManager.isLoadingMCPServers)
+              {
+                loadingView
+              } else if selectedType == .builtin, let error = wsManager.composioError {
                 errorView(message: error)
               } else {
                 LazyVStack(spacing: 12) {
@@ -191,9 +201,29 @@ struct MCPSettingsContentView: View {
       wsManager.listMCPServers()
       loadIntegrations()
     }
+    .task(id: authManager.isAuthenticated) {
+      hasLoadedEntitlement = false
+      await hostedSubscription.refresh()
+      hasLoadedEntitlement = true
+      if wsManager.isConnected && selectedType == .builtin && hasComposioAccess {
+        currentOffset = 0
+        loadIntegrations()
+      }
+    }
+    .onChange(of: wsManager.isConnected) { _, isConnected in
+      guard isConnected else { return }
+      wsManager.listMCPServers()
+      if selectedType == .builtin && hasComposioAccess {
+        currentOffset = 0
+        loadIntegrations()
+      }
+    }
     .onChange(of: selectedType) { oldValue, newValue in
+      currentOffset = 0
       if newValue == .custom {
         wsManager.listMCPServers()
+      } else if hasComposioAccess {
+        loadIntegrations()
       }
     }
   }
@@ -262,6 +292,10 @@ struct MCPSettingsContentView: View {
     loadIntegrations()
   }
 
+  private var hasComposioAccess: Bool {
+    authManager.isPro || hostedSubscription.subscription != nil
+  }
+
   // MARK: - Components
 
   private func errorView(message: String) -> some View {
@@ -287,12 +321,32 @@ struct MCPSettingsContentView: View {
     HStack {
       ProgressView()
         .scaleEffect(0.7)
-      Text("Loading integrations...")
+      Text(selectedType == .builtin ? "Loading integrations…" : "Loading MCP servers…")
         .font(.appFont(size: 13))
         .foregroundColor(theme.secondaryTextColor)
     }
     .frame(maxWidth: .infinity)
     .padding(.vertical, 40)
+  }
+
+  private var composioPaidPlanGate: some View {
+    VStack(spacing: 12) {
+      Image(systemName: "lock.shield")
+        .font(.appFont(size: 24))
+        .foregroundColor(theme.accentColor)
+
+      Text("Composio integrations require a paid Detach plan")
+        .font(.appFont(size: 14, weight: .semibold))
+        .foregroundColor(theme.textColor)
+        .multilineTextAlignment(.center)
+
+      Text("Upgrade your plan to connect the full Composio toolkit catalog.")
+        .font(.appFont(size: 12))
+        .foregroundColor(theme.secondaryTextColor)
+        .multilineTextAlignment(.center)
+        .padding(.horizontal)
+    }
+    .frame(maxWidth: .infinity, minHeight: 180)
   }
 
   private var emptyStateView: some View {
