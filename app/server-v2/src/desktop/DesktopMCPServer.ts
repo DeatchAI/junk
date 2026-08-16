@@ -109,10 +109,10 @@ class DesktopMCPServer {
   }
 
   private async callDesktopTool(name: string, args: Record<string, unknown>) {
-    const command = TOOL_COMMANDS[name];
+    const command = MACOS_TOOL_COMMANDS[name];
     const response = await fetch(`${this.runtimeUrl}/api/desktop/command`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: runtimeHeaders(),
       body: JSON.stringify({ command, payload: args }),
     });
 
@@ -135,7 +135,7 @@ interface MCPRequest {
   params?: unknown;
 }
 
-const TOOL_COMMANDS: Record<string, string> = {
+export const MACOS_TOOL_COMMANDS: Record<string, string> = {
   detach_macos_status: "desktop.status",
   detach_macos_list_apps: "desktop.list_apps",
   detach_macos_list_windows: "desktop.list_windows",
@@ -155,7 +155,7 @@ const appTarget = {
   appName: { type: "string", description: "Localized application name." },
 };
 
-const MACOS_TOOLS = [
+export const MACOS_TOOLS = [
   tool("detach_macos_status", "Check the native macOS bridge and required Accessibility and Screen Recording permissions.", {}),
   tool("detach_macos_list_apps", "List running foreground-capable macOS applications.", {}),
   tool("detach_macos_list_windows", "List accessibility windows for an app, defaulting to the frontmost app.", appTarget),
@@ -234,4 +234,13 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function resolveRuntimeUrl() {
   return Bun.env.DETACH_DESKTOP_RUNTIME_HTTP?.trim() || Bun.env.DETACH_RUNTIME_URL?.trim() || DEFAULT_RUNTIME_URL;
+}
+
+function runtimeHeaders() {
+  const token = Bun.env.DETACH_RUNTIME_TOKEN?.trim();
+  if (!token) throw new Error("DETACH_RUNTIME_TOKEN is required");
+  return {
+    "Authorization": `Bearer ${token}`,
+    "Content-Type": "application/json",
+  };
 }
