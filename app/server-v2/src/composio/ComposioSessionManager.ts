@@ -1,4 +1,3 @@
-import { Composio, SessionPreset } from "@composio/core";
 import { SqliteComposioSessions } from "../history/SqliteComposioSessions";
 import { SqliteMCPServers, statusForServer } from "../history/SqliteMCPServers";
 import type { ComposioConnection, ComposioIntegration, MCPServerConfig, ServerMessage } from "../protocol/messages";
@@ -17,54 +16,45 @@ interface ToolkitState {
   };
 }
 
-interface ToolkitListResponse {
-  items: ToolkitState[];
-  cursor?: string;
-  totalPages?: number;
+interface HostedControlPlane {
+  endpoint: string;
+  accessToken: string;
 }
 
-interface ComposioSession {
-  sessionId: string;
+interface BrokerSession {
+  id: string;
+  mode: "manage" | "execute";
   mcp: {
     type?: "http" | "sse";
     url: string;
     headers?: Record<string, string>;
   };
-  toolkits: (options?: {
-    limit?: number;
-    cursor?: string;
-    search?: string;
-    isConnected?: boolean;
-  }) => Promise<ToolkitListResponse>;
-  authorize: (
-    toolkit: string,
-    options?: { callbackUrl?: string }
-  ) => Promise<ConnectionRequest>;
 }
 
-interface ConnectionRequest {
-  id: string;
-  redirectUrl?: string | null;
-  status?: string;
-  waitForConnection: (timeout?: number) => Promise<ConnectedAccount>;
+interface BrokerIntegrationResponse {
+  items?: ToolkitState[];
+  total?: number;
+  hasMore?: boolean;
+  offset?: number;
+  limit?: number;
 }
 
-interface ConnectedAccount {
-  id: string;
-  status: string;
-  toolkit?: {
-    slug: string;
+interface BrokerConnectionsResponse {
+  items?: ToolkitState[];
+}
+
+interface BrokerConnectResponse {
+  connection?: {
+    id?: string;
+    redirectUrl?: string | null;
+    status?: string | null;
   };
 }
 
-interface HostedControlPlaneConfig {
-  endpoint: string;
-  accessToken: string;
-}
-
-interface HostedSessionResponse {
+interface BrokerSessionResponse {
   session?: {
     id?: string;
+    mode?: "manage" | "execute";
     mcp?: {
       type?: "http" | "sse";
       url?: string;
@@ -73,93 +63,109 @@ interface HostedSessionResponse {
   };
 }
 
-interface HostedToolkitResponse {
-  items?: ToolkitState[];
-  cursor?: string;
+interface BrokerError extends Error {
+  status?: number;
 }
 
-interface HostedConnectionResponse {
-  connection?: {
-    id?: string;
-    redirectUrl?: string | null;
-    status?: string | null;
-  };
+interface ComposioSessionManagerOptions {
+  fetcher?: typeof fetch;
 }
 
 export class ComposioSessionManager {
   private readonly sessionStore: SqliteComposioSessions;
   private readonly mcpServers: SqliteMCPServers;
-  private readonly composio?: Composio;
-  private readonly hostedMode: boolean;
-  private hostedControlPlane?: HostedControlPlaneConfig;
+  private readonly fetcher: typeof fetch;
+  private controlPlane?: HostedControlPlane;
+  private paidAccess = false;
+  private lastAccessCheckAt = 0;
 
-  constructor(mcpServers: SqliteMCPServers, sessionStore = new SqliteComposioSessions()) {
+  constructor(
+    mcpServers: SqliteMCPServers,
+    sessionStore = new SqliteComposioSessions(),
+    options: ComposioSessionManagerOptions = {},
+  ) {
     this.mcpServers = mcpServers;
     this.sessionStore = sessionStore;
-    this.hostedMode = Bun.env.DETACH_DISTRIBUTION_MODE?.trim().toLowerCase() === "hosted";
+    this.fetcher = options.fetcher ?? fetch;
+  }
 
-    // Development-only fallback. Production builds use the hosted control
-    // plane, where the Detach-owned Composio key never reaches this runtime.
-    const apiKey = Bun.env.COMPOSIO_API_KEY?.trim();
-    if (!this.hostedMode && apiKey) {
-      this.composio = new Composio({
-        apiKey,
-        allowTracking: false,
-        disableVersionCheck: true,
-        host: "detach-runtime",
-      });
+  /**
+   * The Composio project key stays on the hosted control plane. The bundled
+   * runtime receives only the signed-in user's session credentials and uses
+   * them to connect directly to Composio's MCP endpoint.
+   */
+  configureHostedControlPlane(input: { endpoint?: string; accessToken?: string }) {
+    const endpoint = normalizeControlPlaneURL(input.endpoint);
+    const accessToken = input.accessToken?.trim();
+    this.controlPlane = endpoint && accessToken ? { endpoint, accessToken } : undefined;
+    this.paidAccess = false;
+    this.lastAccessCheckAt = 0;
+
+    if (!this.controlPlane) {
+      this.disableComposioServer();
     }
   }
 
   isConfigured() {
-    return this.hostedMode ? Boolean(this.hostedControlPlane) : Boolean(this.composio);
+    return Boolean(this.controlPlane);
   }
 
-  configureHostedControlPlane(input: { endpoint?: string; accessToken?: string }) {
-    if (!this.hostedMode) return;
+  isAccessAllowed() {
+    return this.paidAccess;
+  }
 
-    const endpoint = input.endpoint?.trim();
-    const accessToken = input.accessToken?.trim();
-    if (!endpoint || !accessToken) {
-      this.hostedControlPlane = undefined;
-      return;
+  async refreshAccess(options: { force?: boolean } = {}): Promise<boolean> {
+    if (!this.controlPlane) {
+      this.paidAccess = false;
+      this.lastAccessCheckAt = 0;
+      this.disableComposioServer();
+      return false;
+    }
+
+    if (!options.force && this.paidAccess && Date.now() - this.lastAccessCheckAt < 60_000) {
+      return true;
     }
 
     try {
-      const url = new URL(endpoint);
-      if (url.protocol !== "https:") throw new Error("Hosted control plane must use HTTPS.");
-      this.hostedControlPlane = { endpoint: url.toString().replace(/\/$/, ""), accessToken };
+      const response = await this.request<{ enabled?: boolean }>({ action: "access" });
+      this.paidAccess = response.enabled === true;
+      this.lastAccessCheckAt = Date.now();
+      if (!this.paidAccess) this.disableComposioServer();
+      return this.paidAccess;
     } catch {
-      this.hostedControlPlane = undefined;
+      this.paidAccess = false;
+      this.lastAccessCheckAt = Date.now();
+      this.disableComposioServer();
+      return false;
     }
   }
 
   async listIntegrations(input: { userId?: string; limit?: number; offset?: number; query?: string }): Promise<ServerMessage> {
-    const limit = Math.max(1, Math.min(input.limit ?? 20, 50));
+    const limit = Math.max(1, input.limit ?? 20);
     const offset = Math.max(0, input.offset ?? 0);
 
-    if (this.hostedMode) {
-      if (!this.hostedControlPlane) return this.unconfiguredIntegrations(limit, offset, "Sign in to the hosted Detach app to enable Composio.");
-      return this.listHostedIntegrations(input, limit, offset);
+    try {
+      await this.ensurePaidAccess();
+    } catch (error) {
+      return this.unconfiguredIntegrations(limit, offset, errorMessage(error));
     }
 
-    if (!this.composio) {
-      return this.unconfiguredIntegrations(limit, offset, "Set COMPOSIO_API_KEY in the Detach runtime environment to enable built-in Composio integrations.");
-    }
-
-    const { session } = await this.ensureManagementSession(input.userId);
-    const response = await session.toolkits({
-      limit: offset + limit,
-      search: input.query?.trim() || undefined,
+    const userId = requiredUserId(input.userId);
+    const response = await this.request<BrokerIntegrationResponse>({
+      action: "integrations",
+      userId,
+      limit,
+      offset,
+      query: input.query?.trim() || undefined,
     });
-    const items = response.items.slice(offset, offset + limit).map(toolkitToIntegration);
+    const integrations = (response.items ?? []).map(toolkitToIntegration);
 
     return {
       type: "composio_integrations",
       configured: true,
-      integrations: items,
-      total: estimateTotal(offset, items.length, limit, response),
-      hasMore: Boolean(response.cursor) || response.items.length > offset + items.length,
+      integrations,
+      total: response.total ?? integrations.length,
+      hasMore: response.hasMore ?? false,
       offset,
       limit,
     };
@@ -169,118 +175,203 @@ export class ComposioSessionManager {
     messages: ServerMessage[];
     pending?: Promise<ServerMessage[]>;
   }> {
-    if (this.hostedMode) return this.connectHostedToolkit(input);
-    const { session } = await this.ensureManagementSession(input.userId);
+    await this.ensurePaidAccess();
+    const userId = requiredUserId(input.userId);
 
     if (input.toolkit === "composio-mcp") {
-      const connectedToolkits = await this.connectedToolkits(input.userId);
+      const connections = await this.fetchConnections();
+      const connectedToolkits = activeToolkits(connections);
       if (connectedToolkits.length === 0) {
         throw new Error("Connect a Composio toolkit before adding Composio MCP to a chat.");
       }
-      const { mcpServer } = await this.ensureDirectMCPSession(input.userId, connectedToolkits);
-      return {
-        messages: [
-          { type: "mcp_server_added", server: mcpServer, status: statusForServer(mcpServer) },
-          { type: "composio_connected", toolkit: input.toolkit, connectionId: mcpServer.id, connectionStatus: "ACTIVE" },
-        ],
-      };
+      return { messages: await this.mcpServerMessages(userId, connectedToolkits, input.toolkit, "ACTIVE") };
     }
 
-    const request = await session.authorize(input.toolkit, {
-      callbackUrl: input.callbackUrl?.trim() || Bun.env.COMPOSIO_CALLBACK_URL?.trim() || undefined,
+    const response = await this.request<BrokerConnectResponse>({
+      action: "connect",
+      toolkit: input.toolkit,
+      callbackUrl: input.callbackUrl?.trim() || undefined,
     });
+    const connection = response.connection;
+    if (!connection?.id) {
+      throw new Error("Composio did not return a connection request.");
+    }
 
-    if (request.redirectUrl) {
+    if (connection.redirectUrl) {
       return {
-        messages: [
-          {
-            type: "composio_auth_url",
-            url: request.redirectUrl,
-            toolkit: input.toolkit,
-            connectionId: request.id,
-          },
-        ],
-        pending: request.waitForConnection(composioAuthTimeoutMs()).then(async (account) => {
-          const toolkit = account.toolkit?.slug ?? input.toolkit;
-          const { mcpServer } = await this.ensureDirectMCPSession(input.userId, [toolkit]);
-          return [
-            { type: "mcp_server_added", server: mcpServer, status: statusForServer(mcpServer) },
-            {
-              type: "composio_connected",
-              toolkit,
-              connectionId: account.id,
-              connectionStatus: account.status,
-            },
-          ];
+        messages: [{
+          type: "composio_auth_url",
+          url: connection.redirectUrl,
+          toolkit: input.toolkit,
+          connectionId: connection.id,
+        }],
+        pending: this.waitForConnection({
+          userId,
+          toolkit: input.toolkit,
+          connectionId: connection.id,
         }),
       };
     }
 
-    const { mcpServer } = await this.ensureDirectMCPSession(input.userId, [input.toolkit]);
     return {
-      messages: [
-        { type: "mcp_server_added", server: mcpServer, status: statusForServer(mcpServer) },
-        {
-          type: "composio_connected",
-          toolkit: input.toolkit,
-          connectionId: request.id,
-          connectionStatus: request.status ?? "ACTIVE",
-        },
-      ],
+      messages: await this.mcpServerMessages(
+        userId,
+        activeToolkits(await this.fetchConnections()),
+        input.toolkit,
+        connection.status ?? "ACTIVE",
+        connection.id,
+      ),
     };
   }
 
   async listConnections(input: { userId?: string }): Promise<ComposioConnection[]> {
-    if (this.hostedMode) {
-      if (!this.hostedControlPlane) return [];
-      const connections = await this.hostedConnections();
-      const connectedToolkits = connections
-        .filter((connection) => connection.status === "ACTIVE")
-        .map((connection) => connection.toolkit);
-      if (connectedToolkits.length > 0) await this.ensureDirectMCPSession(input.userId, connectedToolkits);
-      return connections;
-    }
-    if (!this.composio) return [];
-    const connections = await this.connectedConnections(input.userId);
-
-    const connectedToolkits = connections
-      .filter((connection) => connection.status === "ACTIVE")
-      .map((connection) => connection.toolkit);
+    await this.ensurePaidAccess();
+    const userId = requiredUserId(input.userId);
+    const connections = await this.fetchConnections();
+    const connectedToolkits = activeToolkits(connections);
     if (connectedToolkits.length > 0) {
-      await this.ensureDirectMCPSession(input.userId, connectedToolkits);
+      await this.ensureDirectMCPSession(userId, connectedToolkits);
     }
-
     return connections;
   }
 
-  async disconnect(connectionId: string) {
-    if (this.hostedMode) {
-      if (!this.hostedControlPlane) return;
-      await this.hostedRequest({ action: "disconnect", connectionId });
-      return;
+  async disconnect(connectionId: string, userId?: string) {
+    await this.ensurePaidAccess();
+    const resolvedUserId = requiredUserId(userId);
+    await this.request({
+      action: "disconnect",
+      connectionId,
+    });
+
+    const connections = await this.fetchConnections();
+    const connectedToolkits = activeToolkits(connections);
+    if (connectedToolkits.length > 0) {
+      await this.ensureDirectMCPSession(resolvedUserId, connectedToolkits);
+    } else {
+      this.disableComposioServer();
     }
-    if (!this.composio) return;
-    await this.composio.connectedAccounts.delete(connectionId);
   }
 
-  private async connectedToolkits(userId?: string) {
-    return (await this.connectedConnections(userId))
-      .filter((connection) => connection.status === "ACTIVE")
-      .map((connection) => connection.toolkit);
+  private async ensurePaidAccess() {
+    if (!this.controlPlane) {
+      throw new Error("Sign in to Detach to use Composio integrations.");
+    }
+    if (!(await this.refreshAccess())) {
+      throw new Error("Composio integrations require an active paid Detach plan.");
+    }
   }
 
-  private async connectedConnections(userId?: string): Promise<ComposioConnection[]> {
-    if (this.hostedMode) return this.hostedConnections();
-    const { session } = await this.ensureManagementSession(userId);
-    const response = await session.toolkits({ limit: 100, isConnected: true });
-    return response.items
-      .filter((item) => item.connection?.connectedAccount?.id)
-      .map((item) => ({
-        id: item.connection?.connectedAccount?.id ?? item.slug,
+  private async fetchConnections(): Promise<ComposioConnection[]> {
+    const response = await this.request<BrokerConnectionsResponse>({ action: "connections" });
+    return (response.items ?? []).flatMap((item) => {
+      const account = item.connection?.connectedAccount;
+      if (!account?.id) return [];
+      return [{
+        id: account.id,
         toolkit: item.slug,
-        status: item.connection?.connectedAccount?.status ?? (item.connection?.isActive ? "ACTIVE" : "UNKNOWN"),
+        status: account.status ?? (item.connection?.isActive ? "ACTIVE" : "UNKNOWN"),
         connectedAt: new Date().toISOString(),
-      }));
+      } satisfies ComposioConnection];
+    });
+  }
+
+  private async waitForConnection(input: {
+    userId: string;
+    toolkit: string;
+    connectionId: string;
+  }): Promise<ServerMessage[]> {
+    const deadline = Date.now() + composioAuthTimeoutMs();
+    while (Date.now() < deadline) {
+      const connection = (await this.fetchConnections()).find((item) => item.id === input.connectionId);
+      if (connection && isActiveStatus(connection.status)) {
+        return this.mcpServerMessages(
+          input.userId,
+          activeToolkits(await this.fetchConnections()),
+          input.toolkit,
+          connection.status,
+          connection.id,
+        );
+      }
+      if (connection && ["EXPIRED", "FAILED", "REVOKED", "ERROR"].includes(connection.status.toUpperCase())) {
+        throw new Error(`Composio connection for ${input.toolkit} did not complete (${connection.status}).`);
+      }
+      await delay(2_000);
+    }
+
+    throw new Error(`Timed out waiting for ${input.toolkit} to connect through Composio.`);
+  }
+
+  private async mcpServerMessages(
+    userId: string,
+    connectedToolkits: string[],
+    toolkit: string,
+    status: string,
+    connectionId?: string,
+  ): Promise<ServerMessage[]> {
+    const sessionToolkits = connectedToolkits.length > 0 ? connectedToolkits : [toolkit];
+    const { mcpServer } = await this.ensureDirectMCPSession(userId, sessionToolkits);
+    return [
+      { type: "mcp_server_added", server: mcpServer, status: statusForServer(mcpServer) },
+      {
+        type: "composio_connected",
+        toolkit,
+        connectionId: connectionId ?? mcpServer.id,
+        connectionStatus: status,
+      },
+    ];
+  }
+
+  private async ensureDirectMCPSession(userId: string, toolkits: string[]) {
+    const normalizedToolkits = normalizeToolkits(toolkits);
+    const storageKey = composioSessionStorageKey(userId, "mcp");
+    const existing = this.sessionStore.get(storageKey);
+
+    const response = await this.request<BrokerSessionResponse>({
+      action: "session",
+      mode: "execute",
+      toolkits: normalizedToolkits,
+    });
+    const session = parseBrokerSession(response, "execute");
+    const mcpServer = this.upsertMCPServer(existing?.mcpServerId, session, normalizedToolkits);
+
+    this.sessionStore.upsert({
+      userId: storageKey,
+      sessionId: session.id,
+      mcpServerId: mcpServer.id,
+      mcpUrl: session.mcp.url,
+      headers: session.mcp.headers,
+    });
+
+    return { session, mcpServer };
+  }
+
+  private async request<T = Record<string, unknown>>(body: Record<string, unknown>): Promise<T> {
+    const controlPlane = this.controlPlane;
+    if (!controlPlane) {
+      throw new Error("Sign in to Detach to use Composio integrations.");
+    }
+
+    const response = await this.fetcher(`${controlPlane.endpoint}/api/composio-session`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${controlPlane.accessToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    const payload = await response.json().catch(() => undefined) as unknown;
+    if (!response.ok) {
+      const message = errorMessageFromPayload(payload) || `Composio control plane failed with HTTP ${response.status}.`;
+      const error = new Error(message) as BrokerError;
+      error.status = response.status;
+      if (response.status === 401 || response.status === 403) {
+        this.paidAccess = false;
+        this.disableComposioServer();
+      }
+      throw error;
+    }
+
+    return payload as T;
   }
 
   private unconfiguredIntegrations(limit: number, offset: number, error: string): ServerMessage {
@@ -296,237 +387,14 @@ export class ComposioSessionManager {
     };
   }
 
-  private async listHostedIntegrations(
-    input: { limit?: number; offset?: number; query?: string },
-    limit: number,
-    offset: number,
-  ): Promise<ServerMessage> {
-    const response = await this.hostedRequest({
-      action: "integrations",
-      limit: offset + limit,
-      query: input.query?.trim() || undefined,
-    }) as HostedToolkitResponse;
-    const items = (response.items ?? []).slice(offset, offset + limit).map(toolkitToIntegration);
-    return {
-      type: "composio_integrations",
-      configured: true,
-      integrations: items,
-      total: offset + items.length + (response.cursor ? limit : 0),
-      hasMore: Boolean(response.cursor),
-      offset,
-      limit,
-    };
+  private disableComposioServer() {
+    const server = this.mcpServers.list().find((item) => item.name === "Composio MCP");
+    if (server?.enabled) {
+      this.mcpServers.update(server.id, { enabled: false });
+    }
   }
 
-  private async connectHostedToolkit(input: { toolkit: string; userId?: string }): Promise<{
-    messages: ServerMessage[];
-    pending?: Promise<ServerMessage[]>;
-  }> {
-    if (input.toolkit === "composio-mcp") {
-      const connectedToolkits = await this.connectedToolkits(input.userId);
-      if (connectedToolkits.length === 0) {
-        throw new Error("Connect a Composio toolkit before adding Composio MCP to a chat.");
-      }
-      const { mcpServer } = await this.ensureDirectMCPSession(input.userId, connectedToolkits);
-      return {
-        messages: [
-          { type: "mcp_server_added", server: mcpServer, status: statusForServer(mcpServer) },
-          { type: "composio_connected", toolkit: input.toolkit, connectionId: mcpServer.id, connectionStatus: "ACTIVE" },
-        ],
-      };
-    }
-
-    const response = await this.hostedRequest({ action: "connect", toolkit: input.toolkit }) as HostedConnectionResponse;
-    const connection = response.connection;
-    if (!connection?.id) throw new Error("Hosted Composio did not return a connection request.");
-
-    if (connection.redirectUrl) {
-      return {
-        messages: [{ type: "composio_auth_url", url: connection.redirectUrl, toolkit: input.toolkit, connectionId: connection.id }],
-        pending: this.waitForHostedConnection(input.userId, input.toolkit).then(async (account) => {
-          const { mcpServer } = await this.ensureDirectMCPSession(input.userId, [account.toolkit]);
-          return [
-            { type: "mcp_server_added", server: mcpServer, status: statusForServer(mcpServer) },
-            { type: "composio_connected", toolkit: account.toolkit, connectionId: account.id, connectionStatus: account.status },
-          ];
-        }),
-      };
-    }
-
-    const { mcpServer } = await this.ensureDirectMCPSession(input.userId, [input.toolkit]);
-    return {
-      messages: [
-        { type: "mcp_server_added", server: mcpServer, status: statusForServer(mcpServer) },
-        { type: "composio_connected", toolkit: input.toolkit, connectionId: connection.id, connectionStatus: connection.status ?? "ACTIVE" },
-      ],
-    };
-  }
-
-  private async hostedConnections(): Promise<ComposioConnection[]> {
-    const response = await this.hostedRequest({ action: "connections" }) as HostedToolkitResponse;
-    return (response.items ?? [])
-      .filter((item) => item.connection?.connectedAccount?.id)
-      .map((item) => ({
-        id: item.connection?.connectedAccount?.id ?? item.slug,
-        toolkit: item.slug,
-        status: item.connection?.connectedAccount?.status ?? (item.connection?.isActive ? "ACTIVE" : "UNKNOWN"),
-        connectedAt: new Date().toISOString(),
-      }));
-  }
-
-  private async waitForHostedConnection(userId: string | undefined, toolkit: string): Promise<ComposioConnection> {
-    const deadline = Date.now() + composioAuthTimeoutMs();
-    while (Date.now() < deadline) {
-      const connection = (await this.hostedConnections()).find(
-        (candidate) => candidate.toolkit === toolkit && candidate.status === "ACTIVE",
-      );
-      if (connection) return connection;
-      await new Promise((resolve) => setTimeout(resolve, 1_500));
-    }
-    throw new Error(`Timed out waiting for ${toolkit} to connect through hosted Composio.`);
-  }
-
-  private async ensureHostedDirectMCPSession(userId: string | undefined, toolkits: string[]) {
-    const resolvedUserId = this.sessionStore.resolveUserId(userId);
-    const storageKey = composioSessionStorageKey(resolvedUserId, "mcp");
-    const normalizedToolkits = normalizeToolkits(toolkits);
-    const existing = this.sessionStore.get(storageKey);
-    const response = await this.hostedRequest({ action: "session", mode: "execute", toolkits: normalizedToolkits }) as HostedSessionResponse;
-    const remote = response.session;
-    if (!remote?.id || !remote.mcp?.url) {
-      throw new Error("Hosted Composio did not return an MCP endpoint.");
-    }
-
-    const session = {
-      sessionId: remote.id,
-      mcp: {
-        type: remote.mcp.type,
-        url: remote.mcp.url,
-        headers: remote.mcp.headers,
-      },
-    } as ComposioSession;
-    const mcpServer = this.upsertMCPServer(existing?.mcpServerId, session, normalizedToolkits);
-    this.sessionStore.upsert({
-      userId: storageKey,
-      sessionId: session.sessionId,
-      mcpServerId: mcpServer.id,
-      mcpUrl: session.mcp.url,
-      headers: session.mcp.headers,
-    });
-    return { userId: resolvedUserId, session, mcpServer };
-  }
-
-  private async hostedRequest(body: Record<string, unknown>): Promise<unknown> {
-    const config = this.hostedControlPlane;
-    if (!config) throw new Error("Sign in to the hosted Detach app to enable Composio.");
-
-    const response = await fetch(`${config.endpoint}/api/composio-session`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${config.accessToken}`,
-        "content-type": "application/json",
-        "x-detach-distribution-mode": "hosted",
-      },
-      body: JSON.stringify(body),
-    });
-    const payload = await response.json().catch(() => undefined) as { error?: { message?: unknown } } | undefined;
-    if (!response.ok) {
-      const message = typeof payload?.error?.message === "string" ? payload.error.message : "Hosted Composio request failed.";
-      throw new Error(message);
-    }
-    return payload;
-  }
-
-  private async ensureManagementSession(userId?: string) {
-    if (!this.composio) {
-      throw new Error("Set COMPOSIO_API_KEY in the Detach runtime environment to enable Composio.");
-    }
-
-    const resolvedUserId = this.sessionStore.resolveUserId(userId);
-    const storageKey = composioSessionStorageKey(resolvedUserId, "management");
-    const existing = this.sessionStore.get(storageKey);
-    let session: ComposioSession | undefined;
-
-    if (existing) {
-      try {
-        session = await this.composio.sessions.use(existing.sessionId, { mcp: true }) as unknown as ComposioSession;
-      } catch {
-        session = undefined;
-      }
-    }
-
-    if (!session) {
-      session = await this.composio.sessions.create(resolvedUserId, {
-        mcp: true,
-        manageConnections: {
-          enable: true,
-          callbackUrl: Bun.env.COMPOSIO_CALLBACK_URL?.trim() || undefined,
-          waitForConnections: false,
-        },
-      }) as unknown as ComposioSession;
-    }
-
-    if (!session.mcp?.url) {
-      throw new Error("Composio did not return an MCP endpoint for this session.");
-    }
-
-    this.sessionStore.upsert({
-      userId: storageKey,
-      sessionId: session.sessionId,
-      mcpUrl: session.mcp.url,
-      headers: session.mcp.headers,
-    });
-
-    return { userId: resolvedUserId, session };
-  }
-
-  private async ensureDirectMCPSession(userId: string | undefined, toolkits: string[]) {
-    if (this.hostedMode) return this.ensureHostedDirectMCPSession(userId, toolkits);
-    if (!this.composio) {
-      throw new Error("Set COMPOSIO_API_KEY in the Detach runtime environment to enable Composio.");
-    }
-
-    const resolvedUserId = this.sessionStore.resolveUserId(userId);
-    const storageKey = composioSessionStorageKey(resolvedUserId, "mcp");
-    const normalizedToolkits = normalizeToolkits(toolkits);
-    const existing = this.sessionStore.get(storageKey);
-    const existingMCPServer = existing?.mcpServerId ? this.mcpServers.get(existing.mcpServerId) : undefined;
-    const existingToolkits = composioToolkitsFromServer(existingMCPServer);
-    let session: ComposioSession | undefined;
-
-    if (existing && sameToolkits(existingToolkits, normalizedToolkits)) {
-      try {
-        session = await this.composio.sessions.use(existing.sessionId, { mcp: true }) as unknown as ComposioSession;
-      } catch {
-        session = undefined;
-      }
-    }
-
-    if (!session) {
-      session = await this.composio.sessions.create(resolvedUserId, {
-        mcp: true,
-        sessionPreset: SessionPreset.DIRECT_TOOLS,
-        ...(normalizedToolkits.length > 0 ? { toolkits: normalizedToolkits } : {}),
-      }) as unknown as ComposioSession;
-    }
-
-    if (!session.mcp?.url) {
-      throw new Error("Composio did not return an MCP endpoint for this session.");
-    }
-
-    const mcpServer = this.upsertMCPServer(existing?.mcpServerId, session, normalizedToolkits);
-    this.sessionStore.upsert({
-      userId: storageKey,
-      sessionId: session.sessionId,
-      mcpServerId: mcpServer.id,
-      mcpUrl: session.mcp.url,
-      headers: session.mcp.headers,
-    });
-
-    return { userId: resolvedUserId, session, mcpServer };
-  }
-
-  private upsertMCPServer(preferredId: string | undefined, session: ComposioSession, toolkits: string[]): MCPServerConfig {
+  private upsertMCPServer(preferredId: string | undefined, session: BrokerSession, toolkits: string[]): MCPServerConfig {
     const existing =
       (preferredId ? this.mcpServers.get(preferredId) : undefined) ??
       this.mcpServers.list().find((server) => server.name === "Composio MCP");
@@ -561,9 +429,84 @@ function toolkitToIntegration(toolkit: ToolkitState): ComposioIntegration {
   };
 }
 
-function estimateTotal(offset: number, count: number, limit: number, response: ToolkitListResponse) {
-  if (response.totalPages && response.totalPages > 0) return response.totalPages * limit;
-  return offset + count + (response.cursor ? limit : 0);
+function parseBrokerSession(value: BrokerSessionResponse, expectedMode: "manage" | "execute"): BrokerSession {
+  const session = value.session;
+  if (!session) {
+    throw new Error("Composio control plane returned an invalid MCP session.");
+  }
+  const id = session?.id?.trim() ?? "";
+  const url = session?.mcp?.url?.trim() ?? "";
+  const mode = session?.mode ?? expectedMode;
+  if (!id || !url || mode !== expectedMode) {
+    throw new Error("Composio control plane returned an invalid MCP session.");
+  }
+
+  let parsedURL: URL;
+  try {
+    parsedURL = new URL(url);
+  } catch {
+    throw new Error("Composio control plane returned an invalid MCP URL.");
+  }
+  if (parsedURL.protocol !== "https:") {
+    throw new Error("Composio control plane returned an insecure MCP URL.");
+  }
+
+  const headers = session.mcp?.headers
+    ? Object.fromEntries(Object.entries(session.mcp.headers).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+    : undefined;
+
+  return {
+    id,
+    mode,
+    mcp: {
+      type: session.mcp?.type,
+      url,
+      headers,
+    },
+  };
+}
+
+function errorMessageFromPayload(payload: unknown) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const error = (payload as Record<string, unknown>).error;
+  if (!error || typeof error !== "object" || Array.isArray(error)) return undefined;
+  const message = (error as Record<string, unknown>).message;
+  return typeof message === "string" && message.trim() ? message : undefined;
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Composio integrations are unavailable.";
+}
+
+function requiredUserId(userId?: string) {
+  const resolved = userId?.trim();
+  if (!resolved) throw new Error("Sign in to Detach before using Composio integrations.");
+  return resolved;
+}
+
+function activeToolkits(connections: ComposioConnection[]) {
+  return normalizeToolkits(
+    connections.filter((connection) => isActiveStatus(connection.status)).map((connection) => connection.toolkit),
+  );
+}
+
+function isActiveStatus(status: string) {
+  return status.toUpperCase() === "ACTIVE";
+}
+
+function normalizeControlPlaneURL(value: string | undefined) {
+  const candidate = value?.trim();
+  if (!candidate) return undefined;
+
+  try {
+    const url = new URL(candidate);
+    const isLocalDevelopment = url.protocol === "http:"
+      && (url.hostname === "127.0.0.1" || url.hostname === "localhost");
+    if (url.protocol !== "https:" && !isLocalDevelopment) return undefined;
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return undefined;
+  }
 }
 
 function composioAuthTimeoutMs() {
@@ -579,19 +522,10 @@ function normalizeToolkits(toolkits: string[]) {
   return [...new Set(toolkits.map((toolkit) => toolkit.trim().toLowerCase()).filter(Boolean))].sort();
 }
 
-function sameToolkits(left: string[], right: string[]) {
-  if (left.length !== right.length) return false;
-  return left.every((value, index) => value === right[index]);
-}
-
 function composioToolMarkers(toolkits: string[]) {
   return ["composio-direct-tools-v1", ...normalizeToolkits(toolkits).map((toolkit) => `composio-toolkit:${toolkit}`)];
 }
 
-function composioToolkitsFromServer(server?: MCPServerConfig) {
-  return normalizeToolkits(
-    (server?.toolNames ?? [])
-      .map((name) => name.startsWith("composio-toolkit:") ? name.slice("composio-toolkit:".length) : "")
-      .filter(Boolean)
-  );
+function delay(milliseconds: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }
