@@ -24,14 +24,14 @@ class SecretsMCPServer {
     const request = JSON.parse(line) as { id?: string | number | null; method?: string; params?: { name?: string; arguments?: Record<string, unknown> } };
     if (!("id" in request)) return;
     if (request.method === "initialize") return this.write(request.id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "detach-secrets", version: "0.1.0" } });
-    if (request.method === "tools/list") return this.write(request.id, { tools: TOOLS });
+    if (request.method === "tools/list") return this.write(request.id, { tools: SECRETS_TOOLS });
     if (request.method !== "tools/call") return this.error(request.id, "Unknown method");
 
     const name = request.params?.name;
-    if (!TOOLS.some((tool) => tool.name === name)) return this.error(request.id, "Unknown tool");
+    if (!SECRETS_TOOLS.some((tool) => tool.name === name)) return this.error(request.id, "Unknown tool");
     try {
       const response = await fetch(`${this.runtimeUrl}/api/secrets/command`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: runtimeHeaders(),
         body: JSON.stringify({ command: name === "detach_secrets_search_credential" ? "search" : "use", payload: request.params?.arguments ?? {} }),
       });
       const json = await response.json() as { ok?: boolean; result?: unknown; error?: string };
@@ -46,9 +46,18 @@ class SecretsMCPServer {
   private error(id: string | number | null | undefined, message: string) { process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32601, message } })}\n`); }
 }
 
-const TOOLS = [
+export const SECRETS_TOOLS = [
   tool("detach_secrets_search_credential", "Search locally stored credential labels for a site or app. Returns safe metadata only, never passwords or tokens.", { query: { type: "string" }, origin: { type: "string" } }, ["query"]),
   tool("detach_secrets_use_credential", "Trigger Touch ID and atomically fill verified browser fields without exposing values. Pass submitRef to submit immediately and receive structured navigation/inspection state; otherwise the filled document remains inspection-locked until navigation.", { credentialId: { type: "string" }, origin: { type: "string" }, tabId: { type: "number" }, usernameRef: { type: "string" }, passwordRef: { type: "string" }, submitRef: { type: "string", description: "Optional previously described submit button ref. When supplied, Detach fills and submits in one authenticated operation." } }, ["credentialId", "origin", "usernameRef", "passwordRef"]),
 ];
 
 function tool(name: string, description: string, properties: Record<string, unknown>, required: string[] = []) { return { name, description, inputSchema: { type: "object", properties, required } }; }
+
+function runtimeHeaders() {
+  const token = Bun.env.DETACH_RUNTIME_TOKEN?.trim();
+  if (!token) throw new Error("DETACH_RUNTIME_TOKEN is required");
+  return {
+    "Authorization": `Bearer ${token}`,
+    "Content-Type": "application/json",
+  };
+}

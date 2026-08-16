@@ -23,6 +23,10 @@ export class SecretBridge {
 
   attachAppSocket(socket: SecretAppSocket) { this.appSocket = socket; }
 
+  isAppConnected() {
+    return Boolean(this.appSocket);
+  }
+
   detachAppSocket(socket: SecretAppSocket) {
     if (this.appSocket !== socket) return;
     this.appSocket = undefined;
