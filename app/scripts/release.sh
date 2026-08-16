@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the v2 runtime, archives and notarizes Detach, creates a Sparkle-signed
-# DMG, and optionally publishes it to the Supabase updates bucket.
+# DMG, and optionally publishes it to a GitHub Release.
 
 set -euo pipefail
 
@@ -11,9 +11,6 @@ APP_NAME="Detach"
 SCHEME="lazzy"
 PROJECT_FILE="$PROJECT_ROOT/detach.xcodeproj"
 EXPORT_OPTIONS="$SCRIPT_DIR/ExportOptions.plist"
-UPDATE_BASE_URL="${DETACH_UPDATE_BASE_URL:-https://qymrzmmsroxkteaxbgoo.supabase.co/storage/v1/object/public/updates}"
-SUPABASE_URL="${SUPABASE_URL:-https://qymrzmmsroxkteaxbgoo.supabase.co}"
-SUPABASE_UPDATES_BUCKET="${SUPABASE_UPDATES_BUCKET:-updates}"
 
 VERSION=""
 BUILD=""
@@ -54,7 +51,7 @@ Options:
   --notary-key-id ID             App Store Connect API key ID
   --notary-issuer-id ID          App Store Connect issuer ID
   --sparkle-key-file PATH        Sparkle EdDSA private key file
-  --publish                      Upload the DMG and appcast to Supabase
+  --publish                      Upload the DMG and appcast to a GitHub Release
   --skip-notarization            Local test only; cannot be combined with --publish
   --output PATH                  A new folder for release artifacts
   -h, --help                     Show this help
@@ -62,7 +59,7 @@ Options:
 Secrets are read from environment variables when flags are omitted:
   DETACH_NOTARY_PROFILE, APPLE_NOTARY_KEY_PATH, APPLE_NOTARY_KEY_ID,
   APPLE_NOTARY_ISSUER_ID, SPARKLE_PRIVATE_KEY_FILE, SPARKLE_PRIVATE_KEY,
-  SUPABASE_SERVICE_ROLE_KEY.
+  GH_TOKEN or GITHUB_TOKEN (for --publish, unless gh is already authenticated).
 
 EOF
 }
@@ -90,6 +87,11 @@ if [[ "$SKIP_NOTARIZATION" == true && "$PUBLISH" == true ]]; then
   fail "Refusing to publish an unnotarized release"
 fi
 
+RELEASE_REPOSITORY="${DETACH_GITHUB_REPOSITORY:-${GITHUB_REPOSITORY:-DeatchAI/App}}"
+RELEASE_TAG="v$VERSION"
+UPDATE_FEED_URL="${DETACH_UPDATE_FEED_URL:-https://github.com/$RELEASE_REPOSITORY/releases/latest/download/appcast.xml}"
+DOWNLOAD_URL_PREFIX="${DETACH_UPDATE_DOWNLOAD_URL:-https://github.com/$RELEASE_REPOSITORY/releases/download/$RELEASE_TAG}"
+
 OUTPUT_DIR="${OUTPUT_DIR:-$PROJECT_ROOT/dist/release-$VERSION-$BUILD-$(date +%Y%m%d-%H%M%S)}"
 [[ ! -e "$OUTPUT_DIR" ]] || fail "Output already exists: $OUTPUT_DIR (choose --output instead)"
 
@@ -100,6 +102,9 @@ require_command hdiutil
 require_command ditto
 require_command curl
 require_command codesign
+if [[ "$PUBLISH" == true ]]; then
+  require_command gh
+fi
 
 mkdir -p "$OUTPUT_DIR"
 DERIVED_DATA="$OUTPUT_DIR/DerivedData"
@@ -107,6 +112,7 @@ ARCHIVE_PATH="$OUTPUT_DIR/$APP_NAME.xcarchive"
 EXPORT_PATH="$OUTPUT_DIR/export"
 STAGING_PATH="$OUTPUT_DIR/staging/$APP_NAME"
 DMG_NAME="$APP_NAME-$VERSION.dmg"
+RELEASE_DMG_NAME="$APP_NAME.dmg"
 DMG_PATH="$OUTPUT_DIR/$DMG_NAME"
 APPCAST_WORKDIR="$OUTPUT_DIR/appcast-work"
 APPCAST_PATH="$OUTPUT_DIR/appcast.xml"
@@ -195,10 +201,10 @@ note "Generating the Sparkle appcast"
 SPARKLE_TOOL="$(find "$DERIVED_DATA/SourcePackages/artifacts" -type f -path '*/Sparkle/bin/generate_appcast' -print -quit 2>/dev/null || true)"
 [[ -n "$SPARKLE_TOOL" && -x "$SPARKLE_TOOL" ]] || fail "Sparkle generate_appcast tool was not resolved from Xcode's package artifacts"
 mkdir -p "$APPCAST_WORKDIR"
-curl --fail --silent --show-error "$UPDATE_BASE_URL/appcast.xml" -o "$APPCAST_WORKDIR/appcast.xml" || echo "No existing appcast found; creating a new feed."
-ditto "$DMG_PATH" "$APPCAST_WORKDIR/$DMG_NAME"
+curl --fail --silent --show-error --location "$UPDATE_FEED_URL" -o "$APPCAST_WORKDIR/appcast.xml" || echo "No existing appcast found; creating a new feed."
+ditto "$DMG_PATH" "$APPCAST_WORKDIR/$RELEASE_DMG_NAME"
 APPCAST_ARGS=(
-  --download-url-prefix "${UPDATE_BASE_URL%/}/"
+  --download-url-prefix "${DOWNLOAD_URL_PREFIX%/}/"
   --maximum-versions 0
   --maximum-deltas 0
   --versions "$BUILD"
@@ -216,21 +222,27 @@ fi
 ditto "$APPCAST_WORKDIR/appcast.xml" "$APPCAST_PATH"
 
 if [[ "$PUBLISH" == true ]]; then
-  [[ -n "${SUPABASE_SERVICE_ROLE_KEY:-}" ]] || fail "SUPABASE_SERVICE_ROLE_KEY is required with --publish"
-  note "Uploading the versioned DMG before publishing appcast.xml"
-  upload_file() {
-    local source="$1"
-    local object_path="$2"
-    local content_type="$3"
-    curl --fail --show-error --retry 3 --retry-all-errors \
-      -X PUT "${SUPABASE_URL%/}/storage/v1/object/$SUPABASE_UPDATES_BUCKET/$object_path" \
-      -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
-      -H "Content-Type: $content_type" \
-      -H "x-upsert: true" \
-      --data-binary "@$source"
-  }
-  upload_file "$DMG_PATH" "$DMG_NAME" "application/x-apple-diskimage"
-  upload_file "$APPCAST_PATH" "appcast.xml" "application/xml"
+  note "Publishing $RELEASE_TAG to GitHub"
+  GITHUB_ASSET_DIR="$OUTPUT_DIR/github-assets"
+  mkdir -p "$GITHUB_ASSET_DIR"
+  ditto "$DMG_PATH" "$GITHUB_ASSET_DIR/$RELEASE_DMG_NAME"
+  ditto "$APPCAST_PATH" "$GITHUB_ASSET_DIR/appcast.xml"
+
+  if gh release view "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" >/dev/null 2>&1; then
+    gh release upload "$RELEASE_TAG" \
+      "$GITHUB_ASSET_DIR/$RELEASE_DMG_NAME" \
+      "$GITHUB_ASSET_DIR/appcast.xml" \
+      --repo "$RELEASE_REPOSITORY" \
+      --clobber
+  else
+    gh release create "$RELEASE_TAG" \
+      "$GITHUB_ASSET_DIR/$RELEASE_DMG_NAME" \
+      "$GITHUB_ASSET_DIR/appcast.xml" \
+      --repo "$RELEASE_REPOSITORY" \
+      --target "${GITHUB_SHA:-HEAD}" \
+      --title "Detach $VERSION" \
+      --generate-notes
+  fi
 fi
 
 echo "\nRelease artifacts are ready:"
@@ -238,5 +250,5 @@ echo "  App:     $APP_PATH"
 echo "  DMG:     $DMG_PATH"
 echo "  Appcast: $APPCAST_PATH"
 if [[ "$PUBLISH" == true ]]; then
-  echo "  Feed:    ${UPDATE_BASE_URL%/}/appcast.xml"
+  echo "  Feed:    $UPDATE_FEED_URL"
 fi
