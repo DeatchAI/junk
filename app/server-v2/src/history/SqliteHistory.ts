@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { Conversation, Message, SearchResult } from "../protocol/messages";
+import type { Conversation, Message, MessagePart, SearchResult } from "../protocol/messages";
 import { defaultDatabasePath } from "./databasePath";
 
 const schema = `
@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS messages (
   conversation_id TEXT NOT NULL,
   role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
   content TEXT NOT NULL,
+  parts_json TEXT,
   created_at INTEGER NOT NULL,
   FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
 );
@@ -73,6 +74,7 @@ export class SqliteHistory {
     this.db.exec("PRAGMA synchronous = NORMAL;");
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(schema);
+    ensureColumn(this.db, "messages", "parts_json", "TEXT");
     rebuildFtsIfEmpty(this.db);
   }
 
@@ -140,6 +142,23 @@ export class SqliteHistory {
     return this.addMessage(conversationId, "assistant", content);
   }
 
+  addMediaMessage(
+    conversationId: string,
+    role: "user" | "assistant",
+    content: string,
+    parts: MessagePart[],
+  ) {
+    return this.addMessage(conversationId, role, content, parts);
+  }
+
+  updateMessageParts(messageId: string, content: string, parts: MessagePart[]) {
+    const result = this.db.run(
+      "UPDATE messages SET content = ?, parts_json = ? WHERE id = ?",
+      [content, JSON.stringify(parts), messageId],
+    );
+    return result.changes > 0;
+  }
+
   editMessage(messageId: string, content: string) {
     const result = this.db.run("UPDATE messages SET content = ? WHERE id = ?", [content, messageId]);
     return result.changes > 0;
@@ -190,7 +209,12 @@ export class SqliteHistory {
     }
   }
 
-  private addMessage(conversationId: string, role: "user" | "assistant", content: string): Message {
+  private addMessage(
+    conversationId: string,
+    role: "user" | "assistant",
+    content: string,
+    parts?: MessagePart[],
+  ): Message {
     const now = Date.now();
     const id = generateId("msg");
     const existing = this.get(conversationId)?.conversation;
@@ -210,23 +234,61 @@ export class SqliteHistory {
       }
     }
 
-    this.db.run("INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)", [
+    this.db.run("INSERT INTO messages (id, conversation_id, role, content, parts_json, created_at) VALUES (?, ?, ?, ?, ?, ?)", [
       id,
       conversationId,
       role,
       content,
+      parts ? JSON.stringify(parts) : null,
       now,
     ]);
 
-    return { id, conversation_id: conversationId, role, content, created_at: now };
+    return { id, conversation_id: conversationId, role, content, parts, created_at: now };
   }
 
   private getMessages(conversationId: string) {
     return this.db
-      .query<Message, [string]>(
-        "SELECT id, conversation_id, role, content, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC"
+      .query<MessageRow, [string]>(
+        "SELECT id, conversation_id, role, content, parts_json, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC"
       )
-      .all(conversationId);
+      .all(conversationId)
+      .map(parseMessageRow);
+  }
+}
+
+interface MessageRow {
+  id: string;
+  conversation_id: string;
+  role: "user" | "assistant";
+  content: string;
+  parts_json?: string | null;
+  created_at: number;
+}
+
+function parseMessageRow(row: MessageRow): Message {
+  let parts: MessagePart[] | undefined;
+  if (row.parts_json) {
+    try {
+      const value = JSON.parse(row.parts_json);
+      if (Array.isArray(value)) parts = value as MessagePart[];
+    } catch {
+      parts = undefined;
+    }
+  }
+  return {
+    id: row.id,
+    conversation_id: row.conversation_id,
+    role: row.role,
+    content: row.content,
+    parts,
+    created_at: row.created_at,
+  };
+}
+
+function ensureColumn(db: Database, table: string, column: string, definition: string) {
+  const columns = db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all();
+  if (!columns.some((candidate) => candidate.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
 
