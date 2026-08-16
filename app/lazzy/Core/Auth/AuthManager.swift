@@ -25,6 +25,19 @@ class AuthManager: ObservableObject {
   @Published var lastError: String?
   @Published var isReady = false  // True once initial session check is complete
   private var lastUsageFetch: Date?
+  private var isOAuthInProgress = false
+  private var oauthCallbackContinuation: CheckedContinuation<URL, Error>?
+
+  private enum OAuthError: LocalizedError {
+    case browserUnavailable
+
+    var errorDescription: String? {
+      switch self {
+      case .browserUnavailable:
+        return "Unable to open your default browser."
+      }
+    }
+  }
 
   var currentUser: User? {
     session?.user
@@ -114,19 +127,29 @@ class AuthManager: ObservableObject {
   func signInWithOAuth(provider: Auth.Provider) async {
     isLoading = true
     lastError = nil
+    isOAuthInProgress = true
+    defer {
+      isOAuthInProgress = false
+      isLoading = false
+    }
+
     do {
-      let url = try supabase.auth.getOAuthSignInURL(
+      let session = try await supabase.auth.signInWithOAuth(
         provider: provider,
         redirectTo: URL(string: "lazzy://login-callback")
-      )
-      NSWorkspace.shared.open(url)
+      ) { [weak self] url in
+        guard let self else { throw OAuthError.browserUnavailable }
+        return try await self.openOAuthURLInBrowser(url)
+      }
+
+      self.session = session
+      print("✅ Authenticated via OAuth")
     } catch {
       lastError = error.localizedDescription
       print("❌ OAuth error: \(error)")
       AnalyticsManager.shared.logEvent(
         "auth_error", properties: ["method": "oauth", "error": error.localizedDescription])
     }
-    isLoading = false
   }
 
   func signInWithMagicLink(email: String) async {
@@ -146,8 +169,35 @@ class AuthManager: ObservableObject {
     isLoading = false
   }
 
+  /// Opens OAuth in the user's normal browser profile, then lets the app
+  /// return the custom-scheme callback to Supabase for the PKCE exchange.
+  private func openOAuthURLInBrowser(_ url: URL) async throws -> URL {
+    try await withCheckedThrowingContinuation { continuation in
+      oauthCallbackContinuation = continuation
+
+      guard NSWorkspace.shared.open(url) else {
+        oauthCallbackContinuation = nil
+        continuation.resume(throwing: OAuthError.browserUnavailable)
+        return
+      }
+    }
+  }
+
+  /// Completes the external-browser OAuth flow. Returning true also tells the
+  /// app delegate not to process the one-time callback a second time.
+  @discardableResult
+  func handleOAuthCallback(_ url: URL) -> Bool {
+    guard isOAuthInProgress else { return false }
+
+    if let continuation = oauthCallbackContinuation {
+      oauthCallbackContinuation = nil
+      continuation.resume(returning: url)
+    }
+    return true
+  }
+
   func handleDeeplink(_ url: URL) {
-    print("🎯 AuthManager handling deep link: \(url)")
+    print("🎯 AuthManager handling authentication callback")
     Task {
       do {
         // This exchanges the code for a session
@@ -159,7 +209,7 @@ class AuthManager: ObservableObject {
         await MainActor.run {
           self.session = session
           self.lastError = nil
-          print("👤 Session updated: \(session?.user.email ?? "no user")")
+          print("👤 Authentication session updated")
         }
       } catch {
         print("❌ Deep link auth error: \(error)")
@@ -175,6 +225,9 @@ class AuthManager: ObservableObject {
 
   func signOut() async {
     isLoading = true
+    // Remove both hosted-model and Composio control-plane credentials from the
+    // bundled runtime before another account can use this app instance.
+    await syncProfileToServer(clear: true)
     do {
       try await supabase.auth.signOut()
       self.session = nil
@@ -188,10 +241,11 @@ class AuthManager: ObservableObject {
   }
 
   /// Sends the signed-in session to the local Bun runtime over loopback. The
-  /// runtime uses it only to obtain a short-lived hosted-model session; it does
-  /// not need the profile record to enable Hosted AI.
-  func syncProfileToServer() async {
-    guard let accessToken = session?.accessToken, !accessToken.isEmpty else { return }
+  /// runtime uses it to obtain scoped hosted-model and Composio sessions; it
+  /// never forwards the Supabase token to an agent process.
+  func syncProfileToServer(clear: Bool = false) async {
+    let accessToken = session?.accessToken.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard clear || (accessToken != nil && !accessToken!.isEmpty) else { return }
 
     // Wait for server to be ready before making HTTP requests
     await waitForServerReady()
@@ -200,12 +254,16 @@ class AuthManager: ObservableObject {
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    ServerConfig.authorize(&request)
 
-    let body: [String: Any] = [
+    var body: [String: Any] = [:]
+    if let accessToken, !accessToken.isEmpty {
       // This token is sent only over localhost to the child runtime. The
-      // runtime exchanges it for an inference-scoped token only.
-      "accessToken": accessToken,
-    ]
+      // runtime exchanges it for scoped hosted-model and Composio sessions.
+      body["accessToken"] = accessToken
+    } else {
+      body["accessToken"] = NSNull()
+    }
 
     do {
       request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -286,9 +344,11 @@ class AuthManager: ObservableObject {
 
     let url = URL(
       string: "http://127.0.0.1:\(ServerConfig.port)/api/usage?userId=\(profile.id.uuidString)")!
+    var request = URLRequest(url: url)
+    ServerConfig.authorize(&request)
 
     do {
-      let (data, response) = try await URLSession.shared.data(from: url)
+      let (data, response) = try await URLSession.shared.data(for: request)
 
       if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
         let usage = try JSONDecoder().decode(UserUsage.self, from: data)
