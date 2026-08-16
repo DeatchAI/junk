@@ -1,40 +1,50 @@
 import AppKit
 import Auth
 import SwiftUI
-import UniformTypeIdentifiers
 import WebKit
 
-/// A deliberate first-run path. Every step is optional except the macOS permissions
-/// required for Detach's selection and computer-use features.
+/// A deliberate first-run path. Provider choice comes before account setup;
+/// Detach Cloud is the only branch that asks for a Detach account or credits.
 struct OnboardingView: View {
-  private enum Step: Int, CaseIterable {
-    case welcome, account, permissions, agents, browser, secrets, hotkey, complete
+  private enum Step {
+    case welcome, source, agents, hosted, permissions, hotkey, complete
+  }
+
+  private enum SetupSource: String, CaseIterable, Identifiable {
+    case existing, hosted, later
+
+    var id: String { rawValue }
 
     var title: String {
       switch self {
-      case .welcome: "Welcome to\nDetach"
-      case .account: "Make Detach\nyours"
-      case .permissions: "Give Detach\na hand"
-      case .agents: "Connect your\nagents"
-      case .browser: "Bring your browser\nalong"
-      case .secrets: "Let work continue\nthrough sign-in"
-      case .hotkey: "Choose your launch\nshortcut"
-      case .complete: "You're ready\nto detach"
+      case .existing: "Use my existing AI accounts"
+      case .hosted: "Use Detach Cloud"
+      case .later: "Decide later"
+      }
+    }
+
+    var symbol: String {
+      switch self {
+      case .existing: "person.crop.circle"
+      case .hosted: "sparkles"
+      case .later: "arrow.right"
       }
     }
   }
 
   @StateObject private var auth = AuthManager.shared
   @StateObject private var permissions = PermissionsManager()
+  @StateObject private var hostedSubscription = HostedSubscriptionManager.shared
   @State private var step: Step = .welcome
+  @State private var selectedSource: SetupSource?
   @State private var email = ""
-  @State private var magicLinkSent = false
+  @State private var hostedMagicLinkSent = false
   @State private var selectedAgent = DetachSettings.selectedAgent
   @State private var detectedAgents = LocalAgentDetector.detect()
   @State private var hotkey = ShortcutSettings.floatingChat
   @State private var isRecordingShortcut = false
-  @State private var showImporter = false
-  @State private var importStatus = ""
+  @State private var hostedCheckoutStarted = false
+  @State private var hostedCheckoutPlanID: String?
 
   var onComplete: () -> Void
 
@@ -64,22 +74,28 @@ struct OnboardingView: View {
     .font(.system(size: 14))
     .foregroundStyle(Color.white)
     .frame(width: 900, height: 640)
-    .fileImporter(isPresented: $showImporter, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
-      guard case .success(let url) = result else {
-        if case .failure(let error) = result { importStatus = error.localizedDescription }
-        return
-      }
-      importApplePasswords(from: url)
-    }
     .onAppear {
       permissions.checkPermissions()
-      detectedAgents = LocalAgentDetector.detect()
+      refreshLocalSetup()
     }
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
       permissions.checkPermissions()
+      refreshLocalSetup()
     }
     .onChange(of: auth.isAuthenticated) { _, authenticated in
-      if authenticated && step == .account { goForward() }
+      if authenticated {
+        hostedMagicLinkSent = false
+        Task { await hostedSubscription.refresh() }
+      }
+    }
+    .onChange(of: hostedSubscription.hasHostedCredits) { _, hasCredits in
+      if hasCredits {
+        hostedCheckoutStarted = false
+        hostedCheckoutPlanID = nil
+      }
+    }
+    .task(id: auth.isAuthenticated) {
+      await hostedSubscription.refresh()
     }
   }
 
@@ -116,18 +132,31 @@ struct OnboardingView: View {
   }
 
   private var canGoBack: Bool { step != .welcome && step != .complete }
-  private var canSkip: Bool { step == .account || step == .browser || step == .secrets }
+  private var canSkip: Bool { step == .agents || step == .permissions || step == .hotkey }
 
+  private var progressPosition: Int? {
+    switch step {
+    case .source: 1
+    case .agents, .hosted: 2
+    case .permissions: 3
+    case .hotkey: 4
+    case .welcome, .complete: nil
+    }
+  }
+
+  @ViewBuilder
   private var stepProgress: some View {
-    HStack(spacing: 6) {
-      Text("\(step.rawValue) of \(Step.complete.rawValue - 1)")
-        .font(.system(size: 12, weight: .medium))
-        .foregroundStyle(.secondary)
-      HStack(spacing: 4) {
-        ForEach(1..<Step.complete.rawValue, id: \.self) { value in
-          Capsule()
-            .fill(value <= step.rawValue ? OnboardingPalette.orange : Color.white.opacity(0.25))
-            .frame(width: value == step.rawValue ? 16 : 5, height: 5)
+    if let position = progressPosition {
+      HStack(spacing: 6) {
+        Text("\(position) of 4")
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(.secondary)
+        HStack(spacing: 4) {
+          ForEach(1...4, id: \.self) { value in
+            Capsule()
+              .fill(value <= position ? OnboardingPalette.orange : Color.white.opacity(0.25))
+              .frame(width: value == position ? 16 : 5, height: 5)
+          }
         }
       }
     }
@@ -137,11 +166,10 @@ struct OnboardingView: View {
   private var content: some View {
     switch step {
     case .welcome: welcome
-    case .account: account
-    case .permissions: permissionsSetup
+    case .source: source
     case .agents: agentsSetup
-    case .browser: browserSetup
-    case .secrets: secretsSetup
+    case .hosted: hostedSetup
+    case .permissions: permissionsSetup
     case .hotkey: hotkeySetup
     case .complete: complete
     }
@@ -149,8 +177,8 @@ struct OnboardingView: View {
 
   private var welcome: some View {
     OnboardingStepLayout(
-      title: "Cursor for\nyour entire macOS",
-      subtitle: "Detach is a desktop app that lets you work with AI across your text, files, browser tabs, and native apps."
+      title: "Your AI,\nacross your Mac",
+      subtitle: "Use Agent, Image, and Video modes across your text, files, browser tabs, and native apps."
     ) {
       Button(action: goForward) {
         Label("Let's Start", systemImage: "arrow.right")
@@ -159,65 +187,263 @@ struct OnboardingView: View {
     }
   }
 
-  private var account: some View {
+  private var source: some View {
     OnboardingStepLayout(
-      title: "Sign in, or\nkeep it local.",
-      subtitle: "An account unlocks Detach-hosted models and monthly credits. You can use every local setup feature without one."
+      title: "How do you want\nto run AI?",
+      subtitle: "Use an AI account you already have, or use Detach Cloud for Agent, Image, and Video modes."
     ) {
-      VStack(alignment: .leading, spacing: 16) {
-        Text("Email")
-          .font(.system(size: 13, weight: .semibold))
-        TextField("you@example.com", text: $email)
-          .textFieldStyle(.plain)
-          .padding(14)
-          .background(.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
-          .overlay(RoundedRectangle(cornerRadius: 12).stroke(.primary.opacity(0.12)))
-        Button {
-          Task {
-            await auth.signInWithMagicLink(email: email)
-            magicLinkSent = auth.lastError == nil
-          }
-        } label: {
-          buttonLabel(auth.isLoading ? "Sending…" : "Continue with email")
-        }
-        .buttonStyle(.plain)
-        .disabled(email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || auth.isLoading)
-
-        if magicLinkSent { Text("Check your inbox for the secure sign-in link.").foregroundStyle(.secondary).font(.system(size: 12)) }
-        if let error = auth.lastError { Text(error).foregroundStyle(.red).font(.system(size: 12)) }
-
-        HStack {
-          Rectangle().fill(.primary.opacity(0.1)).frame(height: 1)
-          Text("OR").font(.system(size: 10, weight: .bold)).foregroundStyle(.tertiary)
-          Rectangle().fill(.primary.opacity(0.1)).frame(height: 1)
-        }
-        Button {
-          Task { await auth.signInWithOAuth(provider: .google) }
-        } label: {
-          HStack(spacing: 9) {
-            Image("GoogleLogo")
-              .resizable()
-              .scaledToFit()
-              .frame(width: 18, height: 18)
-            Text("Continue with Google")
-          }
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(Color.black.opacity(0.84))
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 13)
-            .background(Color.white, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(.primary.opacity(0.15)))
-        }
-        .buttonStyle(.plain)
+      VStack(spacing: 10) {
+        sourceCard(.existing)
+        sourceCard(.hosted)
+        sourceCard(.later)
       }
-      .frame(maxWidth: 390)
     }
+  }
+
+  private func sourceCard(_ source: SetupSource) -> some View {
+    let isSelected = selectedSource == source
+
+    return Button {
+      selectedSource = source
+      if source == .existing {
+        prepareLocalSelection()
+      }
+    } label: {
+      HStack(spacing: 13) {
+        Image(systemName: source.symbol)
+          .font(.system(size: 17, weight: .semibold))
+          .frame(width: 34, height: 34)
+          .background(.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+
+        VStack(alignment: .leading, spacing: 3) {
+          Text(source.title)
+            .font(.system(size: 14, weight: .semibold))
+          Text(sourceSubtitle(source))
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+
+        Spacer()
+
+        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+          .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+      }
+      .padding(13)
+      .background(Color.primary.opacity(isSelected ? 0.09 : 0.035), in: RoundedRectangle(cornerRadius: 14))
+      .overlay(RoundedRectangle(cornerRadius: 14).stroke(isSelected ? Color.primary.opacity(0.45) : .clear))
+    }
+    .buttonStyle(.plain)
+  }
+
+  private func sourceSubtitle(_ source: SetupSource) -> String {
+    switch source {
+    case .existing:
+      if detectedAgents.isEmpty {
+        return "Codex, Claude, Grok, or OpenCode. Connect one from this Mac."
+      }
+      let names = detectedAgents
+        .sorted { $0.name < $1.name }
+        .map(\.name)
+        .joined(separator: ", ")
+      return "\(names) available on this Mac. No Detach account required."
+    case .hosted:
+      return "Agent, image, and video through Detach Cloud. Sign in only if you choose this."
+    case .later:
+      return "Start with the app and choose an AI source from Settings whenever you are ready."
+    }
+  }
+
+  private var hostedSetup: some View {
+    OnboardingStepLayout(
+      title: hostedTitle,
+      subtitle: hostedSubtitle
+    ) {
+      if !auth.isAuthenticated {
+        hostedSignIn
+      } else if hostedSubscription.canUseHostedAI {
+        hostedReady
+      } else {
+        hostedPlanPicker
+      }
+    }
+  }
+
+  private var hostedTitle: String {
+    if !auth.isAuthenticated { return "Use Detach\nCloud" }
+    if hostedSubscription.canUseHostedAI { return "Detach Cloud\nis ready" }
+    return "Choose a\nCloud plan"
+  }
+
+  private var hostedSubtitle: String {
+    if !auth.isAuthenticated {
+      return "Use Detach Cloud for Agent, Image, and Video. Sign in to continue."
+    }
+    if hostedSubscription.canUseHostedAI {
+      return "Your Detach Cloud credits are active. Agent, Image, and Video modes are ready to use."
+    }
+    return "Choose a monthly plan for Agent, Image, and Video on Detach Cloud."
+  }
+
+  private var hostedSignIn: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      Text("Create your Detach account")
+        .font(.system(size: 13, weight: .semibold))
+
+      TextField("you@example.com", text: $email)
+        .textFieldStyle(.plain)
+        .padding(14)
+        .background(.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.primary.opacity(0.12)))
+
+      Button {
+        Task {
+          await auth.signInWithMagicLink(email: email)
+          hostedMagicLinkSent = auth.lastError == nil
+        }
+      } label: {
+        buttonLabel(auth.isLoading ? "Sending…" : "Continue with email")
+      }
+      .buttonStyle(.plain)
+      .disabled(email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || auth.isLoading)
+
+      if hostedMagicLinkSent {
+        Text("Check your inbox for the secure sign-in link.")
+          .foregroundStyle(.secondary)
+          .font(.system(size: 12))
+      }
+      if let error = auth.lastError {
+        Text(error)
+          .foregroundStyle(.red)
+          .font(.system(size: 12))
+      }
+
+      HStack {
+        Rectangle().fill(.primary.opacity(0.1)).frame(height: 1)
+        Text("OR")
+          .font(.system(size: 10, weight: .bold))
+          .foregroundStyle(.tertiary)
+        Rectangle().fill(.primary.opacity(0.1)).frame(height: 1)
+      }
+
+      Button {
+        Task { await auth.signInWithOAuth(provider: .google) }
+      } label: {
+        HStack(spacing: 9) {
+          Image("GoogleLogo")
+            .resizable()
+            .scaledToFit()
+            .frame(width: 18, height: 18)
+          Text("Continue with Google")
+        }
+        .font(.system(size: 14, weight: .semibold))
+        .foregroundStyle(Color.black.opacity(0.84))
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 13)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.primary.opacity(0.15)))
+      }
+      .buttonStyle(.plain)
+      .disabled(auth.isLoading)
+    }
+    .frame(maxWidth: 390)
+  }
+
+  private var hostedReady: some View {
+    VStack(spacing: 16) {
+      ZStack {
+        Circle().fill(.black).frame(width: 58, height: 58)
+        Image(systemName: "checkmark")
+          .font(.system(size: 23, weight: .bold))
+          .foregroundStyle(.white)
+      }
+
+      if let percentage = hostedSubscription.availableCreditPercentage {
+        Text("\(percentage)% of your allowance remains")
+          .font(.system(size: 14, weight: .semibold))
+      }
+
+      Text("Detach Cloud is connected and ready for Agent, Image, and Video modes.")
+        .font(.system(size: 13))
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+    }
+  }
+
+  private var hostedPlanPicker: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      if hostedSubscription.isLoading && hostedSubscription.plans.isEmpty {
+        ProgressView()
+          .controlSize(.small)
+          .frame(maxWidth: .infinity, alignment: .center)
+          .padding(.vertical, 20)
+      } else if hostedSubscription.plans.isEmpty {
+        Text("Detach Cloud plans are unavailable right now.")
+          .font(.system(size: 13))
+          .foregroundStyle(.secondary)
+        Button("Try again") {
+          Task { await hostedSubscription.refresh() }
+        }
+        .buttonStyle(OnboardingSecondaryButtonStyle())
+      } else {
+        ForEach(hostedSubscription.plans) { plan in
+          hostedPlanRow(plan)
+        }
+      }
+
+      if hostedCheckoutStarted {
+        Text("Checkout opened in your browser. Return here when you are done and Detach will confirm your Cloud access.")
+          .font(.system(size: 12))
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.top, 4)
+      }
+
+      if let error = hostedSubscription.errorMessage {
+        Text(error)
+          .font(.system(size: 12))
+          .foregroundStyle(.red)
+      }
+    }
+  }
+
+  private func hostedPlanRow(_ plan: HostedSubscriptionPlan) -> some View {
+    Button {
+      hostedCheckoutStarted = true
+      hostedCheckoutPlanID = plan.id
+      Task {
+        await hostedSubscription.startCheckout(planId: plan.id)
+      }
+    } label: {
+      HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text(plan.displayName)
+            .font(.system(size: 14, weight: .semibold))
+          Text("Agent, Image & Video on Detach Cloud / month")
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+        }
+        Spacer()
+        VStack(alignment: .trailing, spacing: 2) {
+          Text("$\(plan.monthlyPriceCents / 100)/mo")
+            .font(.system(size: 13, weight: .semibold))
+          Text(hostedCheckoutPlanID == plan.id && hostedSubscription.isLoading ? "Opening…" : "Choose")
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.secondary)
+        }
+      }
+      .padding(13)
+      .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12))
+      .overlay(RoundedRectangle(cornerRadius: 12).stroke(.primary.opacity(0.1)))
+    }
+    .buttonStyle(.plain)
+    .disabled(hostedSubscription.isLoading)
   }
 
   private var permissionsSetup: some View {
     OnboardingStepLayout(
       title: "A little access\ngoes a long way.",
-      subtitle: "Detach needs these permissions to understand selected context and let your agents interact with your Mac. It never runs in the background without your request."
+      subtitle: "Enable these when you want Detach to read selected context or inspect your screen. You can change them later in System Settings."
     ) {
       VStack(spacing: 10) {
         permissionRow(
@@ -261,14 +487,21 @@ struct OnboardingView: View {
 
   private var agentsSetup: some View {
     OnboardingStepLayout(
-      title: "Your subscriptions,\nyour agents.",
-      subtitle: "Use CLI agents already on your Mac or Detach-hosted models through the bundled OpenCode harness."
+      title: "Choose your\nagent",
+      subtitle: "Use an AI tool already connected to this Mac. You can add more agents later in Settings."
     ) {
       VStack(alignment: .leading, spacing: 10) {
         ForEach(LocalAgentDetector.Agent.allCases) { agent in
           agentRow(agent)
         }
-        Button("Check again") { detectedAgents = LocalAgentDetector.detect() }
+        if detectedAgents.isEmpty {
+          Text("No existing agents were found. You can connect one later, or go back and choose Detach Cloud.")
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 3)
+        }
+        Button("Check again") { refreshLocalSetup() }
           .font(.system(size: 12, weight: .medium))
           .buttonStyle(.plain)
           .foregroundStyle(.secondary)
@@ -278,9 +511,12 @@ struct OnboardingView: View {
   }
 
   private func agentRow(_ agent: LocalAgentDetector.Agent) -> some View {
-    let isSelected = selectedAgent == agent.id
     let isInstalled = detectedAgents.contains(agent)
-    return Button { selectedAgent = agent.id } label: {
+    let isSelected = isInstalled && selectedAgent == agent.id
+    return Button {
+      guard isInstalled else { return }
+      selectedAgent = agent.id
+    } label: {
       HStack(spacing: 13) {
         Image(systemName: agent.symbol)
           .font(.system(size: 17, weight: .semibold))
@@ -288,11 +524,11 @@ struct OnboardingView: View {
           .background(.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
         VStack(alignment: .leading, spacing: 2) {
           Text(agent.name).font(.system(size: 14, weight: .semibold))
-          Text(isInstalled ? "Found on this Mac" : "Install the \(agent.name) CLI to connect")
+          Text(agent.subtitle(isInstalled: isInstalled))
             .font(.system(size: 12)).foregroundStyle(.secondary)
         }
         Spacer()
-        Image(systemName: isInstalled ? "checkmark.circle.fill" : "arrow.down.circle")
+        Image(systemName: isInstalled ? "checkmark.circle.fill" : "circle.dashed")
           .foregroundStyle(isInstalled ? Color.primary : Color.secondary)
       }
       .padding(13)
@@ -302,75 +538,17 @@ struct OnboardingView: View {
     .buttonStyle(.plain)
   }
 
-  private var browserSetup: some View {
-    OnboardingStepLayout(
-      title: "Agents work in your\nsigned-in Chrome.",
-      subtitle: "The Detach Browser Agent extension lets agents use the Chrome profile where you are already logged in."
-    ) {
-      VStack(alignment: .leading, spacing: 14) {
-        setupInstruction(number: 1, "Open Chrome Extensions")
-        setupInstruction(number: 2, "Enable Developer mode and choose Load unpacked")
-        setupInstruction(number: 3, "Select Detach’s chrome-extension folder, then pin it")
-        HStack(spacing: 10) {
-          Button("Open Chrome Extensions") { NSWorkspace.shared.open(URL(string: "chrome://extensions")!) }
-            .buttonStyle(OnboardingPrimaryButtonStyle())
-          Button("Show extension folder") { showBrowserExtensionFolder() }
-            .buttonStyle(OnboardingSecondaryButtonStyle())
-        }
-        Text("Open the extension popup once after installing. Detach will reuse the focused Chrome window and will not launch a separate browser profile.")
-          .font(.system(size: 12))
-          .foregroundStyle(.secondary)
-      }
-    }
-  }
-
-  private func setupInstruction(number: Int, _ text: String) -> some View {
-    HStack(spacing: 11) {
-      Text("\(number)").font(.system(size: 11, weight: .bold)).frame(width: 22, height: 22).background(.primary.opacity(0.09), in: Circle())
-      Text(text).font(.system(size: 13, weight: .medium))
-    }
-  }
-
-  private var secretsSetup: some View {
-    OnboardingStepLayout(
-      title: "Let work continue\npast the login.",
-      subtitle: "Import logins from Apple Passwords. Credentials stay encrypted in your Mac’s Keychain; agents can request a secure fill, but never see the values."
-    ) {
-      VStack(alignment: .leading, spacing: 15) {
-        Label("End-to-end encrypted and 100% local", systemImage: "lock.shield.fill")
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(.primary)
-        Text("In Passwords, choose File → Export Passwords, then select the CSV below. Detach only reads the file locally and moves credentials into Keychain.")
-          .font(.system(size: 13))
-          .foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
-        Button {
-          showImporter = true
-        } label: {
-          Label("Import from Apple Passwords", systemImage: "key.fill")
-          .font(.system(size: 14, weight: .semibold))
-          .frame(maxWidth: .infinity)
-          .padding(.vertical, 13)
-            .background(OnboardingPalette.orange, in: RoundedRectangle(cornerRadius: 12))
-            .foregroundColor(.white)
-        }
-        .buttonStyle(.plain)
-        if !importStatus.isEmpty { Text(importStatus).font(.system(size: 12)).foregroundStyle(.secondary) }
-      }
-    }
-  }
-
   private var hotkeySetup: some View {
     OnboardingStepLayout(
-      title: "Your AI, one\nkeystroke away.",
-      subtitle: "Press this anywhere to start a detached task. You can change every shortcut later in Settings."
+      title: "Your Agent, one\nkeystroke away.",
+      subtitle: "Press this anywhere to start an Agent task. You can change every shortcut later in Settings."
     ) {
       VStack(alignment: .leading, spacing: 16) {
         Text("Launch Detach")
           .font(.system(size: 13, weight: .semibold))
         HStack {
           VStack(alignment: .leading, spacing: 4) {
-            Text("Floating chat") .font(.system(size: 14, weight: .semibold))
+            Text("Agent mode") .font(.system(size: 14, weight: .semibold))
             Text("Open a fresh task from anywhere on your Mac.").font(.system(size: 12)).foregroundStyle(.secondary)
           }
           Spacer()
@@ -393,7 +571,7 @@ struct OnboardingView: View {
   private var complete: some View {
     OnboardingStepLayout(
       title: "You're ready\nto detach.",
-      subtitle: "Start from the menu bar or press \(hotkey.displayString)."
+      subtitle: completeSubtitle
     ) {
       VStack(spacing: 20) {
         ZStack {
@@ -403,17 +581,24 @@ struct OnboardingView: View {
             .foregroundStyle(.white)
         }
         HStack(spacing: 7) {
-          featureChip("Workflows", "point.3.connected.trianglepath.dotted")
-          featureChip("Quick Actions", "wand.and.stars")
-          featureChip("Agent tasks", "square.stack.3d.up")
+          featureChip("Agent mode", "text.bubble")
+          featureChip("Image mode", "photo")
+          featureChip("Video mode", "video")
         }
-        Text("Select text anywhere to run a quick action with that context, or send a task to one of your connected agents.")
+        Text("Press your shortcut to open Agent mode. Choose Image or Video whenever Detach Cloud is active.")
           .font(.system(size: 13))
           .foregroundStyle(.secondary)
           .multilineTextAlignment(.center)
           .frame(maxWidth: 460)
       }
     }
+  }
+
+  private var completeSubtitle: String {
+    if selectedSource == .hosted {
+      return "Start from the menu bar or press \(hotkey.displayString). Agent, Image, and Video are ready."
+    }
+    return "Start from the menu bar or press \(hotkey.displayString). Connect Detach Cloud later for Image and Video."
   }
 
   private func featureChip(_ title: String, _ icon: String) -> some View {
@@ -425,16 +610,18 @@ struct OnboardingView: View {
 
   private var navigation: some View {
     ZStack(alignment: .trailing) {
-      if step != .welcome && step != .complete {
+      if progressPosition != nil {
         stepProgress
       }
 
       if step == .complete {
         Button("Start using Detach", action: onComplete)
           .buttonStyle(OnboardingPrimaryButtonStyle())
-      } else if !canSkip && step != .welcome {
+      } else if canShowContinueButton {
         Button("Continue") { goForward() }
           .buttonStyle(OnboardingPrimaryButtonStyle())
+          .disabled(!canContinue)
+          .opacity(canContinue ? 1 : 0.5)
       }
     }
     .padding(.horizontal, 32)
@@ -451,33 +638,96 @@ struct OnboardingView: View {
       .background(OnboardingPalette.orange, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
   }
 
+  private var canShowContinueButton: Bool {
+    switch step {
+    case .welcome, .complete: false
+    case .hosted: hostedSubscription.canUseHostedAI
+    default: true
+    }
+  }
+
+  private var canContinue: Bool {
+    switch step {
+    case .source: selectedSource != nil
+    case .hosted: hostedSubscription.canUseHostedAI
+    case .welcome, .agents, .permissions, .hotkey, .complete: true
+    }
+  }
+
   private func goForward() {
-    if step == .agents { DetachSettings.selectedAgent = selectedAgent }
-    if step == .hotkey { ShortcutSettings.floatingChat = hotkey }
-    guard let next = Step(rawValue: step.rawValue + 1) else { return }
-    withAnimation(.easeInOut(duration: 0.2)) { step = next }
+    guard canContinue else { return }
+
+    switch step {
+    case .welcome:
+      transition(to: .source)
+    case .source:
+      switch selectedSource ?? .later {
+      case .existing:
+        prepareLocalSelection()
+        transition(to: .agents)
+      case .hosted:
+        transition(to: .hosted)
+      case .later:
+        transition(to: .permissions)
+      }
+    case .agents:
+      if let selected = detectedAgents.first(where: { $0.id == selectedAgent }) {
+        DetachSettings.selectedAgent = selected.id
+      }
+      transition(to: .permissions)
+    case .hosted:
+      DetachSettings.selectedAgent = "hosted"
+      transition(to: .permissions)
+    case .permissions:
+      transition(to: .hotkey)
+    case .hotkey:
+      ShortcutSettings.floatingChat = hotkey
+      transition(to: .complete)
+    case .complete:
+      onComplete()
+    }
   }
 
   private func goBack() {
-    guard let previous = Step(rawValue: step.rawValue - 1) else { return }
-    withAnimation(.easeInOut(duration: 0.2)) { step = previous }
+    switch step {
+    case .source:
+      transition(to: .welcome)
+    case .agents, .hosted:
+      transition(to: .source)
+    case .permissions:
+      switch selectedSource ?? .later {
+      case .existing: transition(to: .agents)
+      case .hosted: transition(to: .hosted)
+      case .later: transition(to: .source)
+      }
+    case .hotkey:
+      transition(to: .permissions)
+    case .welcome, .complete:
+      break
+    }
   }
 
-  private func showBrowserExtensionFolder() {
-    let appSupport = Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("chrome-extension")
-    let repositoryExtension = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("chrome-extension")
-    NSWorkspace.shared.activateFileViewerSelecting([FileManager.default.fileExists(atPath: appSupport.path) ? appSupport : repositoryExtension])
+  private func transition(to nextStep: Step) {
+    withAnimation(.easeInOut(duration: 0.2)) {
+      step = nextStep
+    }
   }
 
-  private func importApplePasswords(from url: URL) {
-    let scoped = url.startAccessingSecurityScopedResource()
-    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-    do {
-      let preview = try SecretVault.shared.previewApplePasswordsCSV(at: url)
-      let result = try SecretVault.shared.commitImport(preview)
-      importStatus = "Imported \(result.importedCount) credential\(result.importedCount == 1 ? "" : "s") into your Keychain."
-    } catch {
-      importStatus = error.localizedDescription
+  private func refreshLocalSetup() {
+    detectedAgents = LocalAgentDetector.detect()
+    if selectedSource == nil {
+      selectedSource = detectedAgents.isEmpty ? .hosted : .existing
+    }
+    if selectedSource == .existing {
+      prepareLocalSelection()
+    }
+  }
+
+  private func prepareLocalSelection() {
+    guard !detectedAgents.isEmpty else { return }
+    guard !detectedAgents.contains(where: { $0.id == selectedAgent }) else { return }
+    if let firstInstalled = LocalAgentDetector.Agent.allCases.first(where: { detectedAgents.contains($0) }) {
+      selectedAgent = firstInstalled.id
     }
   }
 
@@ -653,17 +903,82 @@ private enum OnboardingPalette {
 
 private enum LocalAgentDetector {
   enum Agent: String, CaseIterable, Identifiable, Hashable {
-    case codex, claude, grok
+    case codex, claude, grok, opencode
+
     var id: String { rawValue }
-    var name: String { rawValue.capitalized }
-    var symbol: String { switch self { case .codex: "chevron.left.forwardslash.chevron.right"; case .claude: "brain.head.profile"; case .grok: "bolt.fill" } }
+
+    var name: String {
+      switch self {
+      case .codex: "Codex"
+      case .claude: "Claude"
+      case .grok: "Grok"
+      case .opencode: "OpenCode"
+      }
+    }
+
+    var symbol: String {
+      switch self {
+      case .codex: "chevron.left.forwardslash.chevron.right"
+      case .claude: "brain.head.profile"
+      case .grok: "bolt.fill"
+      case .opencode: "shippingbox"
+      }
+    }
+
     var executable: String { rawValue }
+
+    func subtitle(isInstalled: Bool) -> String {
+      if isInstalled {
+        switch self {
+        case .codex: return "Uses your Codex account"
+        case .claude: return "Uses your Claude Code account"
+        case .grok: return "Uses your Grok account"
+        case .opencode: return "Uses your existing OpenCode configuration"
+        }
+      }
+      return self == .opencode
+        ? "The bundled OpenCode harness is unavailable"
+        : "Install the \(name) CLI to connect"
+    }
   }
 
   static func detect() -> Set<Agent> {
-    let paths = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+    let pathDirectories = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+      .split(separator: ":")
+      .map(String.init)
+    let executableDirectories = pathDirectories + [
+      "\(home)/.grok/bin",
+      "\(home)/.local/bin",
+      "\(home)/.bun/bin",
+      "/Applications/ChatGPT.app/Contents/Resources",
+      "/Applications/Codex.app/Contents/Resources",
+      "/opt/homebrew/bin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+    ]
+
     return Set(Agent.allCases.filter { agent in
-      paths.contains { FileManager.default.isExecutableFile(atPath: URL(fileURLWithPath: $0).appendingPathComponent(agent.executable).path) }
+      let foundOnPath = executableDirectories.contains {
+        FileManager.default.isExecutableFile(
+          atPath: URL(fileURLWithPath: $0).appendingPathComponent(agent.executable).path
+        )
+      }
+      let bundledOpenCode = agent == .opencode && bundledOpenCodeExists
+      return foundOnPath || bundledOpenCode
     })
+  }
+
+  private static var bundledOpenCodeExists: Bool {
+    if let bundled = Bundle.main.url(forResource: "opencode", withExtension: nil),
+      FileManager.default.isExecutableFile(atPath: bundled.path)
+    {
+      return true
+    }
+
+    let developmentPath = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+      .appendingPathComponent("app/lazzy/opencode")
+    return FileManager.default.isExecutableFile(atPath: developmentPath.path)
   }
 }
