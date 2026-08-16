@@ -7,7 +7,6 @@ struct ActivityIslandView: View {
   @ObservedObject var controller: ActivityIslandWindowController
   let physicalNotchHeight: CGFloat
   let onToggle: () -> Void
-  let onDismiss: () -> Void
   let onOpenConversation: (String) -> Void
   let onApprovalResponse: (String, Bool) -> Void
 
@@ -19,18 +18,18 @@ struct ActivityIslandView: View {
     store.presentationRuns.compactMap(\.credential).first
   }
 
+  private var activeRuns: [DetachedAgentRun] {
+    store.visibleActiveRuns
+  }
+
   var body: some View {
     VStack(spacing: 0) {
       if controller.isExpanded {
-        // In the open state this preserves the physical cutout above the
-        // expanded task panel. In the compact state, content belongs inside
-        // that exact cutout instead of beneath it.
+        // Expanded content begins below the physical camera cutout.
         Color.clear.frame(height: physicalNotchHeight)
         expandedTaskList
       } else {
-        // The hardware cutout occupies the first lane. Keep live text in a
-        // matching second lane so it is never covered by the camera housing.
-        Color.clear.frame(height: physicalNotchHeight)
+        // Compact content lives in the side lanes beside the hardware cutout.
         compactHeadline
       }
     }
@@ -45,27 +44,19 @@ struct ActivityIslandView: View {
     .onHover { controller.setHovering($0) }
   }
 
-  /// The compact treatment mirrors the original, readable activity-island
-  /// headline while the expanded task switcher carries the richer detail.
+  /// Compact mode stays intentionally quiet: logo and one count badge.
+  /// Hovering is the entry point for task-level detail.
   private var compactHeadline: some View {
-    return Button(action: openPrimaryRun) {
-      HStack(spacing: 10) {
-        if let run = store.primaryRun, run.state == .completed {
-          completionMark
-        } else {
-          DetachedMarkLoader(isLoading: store.primaryRun?.state == .running)
-        }
+    Button(action: openPrimaryRun) {
+      HStack {
+        DetachedMarkLoader(isLoading: activeRuns.contains { $0.state == .running })
 
-        MarqueeHeadline(text: headline(for: store.primaryRun))
+        Spacer(minLength: 0)
 
-        Spacer(minLength: 12)
-
-        Image(systemName: "arrow.up.right")
-          .font(.system(size: 11, weight: .bold))
-          .foregroundStyle(.white.opacity(0.52))
+        compactCountBadge
       }
-      .padding(.horizontal, 28)
-      .frame(height: physicalNotchHeight)
+      .padding(.horizontal, 20)
+      .frame(height: physicalNotchHeight + ActivityIslandWindowController.compactHeightPadding)
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
@@ -89,8 +80,7 @@ struct ActivityIslandView: View {
       Spacer(minLength: 4)
       Text("Credential hidden")
         .font(.appFont(size: 10, weight: .medium))
-        .foregroundStyle(.green)
-      dismissButton
+        .foregroundStyle(.white.opacity(0.56))
     }
     .padding(.horizontal, 50)
     .frame(height: 70)
@@ -134,12 +124,10 @@ struct ActivityIslandView: View {
         credentialHeadline(credential)
       } else {
         HStack(spacing: 8) {
-          Text("TASKS")
+          Text("Tasks")
             .font(.appFont(size: 11, weight: .bold))
             .foregroundStyle(.white.opacity(0.52))
-            .tracking(0.8)
           Spacer()
-          dismissButton
         }
         .padding(.horizontal, 50)
         .frame(height: 36)
@@ -160,7 +148,7 @@ struct ActivityIslandView: View {
     HStack(spacing: 10) {
       Image(systemName: "exclamationmark.triangle.fill")
         .font(.system(size: 15, weight: .semibold))
-        .foregroundStyle(.orange)
+        .foregroundStyle(.white)
 
       VStack(alignment: .leading, spacing: 2) {
         Text("Approval required")
@@ -230,148 +218,49 @@ struct ActivityIslandView: View {
         DetachedMarkLoader(isLoading: true, size: 24)
       case .awaitingApproval:
         Image(systemName: "questionmark.circle.fill")
-          .foregroundStyle(.orange)
+          .foregroundStyle(.white)
       case .awaitingCredential:
         Image(systemName: "lock.fill")
-          .foregroundStyle(.green)
+          .foregroundStyle(.white)
       case .completed:
         Image(systemName: "checkmark.circle.fill")
-          .foregroundStyle(.green)
+          .foregroundStyle(.white)
       case .failed:
         Image(systemName: "xmark.circle.fill")
-          .foregroundStyle(.red)
+          .foregroundStyle(.white.opacity(0.62))
       }
     }
     .font(.system(size: 13, weight: .semibold))
     .frame(width: 24, height: 24)
   }
 
-  private func headline(for run: DetachedAgentRun?) -> String {
-    guard let run else { return "" }
-
-    let title = cleanHeadlinePart(run.taskTitle) ?? "New chat"
-    let activity: String?
-    switch run.state {
-    case .completed:
-      activity = "Completed"
-    case .failed:
-      activity = cleanHeadlinePart(run.status) ?? "Needs attention"
-    case .awaitingApproval:
-      activity = "Approval required"
-    case .awaitingCredential:
-      activity = "Touch ID required"
-    case .running:
-      activity = [
-        run.event?.title,
-        run.event?.subtitle,
-        run.status,
-        run.currentActivity,
-      ]
-      .compactMap(cleanHeadlinePart)
-      .first { $0.caseInsensitiveCompare(title) != .orderedSame }
-    }
-
-    guard let activity, activity.caseInsensitiveCompare(title) != .orderedSame else {
-      return title
-    }
-    return "\(title) — \(activity)"
-  }
-
-  private func cleanHeadlinePart(_ text: String?) -> String? {
-    guard let text else { return nil }
-    let normalized = text
-      .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-    return normalized.isEmpty ? nil : normalized
-  }
-
-  private var completionMark: some View {
-    Image(systemName: "checkmark")
-      .font(.system(size: 11, weight: .bold))
-      .foregroundStyle(.black)
-      .frame(width: 28, height: 28)
-      .background(Color.green, in: Circle())
-      .shadow(color: .green.opacity(0.35), radius: 5)
-      .accessibilityHidden(true)
-  }
-
-  private var dismissButton: some View {
-    Button(action: onDismiss) {
-      Image(systemName: "xmark")
+  @ViewBuilder
+  private var compactCountBadge: some View {
+    if activeRuns.isEmpty {
+      Image(systemName: "checkmark")
         .font(.system(size: 9, weight: .bold))
-        .foregroundStyle(.white.opacity(0.52))
-        .frame(width: 24, height: 24)
-        .background(.white.opacity(0.08), in: Circle())
+        .foregroundStyle(.black)
+        .frame(width: 18, height: 18)
+        .background(Color.green, in: Capsule())
+        .accessibilityLabel("All tasks completed")
+    } else {
+      Text("\(activeRuns.count)")
+        .font(.appFont(size: 10, weight: .semibold))
+        .foregroundStyle(.black)
+        .monospacedDigit()
+        .frame(minWidth: 18, minHeight: 18, maxHeight: 18)
+        .padding(.horizontal, 1)
+        .background(Color.white, in: Capsule())
+        .accessibilityLabel("\(activeRuns.count) active tasks")
     }
-    .buttonStyle(IslandIconButtonStyle())
-    .help("Dismiss task island")
   }
 
   private var islandSurfaceShape: NotchIslandShape {
     NotchIslandShape(topRadius: 30, bottomRadius: 25)
   }
 
-  private var islandBackground: LinearGradient {
-    LinearGradient(colors: [.black.opacity(0.985), .black], startPoint: .top, endPoint: .bottom)
-  }
-}
-
-/// A continuous ticker for tool and status text. Long messages move at a calm,
-/// readable speed instead of being line-clamped and faded by the island edges.
-private struct MarqueeHeadline: View {
-  let text: String
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var startedAt = Date.now
-
-  private let gap: CGFloat = 42
-  private let speed: CGFloat = 28
-
-  var body: some View {
-    GeometryReader { proxy in
-      let textWidth = measuredWidth
-      let shouldScroll = textWidth > proxy.size.width && !reduceMotion
-      let distance = textWidth + gap
-
-      if shouldScroll {
-        TimelineView(.animation) { timeline in
-          let elapsed = timeline.date.timeIntervalSince(startedAt)
-          let offset = -CGFloat(elapsed * Double(speed))
-            .truncatingRemainder(dividingBy: distance)
-
-          HStack(spacing: gap) {
-            label
-            label
-          }
-          .fixedSize(horizontal: true, vertical: false)
-          .offset(x: offset)
-          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        }
-      } else {
-        label
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-      }
-    }
-    .frame(maxWidth: .infinity, minHeight: 20, maxHeight: 20, alignment: .leading)
-    .clipped()
-    .onChange(of: text) { _, _ in
-      startedAt = .now
-    }
-    .onChange(of: reduceMotion) { _, _ in
-      startedAt = .now
-    }
-    .accessibilityLabel(text)
-  }
-
-  private var label: some View {
-    Text(text)
-      .font(.appFont(size: 12.5, weight: .semibold))
-      .foregroundStyle(.white.opacity(0.9))
-      .lineLimit(1)
-  }
-
-  private var measuredWidth: CGFloat {
-    let attributes: [NSAttributedString.Key: Any] = [.font: AppFont.nsFont(size: 12.5)]
-    return ceil((text as NSString).size(withAttributes: attributes).width)
+  private var islandBackground: Color {
+    .black
   }
 }
 

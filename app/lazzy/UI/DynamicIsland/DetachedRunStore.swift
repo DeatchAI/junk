@@ -162,6 +162,38 @@ final class DetachedRunStore: ObservableObject {
     }
   }
 
+  func beginMedia(_ start: MediaRunStart) {
+    discardDebugPreviews()
+    let prompt = compact(start.prompt)
+    let chatTitle = makeChatTitle(prompt)
+    let kind = start.kind == "video" ? "video" : "image"
+    upsert(start.runId) { run in
+      run.agent = kind
+      run.prompt = prompt
+      run.chatTitle = chatTitle
+      run.status = "Starting \(kind) generation"
+      run.state = .running
+      run.updatedAt = .now
+    } create: {
+      DetachedAgentRun(
+        id: start.runId,
+        conversationId: nil,
+        agent: kind,
+        prompt: prompt,
+        chatTitle: chatTitle,
+        status: "Starting \(kind) generation",
+        toolName: nil,
+        event: nil,
+        state: .running,
+        approval: nil,
+        credential: nil,
+        isDebugPreview: false,
+        startedAt: .now,
+        updatedAt: .now
+      )
+    }
+  }
+
   func apply(_ update: AgentActivityUpdate) {
     let runId = update.runId ?? activeRuns.first?.id
     guard let runId else { return }

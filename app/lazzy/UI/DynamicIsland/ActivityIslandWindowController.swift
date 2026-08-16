@@ -20,8 +20,6 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
   private var approvalShakeRestingFrame: NSRect?
   private var pendingFrameRequest: PendingFrameRequest?
   private var cancellables = Set<AnyCancellable>()
-  private var isDismissedByUser = false
-  private var isSuppressedByVisibleComposer = false
   private var isPointerHovering = false
   private var isAnimatingFrame = false
   private var isShakingApproval = false
@@ -32,13 +30,17 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
   @Published private(set) var isVisible = false
   @Published private(set) var isExpanded = false
 
+  /// Adds a small amount of breathing room without creating a second lane
+  /// beneath the physical camera cutout.
+  static let compactHeightPadding: CGFloat = 6
+
   var onOpenConversation: ((String) -> Void)?
   var onApprovalResponse: ((String, Bool) -> Void)?
 
   private var physicalNotchHeight: CGFloat = 40
-  /// The compact controls retain their existing 48pt inset, while this extra
-  /// lane moves each one 16pt beyond the opaque camera cutout.
-  private let compactSideLaneWidth: CGFloat = 96
+  /// Keep the compact panel close to the hardware notch while leaving enough
+  /// room for the logo and count badge at opposite ends.
+  private let compactSideLaneWidth: CGFloat = 84
 
   init(runStore: DetachedRunStore) {
     self.runStore = runStore
@@ -53,24 +55,18 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
   }
 
   func show() {
-    present(ignoringComposerVisibility: false)
+    present()
   }
 
   /// Debug previews must remain testable from the menu even if a floating chat
   /// happens to be open. This only changes presentation, never run state.
   func showDebugPreview() {
-    isDismissedByUser = false
-    present(ignoringComposerVisibility: true)
+    present()
   }
 
-  private func present(ignoringComposerVisibility: Bool) {
+  private func present() {
     completionDismissWorkItem?.cancel()
     completionDismissWorkItem = nil
-    guard !isSuppressedByVisibleComposer || ignoringComposerVisibility else {
-      hideForVisibleComposer()
-      return
-    }
-    guard !isDismissedByUser else { return }
     guard !runStore.presentationRuns.isEmpty else {
       hide()
       return
@@ -99,12 +95,11 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
   }
 
   func showApproval() {
-    isDismissedByUser = false
     // Approval and credential requests are interrupts: they must be visible
     // even while the originating chat is open, otherwise a waiting agent looks stuck.
     isExpanded = true
     shouldShakeForInterrupt = true
-    present(ignoringComposerVisibility: true)
+    present()
     startInterruptShakeIfReady()
   }
 
@@ -112,7 +107,7 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
   /// the final panel frame lets the source panel use the same destination,
   /// producing a single continuous handoff rather than two unrelated fades.
   func beginComposerHandoff() -> NSRect? {
-    guard runStore.hasActiveRuns, !isDismissedByUser else { return nil }
+    guard runStore.hasActiveRuns else { return nil }
     if islandWindow == nil { createWindow() }
     guard let window = islandWindow else { return nil }
 
@@ -130,33 +125,6 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
     return window.frame
   }
 
-  /// A floating chat already carries the full streamed activity. Keep the
-  /// island out of the way until the user closes every visible composer.
-  func setComposerVisible(_ isVisible: Bool) {
-    guard isSuppressedByVisibleComposer != isVisible else { return }
-    isSuppressedByVisibleComposer = isVisible
-    if isVisible {
-      if runStore.hasPendingApproval || hasPendingCredential {
-        showApproval()
-      } else {
-        hideForVisibleComposer()
-      }
-    } else if runStore.hasActiveRuns {
-      show()
-    }
-  }
-
-  /// Keep the island hidden for the current task after an explicit dismissal.
-  /// Starting another task, or an approval request, deliberately makes it visible again.
-  func dismiss() {
-    isDismissedByUser = true
-    hide()
-  }
-
-  func prepareForNewRun() {
-    isDismissedByUser = false
-  }
-
   func hide() {
     stopApprovalShake()
     resetPendingFrameWork()
@@ -169,21 +137,6 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
     isVisible = false
     guard let window = islandWindow else { return }
     window.orderOut(nil)
-  }
-
-  /// Unlike a user dismissal, this is a reversible presentation rule. It
-  /// intentionally does not set the dismissed flag or discard run state.
-  private func hideForVisibleComposer() {
-    stopApprovalShake()
-    resetPendingFrameWork()
-    hoverCollapseWorkItem?.cancel()
-    hoverCollapseWorkItem = nil
-    isPointerHovering = false
-    completionDismissWorkItem?.cancel()
-    completionDismissWorkItem = nil
-    isExpanded = false
-    isVisible = false
-    islandWindow?.orderOut(nil)
   }
 
   func toggleExpanded() {
@@ -207,7 +160,7 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
   }
 
   func setHovering(_ isHovering: Bool) {
-    guard isVisible, !isSuppressedByVisibleComposer else { return }
+    guard isVisible else { return }
     isPointerHovering = isHovering
     hoverCollapseWorkItem?.cancel()
     hoverCollapseWorkItem = nil
@@ -255,7 +208,6 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
       controller: self,
       physicalNotchHeight: physicalNotchHeight,
       onToggle: { [weak self] in self?.toggleExpanded() },
-      onDismiss: { [weak self] in self?.dismiss() },
       onOpenConversation: { [weak self] conversationId in
         self?.onOpenConversation?(conversationId)
       },
@@ -391,9 +343,9 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
     guard expanded else {
       return CGSize(
         width: physicalNotch.width + (compactSideLaneWidth * 2),
-        // The first notch-height is physically obscured by the camera. The
-        // second is the visible compact activity lane beneath it.
-        height: physicalNotch.height * 2
+        // Compact mode is exactly as tall as the physical camera cutout.
+        // Its controls occupy the visible side lanes on either end.
+        height: physicalNotch.height + Self.compactHeightPadding
       )
     }
 
