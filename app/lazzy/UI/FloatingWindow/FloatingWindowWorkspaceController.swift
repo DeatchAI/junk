@@ -85,6 +85,7 @@ private final class DebugDemoShortcutRouter {
 /// Owns the independent composer windows that make up the floating agent
 /// workspace. A task is retained after its panel closes so an in-flight agent
 /// can continue streaming activity to the notch.
+@MainActor
 final class FloatingWindowWorkspaceController: ObservableObject {
   final class Task: Identifiable {
     let id = UUID()
