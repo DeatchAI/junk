@@ -4,6 +4,7 @@ import Foundation
 import SwiftUI
 
 /// Controller for the history side panel window - appears on the left edge of screen
+@MainActor
 class HistoryWindowController: NSObject, ObservableObject {
 
   private var historyWindow: NSPanel?
@@ -65,7 +66,9 @@ class HistoryWindowController: NSObject, ObservableObject {
         historyWindow?.animator().alphaValue = 0
       },
       completionHandler: { [weak self] in
-        self?.historyWindow?.orderOut(nil)
+        Task { @MainActor [weak self] in
+          self?.historyWindow?.orderOut(nil)
+        }
       })
 
     isVisible = false
