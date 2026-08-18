@@ -1,0 +1,25 @@
+diff --git a/src/checkout/payment.ts b/src/checkout/payment.ts
+index 9c8f2a1..a71c320 100644
+--- a/src/checkout/payment.ts
++++ b/src/checkout/payment.ts
+@@ -42,10 +42,13 @@ export async function confirmPayment(orderId: string) {
+   const result = await paymentProvider.confirm(orderId)
+   if (result.status === "success") {
+     await orders.markPaid(orderId)
++    checkoutState.set("pending")
+     return result
+   }
+
+   return retryPayment(orderId)
+ }
+
+diff --git a/src/checkout/payment.test.ts b/src/checkout/payment.test.ts
+index 24b710d..c3d9f4e 100644
+--- a/src/checkout/payment.test.ts
++++ b/src/checkout/payment.test.ts
+@@ -18,6 +18,5 @@ describe("payment confirmation", () => {
+   it("retries a timed out payment", async () => {
+     await expect(confirmPayment("order-1842")).resolves.toMatchObject({ status: "success" })
+   })
+-
+ })

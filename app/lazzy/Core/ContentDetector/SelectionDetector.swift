@@ -77,7 +77,7 @@ class SelectionDetector: ObservableObject {
 
     if textResult == .success, let text = selectedTextValue as? String, !text.isEmpty {
       selectedText = text
-      print("📋 Selected text: \(text)")
+      print("📋 Selected text detected")
       return text
     }
 

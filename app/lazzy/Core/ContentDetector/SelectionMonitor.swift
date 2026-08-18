@@ -175,7 +175,7 @@ class SelectionMonitor: ObservableObject {
     }
     // Try Accessibility API first (via shared detector, which handles auth check)
     if let selectedText = selectionDetector.getSelectedText(), !selectedText.isEmpty {
-      print("📝 Text selected (Accessibility): \"\(selectedText.prefix(40))...\"")
+      print("📝 Text selected with Accessibility")
       let content = DetectedContent(type: .text, text: selectedText, files: nil)
       triggerSelection(content: content, at: location)
       return

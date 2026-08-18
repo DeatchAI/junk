@@ -21,6 +21,8 @@ struct ChatRequest: Codable {
   let displayText: String?
   let files: [FileAttachmentRequest]?
   let conversationId: String?
+  /// The folder selected in the floating composer for this agent run.
+  let workspacePath: String?
   let integrations: [String]?
   let systemPrompt: String?
   let composerMode: ComposerMode?
@@ -43,6 +45,7 @@ struct ChatRequest: Codable {
     text: String, displayText: String? = nil, files: [FileAttachmentRequest]? = nil,
     runId: String? = nil,
     conversationId: String? = nil,
+    workspacePath: String? = nil,
     integrations: [String]? = nil, systemPrompt: String? = nil, composerMode: ComposerMode? = nil,
     slashCommandId: String? = nil,
     fastMode: Bool = false,
@@ -61,6 +64,7 @@ struct ChatRequest: Codable {
     self.displayText = displayText
     self.files = files
     self.conversationId = conversationId
+    self.workspacePath = workspacePath
     self.integrations = integrations
     self.systemPrompt = systemPrompt
     self.composerMode = composerMode

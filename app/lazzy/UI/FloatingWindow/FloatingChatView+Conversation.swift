@@ -336,6 +336,7 @@ extension FloatingChatView {
       text: fullPrompt,
       displayText: displayText,
       files: allFiles,
+      workspacePath: workingDirectoryStore.url?.path,
       fastMode: fastMode,
       zeroDataRetention: AISettings.zeroDataRetention,
       mcpServerIds: mcpServerIds,
@@ -504,6 +505,7 @@ extension FloatingChatView {
     wsManager.sendChat(
       text: "[INDEXING_MODE] User wants to index an app's UI. Start the interactive indexing flow.",
       files: [],
+      workspacePath: workingDirectoryStore.url?.path,
       fastMode: false,
       zeroDataRetention: AISettings.zeroDataRetention
     )

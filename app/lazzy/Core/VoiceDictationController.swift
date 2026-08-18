@@ -1,9 +1,6 @@
-import AppKit
 import AVFoundation
 import Combine
-import CoreGraphics
 import Foundation
-import Speech
 
 enum VoiceDictationState: Equatable {
   case idle
@@ -13,9 +10,9 @@ enum VoiceDictationState: Equatable {
   case failed(String)
 }
 
-/// Owns the global Fn push-to-talk gesture and a single live microphone
-/// transcription session. The finished text is handed back to the floating
-/// workspace; this type never sends a chat message by itself.
+/// Owns one microphone transcription session for the focused floating
+/// composer. The composer owns the Fn gesture; this type never sends a chat
+/// message by itself.
 final class VoiceDictationController: NSObject, ObservableObject {
   @Published private(set) var state: VoiceDictationState = .idle
   @Published private(set) var partialTranscript = ""
@@ -24,199 +21,70 @@ final class VoiceDictationController: NSObject, ObservableObject {
   var onStateChanged: ((VoiceDictationState, String) -> Void)?
   var onTranscription: ((String) -> Void)?
 
-  private let functionKeyCode: Int64 = 63
-  private var eventTap: CFMachPort?
-  private var eventTapSource: CFRunLoopSource?
-  private var localFlagsMonitor: Any?
-  private var globalFlagsMonitor: Any?
-
-  private var isFunctionKeyHeld = false
+  private let whisperTranscriber = LocalWhisperTranscriber()
+  private var isPushToTalkActive = false
   private var sessionID: UUID?
-  private var audioEngine: AVAudioEngine?
-  private var hasInstalledInputTap = false
-  private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-  private var recognitionTask: SFSpeechRecognitionTask?
-  private var finalizationWorkItem: DispatchWorkItem?
+  private var audioRecorder: AVAudioRecorder?
+  private var recordingURL: URL?
+  private var transcriptionTask: Task<Void, Never>?
 
-  func startMonitoring() {
-    stopKeyboardMonitoring()
-
-    if installFunctionKeyEventTap() {
-      print("🎙️ Fn push-to-talk monitor started")
-      return
-    }
-
-    // A local monitor keeps voice input usable while the composer is focused
-    // even before Accessibility has been granted. The global monitor becomes
-    // effective once macOS allows this app to observe keyboard input.
-    localFlagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) {
-      [weak self] event in
-      self?.handleFlagsChanged(
-        keyCode: Int64(event.keyCode),
-        functionIsDown: event.modifierFlags.contains(.function)
-      )
-      return event
-    }
-    globalFlagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) {
-      [weak self] event in
-      self?.handleFlagsChanged(
-        keyCode: Int64(event.keyCode),
-        functionIsDown: event.modifierFlags.contains(.function)
-      )
-    }
-    print("🎙️ Fn push-to-talk monitor started in compatibility mode")
+  func beginPushToTalk() {
+    guard !isPushToTalkActive else { return }
+    isPushToTalkActive = true
+    beginHold()
   }
 
-  func restartMonitoring() {
-    startMonitoring()
+  func endPushToTalk() {
+    guard isPushToTalkActive else { return }
+    isPushToTalkActive = false
+    finishHold()
   }
 
-  func stopMonitoring() {
-    stopKeyboardMonitoring()
-    isFunctionKeyHeld = false
+  func toggleRecording() {
+    isPushToTalkActive ? endPushToTalk() : beginPushToTalk()
+  }
+
+  func stop() {
+    isPushToTalkActive = false
     cancelRecognition()
     updateState(.idle, partial: "")
   }
 
-  private func installFunctionKeyEventTap() -> Bool {
-    let mask = CGEventMask(1) << CGEventType.flagsChanged.rawValue
-    let callback: CGEventTapCallBack = { _, type, event, userInfo in
-      guard let userInfo else {
-        return Unmanaged.passUnretained(event)
-      }
-
-      let controller = Unmanaged<VoiceDictationController>
-        .fromOpaque(userInfo)
-        .takeUnretainedValue()
-
-      if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-        if let eventTap = controller.eventTap {
-          CGEvent.tapEnable(tap: eventTap, enable: true)
-        }
-        return Unmanaged.passUnretained(event)
-      }
-
-      guard type == .flagsChanged,
-        event.getIntegerValueField(.keyboardEventKeycode) == controller.functionKeyCode
-      else {
-        return Unmanaged.passUnretained(event)
-      }
-
-      controller.handleFlagsChanged(
-        keyCode: controller.functionKeyCode,
-        functionIsDown: event.flags.contains(.maskSecondaryFn)
-      )
-
-      // Fn is dedicated to Detach push-to-talk while the app is running. Do
-      // not also open the macOS emoji/dictation action configured for Fn.
-      return nil
-    }
-
-    guard
-      let tap = CGEvent.tapCreate(
-        tap: .cgSessionEventTap,
-        place: .headInsertEventTap,
-        options: .defaultTap,
-        eventsOfInterest: mask,
-        callback: callback,
-        userInfo: Unmanaged.passUnretained(self).toOpaque()
-      )
-    else {
-      return false
-    }
-
-    guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
-      CFMachPortInvalidate(tap)
-      return false
-    }
-
-    eventTap = tap
-    eventTapSource = source
-    CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-    CGEvent.tapEnable(tap: tap, enable: true)
-    return true
-  }
-
-  private func stopKeyboardMonitoring() {
-    if let localFlagsMonitor {
-      NSEvent.removeMonitor(localFlagsMonitor)
-      self.localFlagsMonitor = nil
-    }
-    if let globalFlagsMonitor {
-      NSEvent.removeMonitor(globalFlagsMonitor)
-      self.globalFlagsMonitor = nil
-    }
-    if let eventTapSource {
-      CFRunLoopRemoveSource(CFRunLoopGetMain(), eventTapSource, .commonModes)
-      self.eventTapSource = nil
-    }
-    if let eventTap {
-      CFMachPortInvalidate(eventTap)
-      self.eventTap = nil
-    }
-  }
-
-  private func handleFlagsChanged(keyCode: Int64, functionIsDown: Bool) {
-    guard keyCode == functionKeyCode else { return }
-
-    if functionIsDown && !isFunctionKeyHeld {
-      isFunctionKeyHeld = true
-      beginHold()
-    } else if !functionIsDown && isFunctionKeyHeld {
-      isFunctionKeyHeld = false
-      finishHold()
-    }
-  }
-
   private func beginHold() {
-    if state == .processing, let sessionID {
-      complete(sessionID: sessionID, transcript: partialTranscript)
-    } else {
-      cancelRecognition()
+    guard hasMicrophoneUsageDescription else {
+      isPushToTalkActive = false
+      fail(
+        "Voice input is unavailable in this build. Rebuild or reinstall Detach so its microphone permission is included."
+      )
+      return
     }
-    sessionID = UUID()
+
+    // A new press while a previous transcription is finishing cancels that
+    // session and starts a clean recording for the same focused composer.
+    cancelRecognition()
+    let newSessionID = UUID()
+    sessionID = newSessionID
     partialTranscript = ""
     onHoldBegan?()
     updateState(.requestingPermission, partial: "")
-    requestSpeechPermission()
+    requestMicrophonePermission(sessionID: newSessionID)
   }
 
-  private func requestSpeechPermission() {
-    switch SFSpeechRecognizer.authorizationStatus() {
-    case .authorized:
-      requestMicrophonePermission()
-    case .notDetermined:
-      SFSpeechRecognizer.requestAuthorization { [weak self] status in
-        DispatchQueue.main.async {
-          guard let self else { return }
-          if status == .authorized {
-            self.requestMicrophonePermission()
-          } else {
-            self.fail("Speech recognition permission is required for Fn voice input.")
-          }
-        }
-      }
-    case .denied:
-      fail("Allow Speech Recognition for Detach in System Settings.")
-    case .restricted:
-      fail("Speech recognition is restricted on this Mac.")
-    @unknown default:
-      fail("Speech recognition permission is unavailable.")
-    }
-  }
-
-  private func requestMicrophonePermission() {
+  private func requestMicrophonePermission(sessionID: UUID) {
     switch AVCaptureDevice.authorizationStatus(for: .audio) {
     case .authorized:
-      startRecognitionIfStillHeld()
+      startRecordingIfStillHeld(sessionID: sessionID)
     case .notDetermined:
       AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
         DispatchQueue.main.async {
-          guard let self else { return }
+          guard let self,
+            self.isPushToTalkActive,
+            self.sessionID == sessionID
+          else { return }
           if granted {
-            self.startRecognitionIfStillHeld()
+            self.startRecordingIfStillHeld(sessionID: sessionID)
           } else {
-            self.fail("Microphone permission is required for Fn voice input.")
+            self.fail("Microphone permission is required for local voice input.")
           }
         }
       }
@@ -229,80 +97,37 @@ final class VoiceDictationController: NSObject, ObservableObject {
     }
   }
 
-  private func startRecognitionIfStillHeld() {
-    guard isFunctionKeyHeld, let sessionID else {
-      updateState(.idle, partial: "")
-      return
-    }
-    startRecognition(sessionID: sessionID)
+  private func startRecordingIfStillHeld(sessionID: UUID) {
+    guard isPushToTalkActive, self.sessionID == sessionID else { return }
+    startRecording(sessionID: sessionID)
   }
 
-  private func startRecognition(sessionID: UUID) {
-    guard let recognizer = SFSpeechRecognizer(locale: Locale.autoupdatingCurrent) else {
-      fail("Speech recognition is not available for your current language.")
-      return
-    }
-    guard recognizer.isAvailable else {
-      fail("Apple speech recognition is currently unavailable.")
+  private func startRecording(sessionID: UUID) {
+    guard AVCaptureDevice.default(for: .audio) != nil else {
+      fail("No microphone input is available on this Mac.")
       return
     }
 
-    let engine = AVAudioEngine()
-    let request = SFSpeechAudioBufferRecognitionRequest()
-    request.shouldReportPartialResults = true
-    request.taskHint = .dictation
-    request.addsPunctuation = true
-    if recognizer.supportsOnDeviceRecognition {
-      request.requiresOnDeviceRecognition = true
-    }
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent("detach-voice-\(sessionID.uuidString).wav")
+    let settings: [String: Any] = [
+      AVFormatIDKey: kAudioFormatLinearPCM,
+      AVSampleRateKey: 16_000,
+      AVNumberOfChannelsKey: 1,
+      AVLinearPCMBitDepthKey: 16,
+      AVLinearPCMIsFloatKey: false,
+      AVLinearPCMIsBigEndianKey: false,
+    ]
 
-    let inputNode = engine.inputNode
-    let recordingFormat = inputNode.outputFormat(forBus: 0)
-    guard recordingFormat.sampleRate > 0, recordingFormat.channelCount > 0 else {
-      fail("No microphone input is available.")
-      return
-    }
-
-    inputNode.installTap(
-      onBus: 0,
-      bufferSize: 1_024,
-      format: recordingFormat
-    ) { buffer, _ in
-      request.append(buffer)
-    }
-    hasInstalledInputTap = true
-
-    audioEngine = engine
-    recognitionRequest = request
-    recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-      DispatchQueue.main.async {
-        guard let self, self.sessionID == sessionID else { return }
-
-        if let result {
-          let transcript = result.bestTranscription.formattedString
-          self.partialTranscript = transcript
-          self.onStateChanged?(self.state, transcript)
-          if result.isFinal {
-            self.complete(sessionID: sessionID, transcript: transcript)
-            return
-          }
-        }
-
-        if let error {
-          if !self.partialTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            self.complete(sessionID: sessionID, transcript: self.partialTranscript)
-          } else if self.state == .processing {
-            self.complete(sessionID: sessionID, transcript: "")
-          } else {
-            self.fail("Voice transcription stopped: \(error.localizedDescription)")
-          }
-        }
-      }
-    }
-
-    engine.prepare()
     do {
-      try engine.start()
+      let recorder = try AVAudioRecorder(url: url, settings: settings)
+      recorder.isMeteringEnabled = true
+      guard recorder.record() else {
+        fail("Could not start the microphone recorder.")
+        return
+      }
+      recordingURL = url
+      audioRecorder = recorder
       updateState(.listening, partial: "")
     } catch {
       fail("Could not start the microphone: \(error.localizedDescription)")
@@ -315,29 +140,40 @@ final class VoiceDictationController: NSObject, ObservableObject {
       return
     }
 
-    guard state == .listening else {
+    guard state == .listening, let recorder = audioRecorder, let url = recordingURL else {
       if state == .requestingPermission {
+        cancelRecognition()
         updateState(.idle, partial: "")
       }
       return
     }
 
-    audioEngine?.stop()
-    removeInputTapIfNeeded()
-    recognitionRequest?.endAudio()
+    recorder.stop()
+    audioRecorder = nil
     updateState(.processing, partial: partialTranscript)
 
-    let workItem = DispatchWorkItem { [weak self] in
-      guard let self, self.sessionID == sessionID else { return }
-      self.complete(sessionID: sessionID, transcript: self.partialTranscript)
+    transcriptionTask = Task { [weak self] in
+      do {
+        let transcript = try await self?.whisperTranscriber.transcribe(audioURL: url) ?? ""
+        guard !Task.isCancelled else { return }
+        await MainActor.run {
+          guard let self, self.sessionID == sessionID else { return }
+          self.complete(sessionID: sessionID, transcript: transcript)
+        }
+      } catch {
+        guard !Task.isCancelled else { return }
+        await MainActor.run {
+          guard let self, self.sessionID == sessionID else { return }
+          self.fail("Local Whisper could not transcribe this recording: \(error.localizedDescription)")
+        }
+      }
     }
-    finalizationWorkItem = workItem
-    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: workItem)
   }
 
   private func complete(sessionID: UUID, transcript: String) {
     guard self.sessionID == sessionID else { return }
     let cleanedTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+    isPushToTalkActive = false
     cancelRecognition()
     if !cleanedTranscript.isEmpty {
       onTranscription?(cleanedTranscript)
@@ -346,6 +182,7 @@ final class VoiceDictationController: NSObject, ObservableObject {
   }
 
   private func fail(_ message: String) {
+    isPushToTalkActive = false
     cancelRecognition()
     updateState(.failed(message), partial: "")
 
@@ -356,29 +193,29 @@ final class VoiceDictationController: NSObject, ObservableObject {
   }
 
   private func cancelRecognition() {
-    finalizationWorkItem?.cancel()
-    finalizationWorkItem = nil
+    transcriptionTask?.cancel()
+    transcriptionTask = nil
 
-    audioEngine?.stop()
-    removeInputTapIfNeeded()
-    recognitionRequest?.endAudio()
-    recognitionTask?.cancel()
+    audioRecorder?.stop()
+    audioRecorder = nil
 
-    audioEngine = nil
-    recognitionRequest = nil
-    recognitionTask = nil
+    if let recordingURL {
+      try? FileManager.default.removeItem(at: recordingURL)
+    }
+    recordingURL = nil
     sessionID = nil
-  }
-
-  private func removeInputTapIfNeeded() {
-    guard hasInstalledInputTap else { return }
-    audioEngine?.inputNode.removeTap(onBus: 0)
-    hasInstalledInputTap = false
   }
 
   private func updateState(_ state: VoiceDictationState, partial: String) {
     self.state = state
     partialTranscript = partial
     onStateChanged?(state, partial)
+  }
+
+  private var hasMicrophoneUsageDescription: Bool {
+    guard let value = Bundle.main.object(forInfoDictionaryKey: "NSMicrophoneUsageDescription") as? String else {
+      return false
+    }
+    return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 }

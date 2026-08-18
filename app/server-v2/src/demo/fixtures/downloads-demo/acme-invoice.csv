@@ -1,0 +1,3 @@
+project,kind,amount,status
+Acme,invoice,1240,needs-review
+Acme,invoice,980,paid

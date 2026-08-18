@@ -81,7 +81,7 @@ export class ACPAgentProcess {
         mcpServers: buildACPMCPServers(this.options.mcpServers),
       }));
       this.sessionId = getString(session?.sessionId);
-      if (!this.sessionId) {
+      if (!session || !this.sessionId) {
         throw new Error("ACP agent did not return a session ID.");
       }
 

@@ -2,14 +2,14 @@ import type { AgentRun, AgentStreamCallbacks } from "../agents/AgentAdapter";
 import type { AgentActivityEvent, AgentActivityKind, AgentKind } from "../protocol/messages";
 
 export const DEMO_TRIGGER_PROMPTS = {
-  developer: "Triage the failed CI run for this PR and draft a review note with evidence.",
-  hiring: "Check onboarding readiness for our new hire starting Monday.",
-  operations: "Review our top five SaaS renewals and flag anything that needs attention.",
-  research: "Verify the claims in this market brief against the current sources.",
-  sales: "Prepare a source-backed brief for my Acme discovery call.",
-  coding: "Build a dashboard to make our research findings interactive.",
-  paystubs: "Get my paystubs for this month.",
-  xReplies: "Reply to all comments my X post has received.",
+  developer: "Review the attached checkout pull request, test changes, and CI notes for bugs, regressions, and missing tests.",
+  hiring: "Fix the failing tests in the attached project files, run the relevant checks, and show me the diff.",
+  operations: "Open the staging checkout URL from the attached runbook, reproduce the payment bug, and tell me what broke.",
+  research: "Use the attached pricing brief to compare the current plans for these tools and cite the live sources.",
+  sales: "Review the attached Downloads folder and propose a cleaner project-based organization without deleting anything.",
+  coding: "Build a small dashboard from the attached usage CSV and run it locally.",
+  paystubs: "Log in to the admin dashboard and export this month's usage report using the attached report specification.",
+  xReplies: "Summarize the attached meeting transcript and turn the action items into a checklist.",
 } as const;
 
 type DemoScenarioId = keyof typeof DEMO_TRIGGER_PROMPTS;
@@ -38,6 +38,17 @@ type DemoStep = DemoActivityStep | DemoChunkStep;
 const ACTIVITY_PACING_MULTIPLIER = 2.6;
 const MIN_CHUNK_PACING_MS = 700;
 
+const DEMO_CAPABILITIES: Record<DemoScenarioId, string[]> = {
+  developer: [],
+  hiring: [],
+  operations: ["Browser"],
+  research: ["Browser"],
+  sales: ["macOS"],
+  coding: [],
+  paystubs: ["Browser", "Secrets"],
+  xReplies: [],
+};
+
 export interface DemoScenario {
   id: DemoScenarioId;
   prompt: string;
@@ -50,139 +61,171 @@ const scenarios: Record<DemoScenarioId, DemoScenario> = {
   developer: {
     id: "developer",
     prompt: DEMO_TRIGGER_PROMPTS.developer,
-    openingText: "I’ll go through the PR, inspect the failed CI run, and compare it with the last passing build before I draft the review note.\n\n",
-    progressText: "I’ve isolated the failure to the mobile checkout job. I’m opening the trace now to confirm whether the environment change is the cause.\n\n",
+    openingText: "I’ll inspect the pull request, read the changed files and test history, then check the risky paths before I write a review with concrete findings.\n\n",
+    progressText: "The main risk is in the checkout state transition. I’m comparing the new branch with the last passing commit and checking whether the existing tests cover the failure path.\n\n",
     steps: [
-      activity(1400, "Opening the failed GitHub Actions run", "Inspecting CI run", "Run #8421 · checkout-web", "browser.open"),
-      activity(1700, "Finding the first failing step", "Reading failure logs", "Playwright mobile · step 14", "browser.snapshot"),
-      activity(1600, "Comparing against the last green run", "Comparing CI runs", "Run #8398 → #8421", "browser.open"),
-      activity(1500, "Reviewing the Playwright trace", "Inspecting browser trace", "Payment iframe never reached ready state", "browser.snapshot"),
-      activity(1200, "Drafting a review note with evidence", "Preparing PR evidence", "No comment will be posted", "files.write", "file_change"),
-      chunk(350, "I found the first actionable failure and compared it with the last green run.\n\n"),
-      chunk(250, "**CI diagnosis**\n\n- Failing job: `checkout-web / Playwright mobile`\n- First failing step: **14 — payment iframe readiness**\n- Likely cause: the preview environment still references the pre-rename Stripe key\n- Last green run: `#8398`; current run: `#8421`\n\n"),
-      chunk(200, "I also prepared a PR comment with the log and trace links. Nothing was posted or changed."),
+      activity(1400, "Opening the attached pull request files", "Reviewing pull request", "Checkout change set · 12 changed files", "files.read"),
+      activity(1700, "Reading the checkout and payment tests", "Checking test coverage", "Retry, timeout, and success paths", "files.read", "mcp_tool"),
+      activity(1600, "Comparing the attached changes with the last green build", "Comparing recent builds", "Build #1842 versus #1837", "git.diff"),
+      activity(1500, "Tracing the risky checkout state transition", "Checking regression path", "Payment can remain pending after a timeout", "files.read"),
+      activity(1200, "Drafting review findings with file references", "Preparing review comments", "Nothing will be posted", "files.write", "file_change"),
+      chunk(350, "I reviewed the pull request and found two actionable issues.\n\n"),
+      chunk(250, "**Review findings**\n\n- The retry path can leave checkout stuck in `pending` when the payment iframe times out.\n- The error branch drops the original request ID, which makes support replay harder.\n- Existing tests cover the happy path but not a timeout followed by retry.\n\n"),
+      chunk(200, "I prepared precise file and test references for the review. Nothing was posted or changed."),
     ],
   },
   hiring: {
     id: "hiring",
     prompt: DEMO_TRIGGER_PROMPTS.hiring,
-    openingText: "I’ll check the offer, identity, workspace, device, payroll, benefits, and calendar records, then return only the items that could disrupt day one.\n\n",
-    progressText: "The core accounts are present. I found a few cross-system mismatches, so I’m verifying their owners and source evidence before I summarize them.\n\n",
+    openingText: "I’ll reproduce the failing tests, trace the first broken assertion, make the smallest safe fix, and run the relevant checks before I show you the diff.\n\n",
+    progressText: "The failures point to one changed date-handling helper rather than the three separate test cases. I’m checking its callers now so the fix does not hide a real regression.\n\n",
     steps: [
-      activity(1400, "Opening the signed offer and HRIS record", "Checking new-hire record", "Jordan Lee · starts Monday", "browser.open"),
-      activity(1600, "Checking identity and workspace access", "Reviewing account readiness", "Okta, Google Workspace, Slack", "browser.snapshot"),
-      activity(1700, "Comparing GitHub access with the role template", "Checking engineering access", "Team assignment needs review", "browser.open"),
-      activity(1500, "Reviewing laptop and benefits portals", "Checking day-one logistics", "One device exception found", "browser.snapshot"),
-      activity(1200, "Building the day-one readiness map", "Preparing onboarding packet", "Accounts remain unchanged", "files.write", "file_change"),
-      chunk(350, "The onboarding pass is complete. I found three items that could disrupt Jordan's first morning.\n\n"),
-      chunk(250, "**Needs review**\n\n1. Laptop request is still waiting on the 16-inch exception.\n2. GitHub invite is staged for `frontend-contractors`, but the offer lists Product Engineering.\n3. Benefits location shows New York while the signed offer shows California.\n\n"),
-      chunk(200, "Google Workspace, Slack, payroll, and the calendar invite are ready. I staged owner-specific follow-up notes but did not create accounts or send messages."),
+      activity(1400, "Opening the project and reproducing the failures", "Running the failing test suite", "7 failures · date-formatting.test.ts", "bun test", "command"),
+      activity(1600, "Tracing the first broken assertion", "Reading the failure path", "Timezone offset changes the expected date", "files.read", "mcp_tool"),
+      activity(1700, "Checking every caller of the date helper", "Inspecting related code", "Invoice, export, and notification paths", "files.read", "mcp_tool"),
+      activity(1500, "Applying the smallest compatible fix", "Updating the date helper", "Preserving the existing UTC contract", "files.write", "file_change"),
+      activity(1200, "Running focused tests and the type check", "Verifying the fix", "Focused tests pass · type check passes", "bun test", "command"),
+      chunk(350, "I fixed the shared date helper and reran the affected checks.\n\n"),
+      chunk(250, "**Verification**\n\n- 7 failing tests now pass\n- The UTC contract is explicit at the helper boundary\n- Invoice export and notification callers keep their existing behavior\n- Type checking passes\n\n"),
+      chunk(200, "The diff is limited to the helper and its regression tests. I did not commit or push anything."),
     ],
   },
   operations: {
     id: "operations",
     prompt: DEMO_TRIGGER_PROMPTS.operations,
-    openingText: "I’ll reconcile the renewal tracker with the live vendor portals, current seat counts, invoices, and contract terms, then flag only the exceptions that need a decision.\n\n",
-    progressText: "I’ve checked the first three vendors. Two records do not line up with the live billing data, so I’m tracing the contract terms and renewal owners now.\n\n",
+    openingText: "I’ll open staging, reproduce the checkout issue in the browser, capture the failing step and console state, then compare it with the last known-good deployment.\n\n",
+    progressText: "The bug reproduces only after a failed payment attempt. I’m checking the browser state and deployment configuration together so I can separate a frontend regression from an environment problem.\n\n",
     steps: [
-      activity(1400, "Opening the Q3 renewal tracker", "Reading renewal inventory", "Top five vendors", "browser.open"),
-      activity(1700, "Checking live seat counts in vendor portals", "Auditing active seats", "Assigned versus purchased", "browser.snapshot"),
-      activity(1600, "Comparing invoices with contract terms", "Reviewing renewal pricing", "Current amount versus negotiated rate", "browser.open"),
-      activity(1500, "Finding owners and renewal dates", "Resolving renewal ownership", "Two renewals inside 30 days", "browser.snapshot"),
-      activity(1200, "Preparing the renewal exception report", "Building renewal report", "No terms will be accepted", "files.write", "file_change"),
-      chunk(350, "I reviewed the five largest SaaS renewals and attached the source evidence.\n\n"),
-      chunk(250, "**Renewal exceptions**\n\n- **CloudGrid** — renews in 18 days; invoice is 12% above the contracted rate.\n- **SignalDesk** — 148 seats purchased, 103 assigned; owner confirmation needed.\n- **Formly** — renewal owner is missing from the tracker.\n\n"),
-      chunk(200, "The other two vendors match their contracts and seat records. I did not approve payments, accept terms, or edit the tracker."),
+      activity(1400, "Opening the staging checkout", "Navigating staging", "Checkout · Chrome tab 3", "browser.open"),
+      activity(1700, "Reproducing the failed payment path", "Replaying checkout", "Payment succeeds, redirect never completes", "browser.interact"),
+      activity(1600, "Inspecting console and network state", "Reading browser diagnostics", "Order status remains `pending`", "browser.inspect"),
+      activity(1500, "Comparing the last good deployment", "Comparing deployments", "Environment variable changed in release 2026.08.14", "browser.open"),
+      activity(1200, "Preparing a reproducible bug report", "Writing reproduction steps", "No staging data will be changed", "files.write", "file_change"),
+      chunk(350, "I reproduced the checkout bug consistently after a failed payment attempt.\n\n"),
+      chunk(250, "**What broke**\n\n- The payment provider returns success, but the redirect listener is not reattached after the retry.\n- The order stays in `pending`, so the confirmation page waits forever.\n- The last good deployment included the listener initialization; the current release moved it behind a client-only branch.\n\n"),
+      chunk(200, "I captured the exact reproduction steps and the relevant console state. I did not place an order or change staging."),
     ],
   },
   research: {
     id: "research",
     prompt: DEMO_TRIGGER_PROMPTS.research,
-    openingText: "I’ll reopen each cited source, compare the live page with the claim in the brief, and preserve screenshots or files anywhere the evidence may have changed.\n\n",
-    progressText: "Most claims still match. I found several changes on pricing and security pages, and I’m checking the PDFs before I mark anything as verified or stale.\n\n",
+    openingText: "I’ll check the current pricing pages for each tool, record the plan limits and billing terms, and build a comparison with source links and access dates.\n\n",
+    progressText: "The headline prices are easy to compare, but the usage limits and annual billing rules differ. I’m checking the plan details and keeping those caveats beside each number.\n\n",
     steps: [
-      activity(1400, "Opening every source in the brief", "Collecting source evidence", "12 live pages · 4 PDFs", "browser.open"),
-      activity(1700, "Capturing pages that may change", "Saving source snapshots", "Pricing and security pages", "browser.snapshot"),
-      activity(1600, "Comparing current pages with cited claims", "Verifying brief claims", "Verified, changed, or missing", "browser.open"),
-      activity(1500, "Extracting fields from the source PDFs", "Reading research PDFs", "Methods, sample sizes, limitations", "files.read", "mcp_tool"),
-      activity(1200, "Updating the evidence table", "Preparing claim review", "Reviewer status preserved", "files.write", "file_change"),
-      chunk(350, "I rechecked the brief against the live sources and preserved evidence for every change.\n\n"),
-      chunk(250, "**Claim review**\n\n- 18 claims verified\n- 3 claims changed\n- 1 source moved behind a sales form\n- 2 PDF values need human review\n\nThe largest change is the free-plan limit: the brief says **10 seats**, while the current pricing page lists **5**.\n\n"),
-      chunk(200, "The evidence table includes source URLs, access dates, screenshots, downloaded filenames, and review status."),
+      activity(1400, "Opening the current pricing pages", "Collecting pricing evidence", "4 tools · official plan pages", "browser.open"),
+      activity(1700, "Capturing plan limits and billing terms", "Reading plan details", "Seats, usage, annual discount, API access", "browser.snapshot"),
+      activity(1600, "Comparing equivalent plans", "Normalizing the comparison", "Monthly price versus included usage", "browser.open"),
+      activity(1500, "Checking pricing footnotes and exclusions", "Reviewing caveats", "Two features require annual billing", "browser.snapshot"),
+      activity(1200, "Building the source-backed comparison", "Preparing pricing table", "Source URLs and access dates included", "files.write", "file_change"),
+      chunk(350, "I checked the current official pricing pages and built the comparison.\n\n"),
+      chunk(250, "**Pricing snapshot**\n\n- Tool A has the lowest monthly entry price, but usage overages start sooner.\n- Tool B includes the strongest team permissions on its first paid plan.\n- Tool C is cheaper annually but does not include API access at the starter tier.\n- Tool D has the clearest usage-based pricing, with no annual commitment required.\n\n"),
+      chunk(200, "The table includes source links, access dates, plan limits, and the billing caveats. I did not start a trial or enter payment details."),
     ],
   },
   sales: {
     id: "sales",
     prompt: DEMO_TRIGGER_PROMPTS.sales,
-    openingText: "I’ll review the CRM trail, Acme’s current site and hiring signals, then match the account with the closest relevant customer proof before I prepare your call brief.\n\n",
-    progressText: "There’s a useful pattern emerging around infrastructure hiring and security timing. I’m checking the prior deal trail now so the questions are grounded in evidence, not generic talking points.\n\n",
+    openingText: "I’ll inspect the files in Downloads, group them by project and file type, and prepare a proposed move list for you to review before anything changes on disk.\n\n",
+    progressText: "Most files map cleanly to three projects. I found a few ambiguous exports and duplicates, so I’m leaving those in place instead of guessing where they belong.\n\n",
     steps: [
-      activity(1400, "Opening the Acme CRM account and call notes", "Reading deal context", "Discovery call · 2:00 PM", "browser.open"),
-      activity(1700, "Checking Acme's hiring and security pages", "Researching account signals", "Three infrastructure roles found", "browser.snapshot"),
-      activity(1600, "Finding the closest similar won deal", "Matching customer proof", "Series B infrastructure rollout", "browser.open"),
-      activity(1500, "Reviewing pricing and procurement risks", "Checking deal risks", "Security review timing", "browser.snapshot"),
-      activity(1200, "Building the source-backed call brief", "Preparing discovery brief", "CRM remains unchanged", "files.write", "file_change"),
-      chunk(350, "Your Acme discovery brief is ready.\n\n"),
-      chunk(250, "**What changed**\n\n- Acme is hiring three infrastructure engineers.\n- Its SOC 2 page was updated last week.\n- The last CRM note says migration risk and procurement timing blocked progress.\n- The closest proof is the Northstar infrastructure rollout.\n\n"),
-      chunk(200, "**Best opener:** “I saw the infrastructure team is growing ahead of the migration. Will that team own the rollout, or inherit it after vendor selection?”\n\nI included four follow-up questions and the exact source links. Nothing was written back to the CRM."),
+      activity(1400, "Scanning the Downloads folder", "Reading local file inventory", "42 files · 6 folders", "detach_macos_snapshot", "mcp_tool"),
+      activity(1700, "Grouping files by project and type", "Organizing file candidates", "Invoices, exports, screenshots, and notes", "files.read", "mcp_tool"),
+      activity(1600, "Finding duplicates and ambiguous files", "Checking proposed moves", "8 duplicates · 4 files need your choice", "detach_macos_snapshot", "mcp_tool"),
+      activity(1500, "Preparing a reviewable move list", "Drafting file plan", "No files will move automatically", "files.write", "file_change"),
+      activity(1200, "Checking the proposed folder structure", "Reviewing organization plan", "Project folders stay inside Downloads", "detach_macos_snapshot", "mcp_tool"),
+      chunk(350, "I organized the Downloads inventory into a reviewable move plan.\n\n"),
+      chunk(250, "**Proposed structure**\n\n- `Acme/` — briefs, screenshots, and exported reports\n- `Detach/` — product notes, test captures, and release files\n- `Personal/` — receipts and travel documents\n- `Needs review/` — 4 ambiguous files and 8 duplicate candidates\n\n"),
+      chunk(200, "Nothing was moved or deleted. The plan leaves ambiguous files in place until you approve the changes."),
     ],
   },
   coding: {
     id: "coding",
     prompt: DEMO_TRIGGER_PROMPTS.coding,
-    openingText: "I’ll turn the research into a focused dashboard with clear filters, an interactive comparison view, and a concise takeaway panel. I’ll first inspect the existing project and source data so the implementation fits what is already here.\n\n",
-    progressText: "I’ve mapped the findings into a small data model and the primary dashboard views are taking shape. I’m wiring the interactions and checking the empty states before I run the final pass.\n\n",
+    openingText: "I’ll inspect the CSV columns and the existing app structure, then build a small dashboard with useful filters, a clear summary view, and an interactive detail panel.\n\n",
+    progressText: "The CSV has three useful dimensions and one inconsistent date field. I’ve normalized that field and I’m checking loading, empty, and no-match states before the local run.\n\n",
     steps: [
-      activity(1400, "Inspecting the project structure and research files", "Reading project context", "Finding the dashboard entry point and source material", "files.read", "mcp_tool"),
-      activity(1700, "Planning the dashboard's information hierarchy", "Designing the dashboard", "Overview, filters, comparison, and takeaway views", "planning", "plan"),
-      activity(1600, "Normalizing the research findings for interaction", "Preparing dashboard data", "Tags, evidence, confidence, and source fields", "files.read", "mcp_tool"),
-      activity(1500, "Building the dashboard layout and filter controls", "Implementing dashboard UI", "Interactive segments and empty states", "files.write", "file_change"),
-      activity(1300, "Adding comparison charts and insight panels", "Adding interactive insights", "Click through findings without losing context", "files.write", "file_change"),
-      activity(1400, "Running a local build and reviewing the result", "Checking dashboard build", "Verifying the primary interaction flow", "npm run build", "command"),
-      chunk(350, "The interactive research dashboard is ready for review.\n\n"),
-      chunk(250, "**What it includes**\n\n- A filterable findings table with source and confidence context\n- An interactive comparison chart for the strongest themes\n- A detail panel that keeps the evidence beside each conclusion\n- Clear empty, loading, and no-match states\n\n"),
-      chunk(200, "I also added a concise takeaway section so someone can understand the research without digging through every row. The build completed successfully."),
+      activity(1400, "Inspecting the CSV and project structure", "Reading project context", "Finding columns, entry points, and existing styles", "files.read", "mcp_tool"),
+      activity(1700, "Planning the dashboard information hierarchy", "Designing the dashboard", "Summary, filters, chart, and detail views", "planning", "plan"),
+      activity(1600, "Normalizing the CSV for interaction", "Preparing dashboard data", "Dates, categories, totals, and missing values", "files.read", "mcp_tool"),
+      activity(1500, "Building the dashboard layout and filters", "Implementing dashboard UI", "Interactive segments and empty states", "files.write", "file_change"),
+      activity(1300, "Adding the chart and detail panel", "Adding interactive insights", "Keep the row-level data beside each summary", "files.write", "file_change"),
+      activity(1400, "Running the local build", "Checking dashboard build", "Verifying the primary interaction flow", "npm run build", "command"),
+      chunk(350, "The CSV dashboard is ready for review.\n\n"),
+      chunk(250, "**What it includes**\n\n- A filterable table with the original row context\n- A summary chart for the strongest categories\n- A detail panel that keeps the source values beside each conclusion\n- Clear loading, empty, and no-match states\n\n"),
+      chunk(200, "The local build completed successfully. I left the source CSV unchanged and did not publish the dashboard."),
     ],
   },
   paystubs: {
     id: "paystubs",
     prompt: DEMO_TRIGGER_PROMPTS.paystubs,
-    openingText: "I’ll open the payroll portal, use your saved sign-in only through the secure on-device flow, and collect this month’s paystubs. Your credential will stay hidden from the agent and I’ll keep the downloads organized for review.\n\n",
-    progressText: "The payroll portal is open and the secure credential handoff is complete. I found the current pay periods and I’m checking the statement dates and downloaded file names before I wrap up.\n\n",
+    openingText: "I’ll open the admin dashboard, use the saved sign-in only through the secure on-device flow, and prepare this month’s usage export for your review. I’ll stop before any real download or account change.\n\n",
+    progressText: "The dashboard is open and the secure credential handoff is complete. I found the current reporting period and I’m checking the export filters before I prepare the result.\n\n",
     steps: [
-      activity(1400, "Opening the payroll portal", "Navigating to payroll", "Using the browser already signed into your work context", "browser.open"),
-      activity(1500, "Finding the saved payroll credential", "Looking up saved credential", "Only masked metadata is available to the agent", "secrets.search", "mcp_tool"),
+      activity(1400, "Opening the admin dashboard", "Navigating to usage reports", "Reports · current workspace", "browser.open"),
+      activity(1500, "Finding the saved dashboard credential", "Looking up saved credential", "Only masked metadata is available to the agent", "secrets.search", "mcp_tool"),
       activity(1700, "Requesting on-device credential approval", "Waiting for Touch ID", "Secure sign-in requires your confirmation", "Touch ID", "status"),
       activity(1500, "Signing in without exposing the credential", "Filling credential securely", "Credential is filled directly in the browser", "secrets.use_browser", "mcp_tool"),
-      activity(1600, "Opening this month's pay statements", "Reviewing pay statements", "Checking dates, pay periods, and available PDFs", "browser.snapshot"),
-      activity(1300, "Downloading and organizing the paystubs", "Saving paystub PDFs", "Files are named by pay period", "files.write", "file_change"),
-      chunk(350, "I found and organized the paystubs available for this month.\n\n"),
-      chunk(250, "**Paystub collection**\n\n- 2 current-month pay statements saved\n- Files named by pay period and statement date\n- Payroll portal and download source recorded for review\n\n"),
-      chunk(200, "The credential was never exposed in the chat or activity log. This demo did not access a real portal or download any real documents."),
+      activity(1600, "Selecting this month's usage filters", "Preparing usage export", "Checking workspace, date range, and CSV format", "browser.snapshot"),
+      activity(1300, "Preparing the export summary", "Staging usage report", "No real file will be downloaded", "files.write", "file_change"),
+      chunk(350, "I prepared the usage export settings for this month.\n\n"),
+      chunk(250, "**Export ready for review**\n\n- Workspace: Acme production\n- Period: August 1–14, 2026\n- Format: CSV\n- Included: active users, runs, tool calls, and estimated credits\n\n"),
+      chunk(200, "The credential was never exposed in the chat or activity log. This demo did not access a real dashboard or download a real report."),
     ],
   },
   xReplies: {
     id: "xReplies",
     prompt: DEMO_TRIGGER_PROMPTS.xReplies,
-    openingText: "I’ll find the relevant X post, group its comments by intent, and draft concise replies that match the conversation. I’ll prepare everything for your approval and stop before anything is sent.\n\n",
-    progressText: "I’ve reviewed the comment threads and there are a few recurring questions worth answering consistently. I’m tightening the reply drafts and separating comments that should receive a more personal response.\n\n",
+    openingText: "I’ll read the meeting transcript, separate decisions from open questions, and turn the actionable items into a checklist with owners and due dates where the transcript provides them.\n\n",
+    progressText: "The transcript has four clear decisions and several follow-ups. I’m separating confirmed owners from suggestions so the checklist does not invent accountability.\n\n",
     steps: [
-      activity(1400, "Finding the X window and recent notifications", "Inspecting your desktop", "Locating the active X conversation", "detach_macos_snapshot", "mcp_tool"),
-      activity(1600, "Opening the post and collecting its comments", "Reviewing X comments", "Capturing the thread without sending anything", "detach_macos_click", "mcp_tool"),
-      activity(1700, "Grouping comments by question and sentiment", "Organizing the conversation", "Questions, feedback, thanks, and follow-ups", "planning", "plan"),
-      activity(1500, "Drafting replies in the X composer", "Preparing reply drafts", "Replies are staged, not sent", "detach_macos_type", "mcp_tool"),
-      activity(1500, "Checking each draft for tone and duplicates", "Reviewing reply quality", "Keeping replies specific to each comment", "detach_macos_snapshot", "mcp_tool"),
-      activity(1300, "Preparing the reply set for your approval", "Staging replies for approval", "Nothing will be posted automatically", "approval", "status"),
-      chunk(350, "I prepared a reply set for the comments on your X post.\n\n"),
-      chunk(250, "**Ready for review**\n\n- 6 thoughtful replies drafted\n- 2 repeated questions consolidated into one clear answer\n- 1 sensitive comment flagged for a personal response\n- 0 replies posted\n\n"),
-      chunk(200, "The drafts are staged for your approval. I stopped before sending or publishing anything."),
+      activity(1400, "Opening the meeting transcript", "Reading meeting notes", "Product planning · 58 minutes", "files.read", "mcp_tool"),
+      activity(1600, "Extracting decisions and open questions", "Structuring the discussion", "Decisions, risks, owners, and follow-ups", "planning", "plan"),
+      activity(1700, "Matching action items to named owners", "Checking accountability", "Only explicit owners are included", "files.read", "mcp_tool"),
+      activity(1500, "Drafting the follow-up checklist", "Preparing action items", "Due dates remain blank where none were agreed", "files.write", "file_change"),
+      activity(1300, "Reviewing the summary for omissions", "Checking meeting summary", "Decisions remain separate from suggestions", "files.read", "mcp_tool"),
+      chunk(350, "I summarized the meeting and prepared the follow-up checklist.\n\n"),
+      chunk(250, "**Summary**\n\n- The team approved the new onboarding flow for the next release.\n- Analytics instrumentation is required before rollout.\n- Support needs a migration note and a short FAQ.\n- The launch date remains open pending the analytics check.\n\n**Action items**\n- Priya — add the analytics events.\n- Mateo — draft the migration note.\n- Unassigned — confirm the launch date after the analytics check.\n\n"),
+      chunk(200, "I kept unassigned work visible instead of guessing an owner. The transcript file was not changed."),
     ],
   },
 };
 
+const DEMO_COMPOSER_TOKENS = new Set([
+  "@Browser",
+  "@macOS",
+  "@Secrets",
+  "/code-review",
+  "/debug",
+  "/plan",
+  "/compact-context",
+  "@checkout-review",
+  "@checkout-pr.patch",
+  "@checkout-payment-test.ts",
+  "@ci-notes.md",
+  "@test-fix-project",
+  "@date-formatting-test.ts",
+  "@staging-checkout.md",
+  "@pricing-brief.md",
+  "@downloads-demo",
+  "@acme-invoice.csv",
+  "@detach-release-notes.md",
+  "@usage-dashboard",
+  "@usage.csv",
+  "@report-spec.md",
+  "@meeting-transcript.md",
+]);
+
+export function normalizeDemoPrompt(prompt: string): string {
+  return prompt
+    .split(/\s+/)
+    .filter((token) => token.length > 0 && !DEMO_COMPOSER_TOKENS.has(token))
+    .join(" ")
+    .trim();
+}
+
 export function matchDemoScenario(prompt: string, enabled: boolean): DemoScenario | undefined {
   if (!enabled) return undefined;
-  const normalized = prompt.replace(/\r\n/g, "\n").trim();
+  const normalized = normalizeDemoPrompt(prompt.replace(/\r\n/g, "\n"));
   return Object.values(scenarios).find((scenario) => scenario.prompt === normalized);
 }
 
@@ -197,7 +240,7 @@ export function createDemoRun(
     activity(1600, "Understanding the request and planning the run", "Planning the task", "Breaking the request into reviewable steps", undefined, "plan"),
     chunk(850, scenario.openingText),
     activity(1400, "Checking workspace memory for relevant context", "Checking workspace memory", "Looking for prior instructions and saved context", "workspace.memory", "status"),
-    activity(1200, "Reviewing connected MCP tools and permissions", "Checking connected tools", "Browser, files, and workspace capabilities", "MCP registry", "mcp_tool"),
+    toolAccessStep(scenario),
     ...scenario.steps.flatMap((step, index) =>
       index === 3 ? [chunk(650, scenario.progressText), step] : [step]
     ),
@@ -260,6 +303,29 @@ function activity(
 
 function chunk(delayMs: number, text: string): DemoChunkStep {
   return { type: "chunk", delayMs: Math.max(MIN_CHUNK_PACING_MS, delayMs * 2), text };
+}
+
+function toolAccessStep(scenario: DemoScenario): DemoActivityStep {
+  const capabilities = DEMO_CAPABILITIES[scenario.id];
+  if (capabilities.length === 0) {
+    return activity(
+      1200,
+      "Reviewing attached files and workspace context",
+      "Checking attached context",
+      "No external capabilities selected",
+      "files.read",
+      "status"
+    );
+  }
+
+  return activity(
+    1200,
+    `Reviewing ${capabilities.join(" and ")} access`,
+    "Checking requested capabilities",
+    `${capabilities.join(" · ")} selected for this task`,
+    "MCP registry",
+    "mcp_tool"
+  );
 }
 
 function sleep(milliseconds: number) {

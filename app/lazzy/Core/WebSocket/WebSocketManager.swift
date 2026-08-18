@@ -288,7 +288,7 @@ class WebSocketManager: ObservableObject {
   /// Detach v2 is local-first; userId is unused unless a future runtime needs it.
   func sendChat(
     text: String, displayText: String? = nil, files: [FileAttachmentRequest] = [],
-    conversationId: String? = nil,
+    conversationId: String? = nil, workspacePath: String? = nil,
     integrations: [String]? = nil, systemPrompt: String? = nil, fastMode: Bool = false,
     userId: String? = nil, zeroDataRetention: Bool? = nil,
     actionId: String? = nil, mcpServerIds: [String]? = nil, skills: [SkillAttachment]? = nil,
@@ -317,6 +317,7 @@ class WebSocketManager: ObservableObject {
       text: text, displayText: displayText, files: files.isEmpty ? nil : files,
       runId: UUID().uuidString,
       conversationId: convId,
+      workspacePath: workspacePath,
       integrations: integrations, systemPrompt: systemPrompt, fastMode: fastMode,
       userId: userId,
       model: resolvedModel,

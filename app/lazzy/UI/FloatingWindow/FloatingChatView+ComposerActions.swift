@@ -578,6 +578,7 @@ extension FloatingChatView {
       text: composerActionUserMessage(for: action, contexts: currentContexts),
       displayText: displayText,
       files: allFiles,
+      workspacePath: workingDirectoryStore.url?.path,
       systemPrompt: composerActionSystemPrompt(for: action),
       zeroDataRetention: AISettings.zeroDataRetention,
       actionId: action.id,

@@ -58,23 +58,130 @@ struct WorkingDirectoryTray: View {
   @ObservedObject var store: WorkingDirectoryStore
 
   @ObservedObject private var theme = ThemeManager.shared
+  @State private var isExpanded = false
+  @State private var collapseWorkItem: DispatchWorkItem?
+
+  private let collapsedHeight: CGFloat = 12
+  private let expandedHeight: CGFloat = 38
 
   var body: some View {
-    WorkingDirectorySelector(store: store)
+    ZStack(alignment: .top) {
+      trayContent
+        .offset(y: isExpanded ? 0 : -(expandedHeight - collapsedHeight))
+
+      if !isExpanded {
+        collapsedHandle
+      }
+    }
+    .frame(height: isExpanded ? expandedHeight : collapsedHeight, alignment: .top)
+    .frame(maxWidth: .infinity, alignment: .top)
+    .clipShape(trayShape)
+    .padding(.horizontal, 14)
+    .padding(.bottom, 7)
+    .animation(.spring(response: 0.28, dampingFraction: 0.84), value: isExpanded)
+    .onHover { isHovering in
+      if isHovering {
+        cancelCollapse()
+        expand()
+      } else if isExpanded {
+        scheduleCollapse()
+      }
+    }
+    .onDisappear {
+      collapseWorkItem?.cancel()
+    }
+  }
+
+  private var trayContent: some View {
+    traySurface(
+      ZStack(alignment: .trailing) {
+        WorkingDirectorySelector(store: store)
+
+        Button(action: collapse) {
+          Image(systemName: "chevron.down")
+            .font(.appFont(size: 10, weight: .semibold))
+            .foregroundColor(theme.secondaryTextColor)
+            .frame(width: 26, height: 26)
+        }
+        .buttonStyle(.plain)
+        .help("Hide working directory")
+        .padding(.trailing, 8)
+      }
       .padding(.horizontal, 13)
-      .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+      .frame(maxWidth: .infinity, minHeight: expandedHeight, alignment: .leading)
+    )
+  }
+
+  private var collapsedHandle: some View {
+    traySurface(
+      Button(action: toggleExpanded) {
+        HStack(spacing: 0) {
+          Spacer(minLength: 0)
+
+          Image(systemName: "chevron.up")
+            .font(.appFont(size: 10, weight: .semibold))
+            .foregroundColor(theme.secondaryTextColor)
+            .frame(width: 26, height: collapsedHeight)
+        }
+        .padding(.trailing, 8)
+        .frame(height: collapsedHeight)
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .help("Show working directory")
+    )
+  }
+
+  private func traySurface<Content: View>(_ content: Content) -> some View {
+    content
       .background {
         trayShape.fill(theme.solidBackground)
       }
-      // .overlay(alignment: .top) {
-      //   Rectangle()
-      //     .fill(theme.textColor.opacity(0.12))
-      //     .frame(height: 0.6)
-      // }
+      .overlay(alignment: .top) {
+        Rectangle()
+          .fill(theme.textColor.opacity(0.12))
+          .frame(height: 0.6)
+      }
       .clipShape(trayShape)
-      .padding(.horizontal, 14)
-      .padding(.bottom, 7)
-      // .padding(.top, -6)
+  }
+
+  private func toggleExpanded() {
+    if isExpanded {
+      collapse()
+    } else {
+      expand()
+    }
+  }
+
+  private func expand() {
+    guard !isExpanded else { return }
+    withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+      isExpanded = true
+    }
+  }
+
+  private func collapse() {
+    cancelCollapse()
+    withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+      isExpanded = false
+    }
+  }
+
+  private func scheduleCollapse() {
+    cancelCollapse()
+    let workItem = DispatchWorkItem {
+      withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+        isExpanded = false
+      }
+    }
+    collapseWorkItem = workItem
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.65, execute: workItem)
+  }
+
+  private func cancelCollapse() {
+    collapseWorkItem?.cancel()
+    collapseWorkItem = nil
   }
 
   private var trayShape: UnevenRoundedRectangle {
