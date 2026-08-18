@@ -25,7 +25,7 @@ Detach is a macOS-native agent workspace for working with selected text and file
 Clone with the website submodule:
 
 ```bash
-git clone --recurse-submodules https://github.com/DeatchAI/App.git detach
+git clone --recurse-submodules https://github.com/DeatchAI/junk.git detach
 cd detach
 ```
 
