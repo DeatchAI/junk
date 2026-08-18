@@ -45,6 +45,7 @@ struct lazzyApp: App {
 
 // MARK: - App Delegate
 
+@MainActor
 class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
   @Published var coordinator: AppCoordinator?
   private var cancellables = Set<AnyCancellable>()

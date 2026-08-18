@@ -10,6 +10,7 @@ private enum OnboardingState {
 }
 
 /// Main coordinator that ties together all components
+@MainActor
 class AppCoordinator: ObservableObject {
 
   // MARK: - Components
