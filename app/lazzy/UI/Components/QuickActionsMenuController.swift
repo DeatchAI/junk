@@ -4,6 +4,7 @@ import Foundation
 import SwiftUI
 
 /// Controller for the floating quick actions menu
+@MainActor
 class QuickActionsMenuController: NSObject, ObservableObject {
 
   private var menuWindow: NSWindow?
