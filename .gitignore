@@ -26,6 +26,9 @@ build/
 .env*
 !.env.example
 
+# The website is maintained in a separate private repository.
+web/
+
 # OS generated files
 .DS_Store
 .DS_Store?

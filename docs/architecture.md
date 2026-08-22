@@ -20,4 +20,4 @@ Detach macOS app ── local WebSocket ── Detach runtime ── agent CLI /
 - Secrets remain in local secure storage. Runtime activity and learned browser skills must not record credential values.
 - Signed-in Chrome is opt-in. The extension limits its bridge to localhost and asks the user before requesting broad site access.
 
-The website is intentionally outside this Git repository's deployment boundary. It is a Git submodule so source users can check out the full project while Vercel remains connected to the personal-account website repository.
+The website is intentionally outside this Git repository's deployment boundary. It remains in a separate private repository connected to its own Vercel project and is not a submodule or part of app CI.

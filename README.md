@@ -11,21 +11,20 @@ Detach is a macOS-native agent workspace for working with selected text and file
 | macOS app | `app/lazzy` | SwiftUI app, permissions, Finder integration, updates, and local secret handling. |
 | Local runtime | `app/server-v2` | Bun runtime for agent adapters and local MCP bridges. |
 | Chrome extension | `chrome-extension` | Optional Signed-in Chrome integration. |
-| Website | `web` | Separate personal-account repository, included as a Git submodule because it is deployed independently on Vercel. |
+| Website | `web` | Maintained in a separate private repository and intentionally excluded from this public app repository. |
 
 ## Requirements
 
 - macOS 14 or later
 - Xcode with the macOS SDK
 - [Bun](https://bun.sh/)
-- Node.js 20 or later for the website
 
 ## Get started from source
 
-Clone with the website submodule:
+Clone the app repository:
 
 ```bash
-git clone --recurse-submodules https://github.com/DeatchAI/junk.git detach
+git clone https://github.com/DeatchAI/junk.git detach
 cd detach
 ```
 
@@ -47,13 +46,10 @@ bun run check
 cd ..
 xcodebuild -project detach.xcodeproj -scheme lazzy \
   -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build
-
-# Website
-cd ../web
-npm ci
-npm run lint
-npm run build
 ```
+
+The website remains in its separate private repository and is not included in
+this checkout or in the app CI workflows.
 
 ## Security and permissions
 
