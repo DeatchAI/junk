@@ -21,7 +21,7 @@ jobs:
       run:
         working-directory: app/server-v2
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run check
@@ -30,7 +30,7 @@ jobs:
     name: macOS build
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
       - name: Install runtime dependencies
         working-directory: app/server-v2

@@ -18,7 +18,7 @@ jobs:
     name: Analyze JavaScript and TypeScript
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: github/codeql-action/init@v4
         with:
           languages: javascript-typescript
@@ -29,7 +29,7 @@ jobs:
     name: Analyze Swift
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
       - name: Install runtime dependencies
         working-directory: app/server-v2
