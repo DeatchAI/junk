@@ -12,7 +12,7 @@
     "check": "bun run test && bun run typecheck"
   },
   "devDependencies": {
-    "@types/bun": "^1.2.21"
+    "@types/bun": "^1.4.0"
   },
   "module": "src/index.ts",
   "peerDependencies": {
