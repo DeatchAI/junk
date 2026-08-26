@@ -11,7 +11,6 @@ Detach is a macOS-native agent workspace for working with selected text and file
 | macOS app | `app/lazzy` | SwiftUI app, permissions, Finder integration, updates, and local secret handling. |
 | Local runtime | `app/server-v2` | Bun runtime for agent adapters and local MCP bridges. |
 | Chrome extension | `chrome-extension` | Optional Signed-in Chrome integration. |
-| Website | `web` | Maintained in a separate private repository and intentionally excluded from this public app repository. |
 
 ## Requirements
 
