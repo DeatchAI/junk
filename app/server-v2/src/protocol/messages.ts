@@ -111,10 +111,10 @@ export type ClientMessage =
   | { type: "delete_slash_command"; commandId: string };
 
 /**
- * `opencode` uses the customer's own OpenCode configuration and credentials.
+ * `fx` and `opencode` use the customer's own CLI configuration and credentials.
  * `hosted` is Detach's separately authenticated, provider-neutral proxy.
  */
-export type AgentKind = "codex" | "claude" | "grok" | "opencode" | "hosted";
+export type AgentKind = "codex" | "claude" | "grok" | "fx" | "opencode" | "hosted";
 
 export type ComposerMode = "explain_only" | "plan_only" | "review_only" | "debug_only";
 

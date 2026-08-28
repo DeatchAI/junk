@@ -26,6 +26,11 @@ const commonExecutableDirs = [
 ];
 
 export async function findExecutable(name: string): Promise<string | undefined> {
+  if (name === "fx") {
+    const configured = Bun.env.DETACH_FX_PATH?.trim();
+    if (configured && await Bun.file(configured).exists()) return configured;
+  }
+
   if (name === "opencode") {
     const configured = Bun.env.DETACH_OPENCODE_PATH?.trim();
     if (configured && await Bun.file(configured).exists()) return configured;
@@ -48,16 +53,20 @@ export async function getCapabilities(
   defaultAgent: AgentKind,
   hostedModels?: HostedModelSessionManager,
 ): Promise<AgentCapability[]> {
-  const [codexPath, claudePath, grokPath, openCodePath] = await Promise.all([
+  const [codexPath, claudePath, grokPath, fxPath, openCodePath] = await Promise.all([
     findExecutable("codex"),
     findExecutable("claude"),
     findExecutable("grok"),
+    findExecutable("fx"),
     findExecutable("opencode"),
   ]);
   const hostedConfigured = hostedModels?.isConfigured() === true;
-  const [codexModels, grokCatalog, standaloneOpenCodeCatalog, openCodeCatalog] = await Promise.all([
+  const [codexModels, grokCatalog, fxCatalog, standaloneOpenCodeCatalog, openCodeCatalog] = await Promise.all([
     codexPath ? discoverCodexModels(codexPath) : Promise.resolve([]),
     grokPath ? discoverGrokModels(grokPath) : Promise.resolve({ models: [], defaultModel: undefined }),
+    fxPath
+      ? discoverFxModels(fxPath)
+      : Promise.resolve({ models: [], defaultModel: undefined, error: undefined }),
     openCodePath
       ? discoverOpenCodeModels(openCodePath)
       : Promise.resolve({ models: [], error: undefined }),
@@ -97,6 +106,17 @@ export async function getCapabilities(
       authHint: grokPath ? undefined : "Install Grok Build and sign in or configure XAI_API_KEY.",
       models: grokCatalog.models,
       defaultModel: grokCatalog.defaultModel,
+    },
+    {
+      id: "fx" as const,
+      displayName: "fx",
+      installed: Boolean(fxPath),
+      executablePath: fxPath,
+      authHint: fxPath
+        ? fxCatalog.error ?? "Uses your fx login and Vercel AI Gateway account."
+        : "Install fx and run 'fx login' to use its included AI Gateway credits.",
+      models: fxCatalog.models,
+      defaultModel: fxCatalog.defaultModel,
     },
     {
       id: "opencode" as const,
@@ -219,6 +239,94 @@ async function discoverGrokModels(executable: string): Promise<{ models: AgentMo
   } catch {
     return { models: [], defaultModel: undefined };
   }
+}
+
+interface FxModelListOutput {
+  kind?: unknown;
+  ids?: unknown;
+  error?: unknown;
+}
+
+interface FxStatusOutput {
+  kind?: unknown;
+  model?: unknown;
+  auth?: unknown;
+  auth_help?: unknown;
+}
+
+export async function discoverFxModels(
+  executable: string,
+): Promise<{ models: AgentModelCapability[]; defaultModel?: string; error?: string }> {
+  const [models, status] = await Promise.all([
+    runFxJsonCommand(executable, ["models", "--json"]),
+    runFxJsonCommand(executable, ["status", "--json"]),
+  ]);
+  const parsedStatus = parseFxStatus(status.stdout);
+  const parsedModels = parseFxModels(models.stdout);
+  const authError = parsedStatus.auth === "missing"
+    ? parsedStatus.authHelp ?? "Run 'fx login' to connect your Vercel AI Gateway account."
+    : undefined;
+  const catalogError = models.exitCode === 0
+    ? undefined
+    : parseFxCommandError(models.stdout)
+      ?? "fx could not load its model catalog. It will still use its configured default model.";
+
+  return {
+    models: parsedModels,
+    defaultModel: parsedStatus.model,
+    error: authError ?? catalogError,
+  };
+}
+
+export function parseFxModels(output: string): AgentModelCapability[] {
+  const payload = jsonObjects(output).find((value): value is FxModelListOutput => {
+    return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+      && (value as FxModelListOutput).kind === "models";
+  });
+  if (!payload || !Array.isArray(payload.ids)) return [];
+
+  const ids = payload.ids
+    .filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
+    .map((value) => value.trim());
+  return [...new Set(ids)].map((id) => ({
+    id,
+    displayName: humanizeProviderModelId(id),
+  }));
+}
+
+export function parseFxStatus(output: string) {
+  const payload = jsonObjects(output).find((value): value is FxStatusOutput => {
+    return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+      && (value as FxStatusOutput).kind === "status";
+  });
+  return {
+    model: typeof payload?.model === "string" && payload.model.trim()
+      ? payload.model.trim()
+      : undefined,
+    auth: typeof payload?.auth === "string" ? payload.auth.trim() : undefined,
+    authHelp: typeof payload?.auth_help === "string" && payload.auth_help.trim()
+      ? payload.auth_help.trim()
+      : undefined,
+  };
+}
+
+async function runFxJsonCommand(executable: string, args: string[]) {
+  try {
+    const task = runProcess({ command: executable, args });
+    return await resultWithTimeout(task, 5_000);
+  } catch {
+    return { stdout: "", stderr: "", exitCode: 1 };
+  }
+}
+
+function parseFxCommandError(output: string) {
+  const payload = jsonObjects(output).find((value): value is FxModelListOutput => {
+    return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+      && (value as FxModelListOutput).kind === "models";
+  });
+  return typeof payload?.error === "string" && payload.error.trim()
+    ? payload.error.trim()
+    : undefined;
 }
 
 interface OpenCodeModelOutput {
@@ -359,7 +467,7 @@ async function resultWithTimeout(
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
           task.cancel();
-          reject(new Error("Timed out while loading OpenCode models."));
+          reject(new Error("Timed out while loading agent models."));
         }, timeoutMs);
       }),
     ]);
@@ -370,6 +478,14 @@ async function resultWithTimeout(
 
 function humanizeModelId(id: string) {
   return id.split("-").map((part) => part.length <= 3 ? part.toUpperCase() : `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`).join(" ");
+}
+
+function humanizeProviderModelId(id: string) {
+  const separator = id.indexOf("/");
+  if (separator < 0) return humanizeModelId(id);
+  const provider = id.slice(0, separator);
+  const model = id.slice(separator + 1);
+  return `${provider} · ${humanizeModelId(model)}`;
 }
 
 async function which(name: string): Promise<string | undefined> {

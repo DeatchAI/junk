@@ -17,7 +17,7 @@ export interface ACPAgentProcessOptions {
   cwd: string;
   env?: Record<string, string | undefined>;
   mcpServers?: MCPServerConfig[];
-  /** OpenCode selects the model and optional reasoning effort through ACP after creating the session. */
+  /** ACP agents select the model and optional reasoning effort after creating the session. */
   model?: string;
   modelSettings?: AgentModelSettings;
   activityAgent: AgentKind;
@@ -93,10 +93,10 @@ export class ACPAgentProcess {
           value: model,
         });
 
-        const effort = openCodeReasoningEffort(this.options.modelSettings);
+        const effort = requestedReasoningEffort(this.options.modelSettings);
         const effortConfigID = effort ? reasoningConfigOptionID(session) : undefined;
         if (effort && !effortConfigID) {
-          throw new Error("OpenCode did not expose a reasoning control for the selected model.");
+          throw new Error("The selected ACP agent did not expose a reasoning control for this model.");
         }
         if (effortConfigID) {
           await this.request("session/set_config_option", {
@@ -323,7 +323,7 @@ export class ACPAgentProcess {
   }
 }
 
-function openCodeReasoningEffort(settings: AgentModelSettings | undefined) {
+function requestedReasoningEffort(settings: AgentModelSettings | undefined) {
   const effort = settings?.reasoningEffort?.trim().toLowerCase();
   if (!effort || effort === "none" || effort === "auto") return undefined;
   if (!/^[a-z0-9_-]+$/.test(effort)) return undefined;

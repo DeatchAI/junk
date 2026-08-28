@@ -3,6 +3,7 @@ import type { HostedModelSessionManager } from "../hosted/HostedModelSessionMana
 import type { AgentAdapter } from "./AgentAdapter";
 import { ClaudeAdapter } from "./ClaudeAdapter";
 import { CodexAdapter } from "./CodexAdapter";
+import { FxAdapter } from "./FxAdapter";
 import { GrokAdapter } from "./GrokAdapter";
 import { HostedOpenCodeAdapter, OpenCodeAdapter } from "./OpenCodeAdapter";
 
@@ -14,6 +15,7 @@ export class AgentRegistry {
     this.register(new CodexAdapter());
     this.register(new ClaudeAdapter());
     this.register(new GrokAdapter());
+    this.register(new FxAdapter());
     this.register(new OpenCodeAdapter());
     this.register(new HostedOpenCodeAdapter(hostedModels));
   }

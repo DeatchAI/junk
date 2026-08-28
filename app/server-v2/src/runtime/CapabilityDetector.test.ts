@@ -1,6 +1,31 @@
 import { describe, expect, test } from "bun:test";
 
-import { parseOpenCodeModels } from "./CapabilityDetector";
+import { parseFxModels, parseFxStatus, parseOpenCodeModels } from "./CapabilityDetector";
+
+describe("fx model discovery", () => {
+  test("parses and humanizes the fx JSON model catalog", () => {
+    expect(parseFxModels(JSON.stringify({
+      kind: "models",
+      ids: ["zai/glm-5.2-fast", "openai/gpt-5.4", "zai/glm-5.2-fast"],
+    }))).toEqual([
+      { id: "zai/glm-5.2-fast", displayName: "zai · GLM 5.2 Fast" },
+      { id: "openai/gpt-5.4", displayName: "openai · GPT 5.4" },
+    ]);
+  });
+
+  test("parses fx authentication guidance and its selected model", () => {
+    expect(parseFxStatus(JSON.stringify({
+      kind: "status",
+      model: "zai/glm-5.2-fast",
+      auth: "missing",
+      auth_help: "Run fx login",
+    }))).toEqual({
+      model: "zai/glm-5.2-fast",
+      auth: "missing",
+      authHelp: "Run fx login",
+    });
+  });
+});
 
 describe("OpenCode model discovery", () => {
   test("keeps active tool-capable models from OpenCode's verbose catalog", () => {

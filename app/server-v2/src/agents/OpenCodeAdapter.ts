@@ -6,9 +6,7 @@ import type {
 import { HostedModelSessionManager } from "../hosted/HostedModelSessionManager";
 import { findExecutable } from "../runtime/CapabilityDetector";
 import type { AgentAdapter, AgentRun, AgentStreamCallbacks } from "./AgentAdapter";
-import { buildAgentPrompt, resolveWorkspace } from "./AgentPrompt";
-import { withTimeout } from "./CliAdapterUtils";
-import { ACPAgentProcess } from "./ACPAgentProcess";
+import { runACPAgent } from "./ACPAgentRunner";
 
 export class OpenCodeAdapter implements AgentAdapter {
   readonly id = "opencode" as const;
@@ -117,45 +115,21 @@ interface OpenCodeRunOptions {
 }
 
 function runOpenCodeACP(options: OpenCodeRunOptions): AgentRun {
-  let cancelled = false;
-  let process: ACPAgentProcess | undefined;
-
-  const finished = (async () => {
-    options.callbacks.onActivity(options.activity);
-    const prepared = options.prepare
+  return runACPAgent({
+    request: options.request,
+    callbacks: options.callbacks,
+    activity: options.activity,
+    activityAgent: options.request.agent ?? "opencode",
+    args: options.args,
+    unavailableMessage: options.unavailableMessage,
+    timeoutEnvironmentVariable: "DETACH_OPENCODE_TIMEOUT_MS",
+    model: options.model,
+    modelSettings: options.modelSettings,
+    env: options.env,
+    prepare: async () => options.prepare
       ? await options.prepare()
-      : { executable: await findExecutable("opencode"), model: options.model, env: options.env };
-    if (!prepared.executable) throw new Error(options.unavailableMessage);
-
-    process = new ACPAgentProcess({
-      command: prepared.executable,
-      args: options.args,
-      cwd: resolveWorkspace(options.request.workspacePath),
-      env: prepared.env,
-      mcpServers: options.request.mcpServers,
-      model: prepared.model ?? options.model,
-      modelSettings: options.modelSettings,
-      activityAgent: options.request.agent ?? "opencode",
-      callbacks: options.callbacks,
-    });
-    const result = await withTimeout(
-      process.run(buildAgentPrompt(options.request)),
-      resolveOpenCodeTimeout(options.request.timeoutMs),
-      () => {
-        cancelled = true;
-        process?.cancel();
-      },
-    );
-    return { text: result.text };
-  })();
-
-  return {
-    cancel() {
-      cancelled = true;
-      process?.cancel();
-    },
-    finished: finished.then((result) => cancelled ? { text: result.text } : result),
-  };
+      : { executable: await findExecutable("opencode"), model: options.model, env: options.env },
+  });
 }
 
 function openCodeStateEnvironment(): Record<string, string | undefined> {
@@ -243,16 +217,4 @@ function openCodeModelConfig(model: HostedModelCapability) {
     ...(limit ? { limit } : {}),
     ...(Object.keys(variants).length > 0 ? { variants } : {}),
   };
-}
-
-function resolveOpenCodeTimeout(requested: number | undefined) {
-  const value = Number(
-    requested
-      || Bun.env.DETACH_OPENCODE_TIMEOUT_MS
-      || Bun.env.DETACH_AGENT_TIMEOUT_MS
-      || 900_000,
-  );
-  return Number.isFinite(value)
-    ? Math.max(30_000, Math.min(value, 3_600_000))
-    : 900_000;
 }
