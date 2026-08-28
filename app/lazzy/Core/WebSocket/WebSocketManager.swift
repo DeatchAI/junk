@@ -976,12 +976,12 @@ class WebSocketManager: ObservableObject {
     }
 
     let lifecyclePatterns = [
-      #"^Using\s+(Codex|Claude|Grok|OpenCode|Detach Cloud|Detach Hosted|Hosted AI|Agent)\b"#,
-      #"^Starting\s+(Codex|Claude|Grok|OpenCode|Detach Cloud|Detach Hosted|Hosted AI)\b"#,
-      #"^(Codex|Claude|Grok|OpenCode|Detach Cloud|Detach Hosted|Hosted AI)\s+is\s+thinking\b"#,
-      #"^(Codex|Claude|Grok|OpenCode|Detach Cloud|Detach Hosted|Hosted AI)\s+is\s+still\s+working\b"#,
-      #"^(Codex|Claude|Grok|OpenCode|Detach Cloud|Detach Hosted|Hosted AI)\s+(thread|session)\s+started\b"#,
-      #"^(Codex|Claude|Grok|OpenCode|Detach Cloud|Detach Hosted|Hosted AI)\s+will\s+use\s+MCP\s+servers\b"#,
+      #"^Using\s+(Codex|Claude|Grok|fx|OpenCode|Detach Cloud|Detach Hosted|Hosted AI|Agent)\b"#,
+      #"^Starting\s+(Codex|Claude|Grok|fx|OpenCode|Detach Cloud|Detach Hosted|Hosted AI)\b"#,
+      #"^(Codex|Claude|Grok|fx|OpenCode|Detach Cloud|Detach Hosted|Hosted AI)\s+is\s+thinking\b"#,
+      #"^(Codex|Claude|Grok|fx|OpenCode|Detach Cloud|Detach Hosted|Hosted AI)\s+is\s+still\s+working\b"#,
+      #"^(Codex|Claude|Grok|fx|OpenCode|Detach Cloud|Detach Hosted|Hosted AI)\s+(thread|session)\s+started\b"#,
+      #"^(Codex|Claude|Grok|fx|OpenCode|Detach Cloud|Detach Hosted|Hosted AI)\s+will\s+use\s+MCP\s+servers\b"#,
       #"^Loaded\s+\d+\s+MCP\s+server"#,
       #"^Thinking:\s*"#,
     ]

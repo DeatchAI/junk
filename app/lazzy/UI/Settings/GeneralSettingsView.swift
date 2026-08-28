@@ -23,7 +23,7 @@ struct GeneralSettingsView: View {
       // Capability discovery is asynchronous. An empty list is not evidence
       // that the local providers are missing, so keep them selectable until
       // the runtime returns the authoritative result.
-      return [("Codex", true), ("Claude", true), ("Grok", true), ("OpenCode", true), ("Detach Cloud", true)]
+      return [("Codex", true), ("Claude", true), ("Grok", true), ("fx", true), ("OpenCode", true), ("Detach Cloud", true)]
     }
     return capabilities.map { ($0.displayName, $0.id == "hosted" || $0.installed) }
   }
@@ -98,7 +98,7 @@ struct GeneralSettingsView: View {
     VStack(alignment: .leading, spacing: 10) {
       SettingsSectionHeader(
         title: "Agent runtime",
-        subtitle: "Use your existing coding-agent or OpenCode account, or use Detach Cloud."
+        subtitle: "Use your existing coding-agent, fx, or OpenCode account, or use Detach Cloud."
       )
 
       SettingsCard {
@@ -248,6 +248,7 @@ struct GeneralSettingsView: View {
     switch id {
     case "claude": return "Claude"
     case "grok": return "Grok"
+    case "fx": return "fx"
     case "opencode": return "OpenCode"
     case "hosted": return "Detach Cloud"
     default: return "Codex"
@@ -277,9 +278,18 @@ struct AgentCapabilityRow: View {
         .foregroundColor(capability.installed ? .green : .orange)
         .font(.appFont(size: 14))
 
+      VStack(alignment: .leading, spacing: 2) {
         Text(capability.displayName)
           .font(.appFont(size: 13, weight: .medium))
           .foregroundColor(theme.textColor)
+
+        if let authHint = capability.authHint, !authHint.isEmpty {
+          Text(authHint)
+            .font(.appFont(size: 11))
+            .foregroundColor(theme.textColor.opacity(0.6))
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
 
       Spacer()
     }

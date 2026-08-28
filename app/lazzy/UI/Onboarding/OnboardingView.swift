@@ -240,7 +240,7 @@ struct OnboardingView: View {
     switch source {
     case .existing:
       if detectedAgents.isEmpty {
-        return "Codex, Claude, Grok, or OpenCode. Connect one from this Mac."
+        return "Codex, Claude, Grok, fx, or OpenCode. Connect one from this Mac."
       }
       let names = detectedAgents
         .sorted { $0.name < $1.name }
@@ -903,7 +903,7 @@ private enum OnboardingPalette {
 
 private enum LocalAgentDetector {
   enum Agent: String, CaseIterable, Identifiable, Hashable {
-    case codex, claude, grok, opencode
+    case codex, claude, grok, fx, opencode
 
     var id: String { rawValue }
 
@@ -912,6 +912,7 @@ private enum LocalAgentDetector {
       case .codex: "Codex"
       case .claude: "Claude"
       case .grok: "Grok"
+      case .fx: "fx"
       case .opencode: "OpenCode"
       }
     }
@@ -921,6 +922,7 @@ private enum LocalAgentDetector {
       case .codex: "chevron.left.forwardslash.chevron.right"
       case .claude: "brain.head.profile"
       case .grok: "bolt.fill"
+      case .fx: "bolt.horizontal.circle"
       case .opencode: "shippingbox"
       }
     }
@@ -933,12 +935,15 @@ private enum LocalAgentDetector {
         case .codex: return "Uses your Codex account"
         case .claude: return "Uses your Claude Code account"
         case .grok: return "Uses your Grok account"
+        case .fx: return "Uses your fx and Vercel AI Gateway account"
         case .opencode: return "Uses your existing OpenCode configuration"
         }
       }
-      return self == .opencode
-        ? "The bundled OpenCode harness is unavailable"
-        : "Install the \(name) CLI to connect"
+      switch self {
+      case .fx: return "Install the fx CLI and run fx login"
+      case .opencode: return "The bundled OpenCode harness is unavailable"
+      default: return "Install the \(name) CLI to connect"
+      }
     }
   }
 

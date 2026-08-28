@@ -31,7 +31,7 @@ struct FloatingChatToolbarView: View {
       // An empty list means capability discovery is still in flight. Do not
       // present the local providers as locked while the runtime is probing
       // their CLIs; the authoritative availability arrives in the response.
-      return [("Codex", true), ("Claude", true), ("Grok", true), ("OpenCode", true), ("Detach Cloud", true)]
+      return [("Codex", true), ("Claude", true), ("Grok", true), ("fx", true), ("OpenCode", true), ("Detach Cloud", true)]
     }
     return capabilities.map { ($0.displayName, $0.id == "hosted" || $0.installed) }
   }
@@ -454,6 +454,7 @@ struct FloatingChatToolbarView: View {
     switch id {
     case "claude": return "Claude"
     case "grok": return "Grok"
+    case "fx": return "fx"
     case "opencode": return "OpenCode"
     case "hosted": return "Detach Cloud"
     default: return "Codex"

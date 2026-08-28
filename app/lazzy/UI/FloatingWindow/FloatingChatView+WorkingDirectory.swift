@@ -59,7 +59,6 @@ struct WorkingDirectoryTray: View {
 
   @ObservedObject private var theme = ThemeManager.shared
   @State private var isExpanded = false
-  @State private var collapseWorkItem: DispatchWorkItem?
 
   private let collapsedHeight: CGFloat = 12
   private let expandedHeight: CGFloat = 38
@@ -79,17 +78,6 @@ struct WorkingDirectoryTray: View {
     .padding(.horizontal, 14)
     .padding(.bottom, 7)
     .animation(.spring(response: 0.28, dampingFraction: 0.84), value: isExpanded)
-    .onHover { isHovering in
-      if isHovering {
-        cancelCollapse()
-        expand()
-      } else if isExpanded {
-        scheduleCollapse()
-      }
-    }
-    .onDisappear {
-      collapseWorkItem?.cancel()
-    }
   }
 
   private var trayContent: some View {
@@ -162,26 +150,9 @@ struct WorkingDirectoryTray: View {
   }
 
   private func collapse() {
-    cancelCollapse()
     withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
       isExpanded = false
     }
-  }
-
-  private func scheduleCollapse() {
-    cancelCollapse()
-    let workItem = DispatchWorkItem {
-      withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
-        isExpanded = false
-      }
-    }
-    collapseWorkItem = workItem
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.65, execute: workItem)
-  }
-
-  private func cancelCollapse() {
-    collapseWorkItem?.cancel()
-    collapseWorkItem = nil
   }
 
   private var trayShape: UnevenRoundedRectangle {
