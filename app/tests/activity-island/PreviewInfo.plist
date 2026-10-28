@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key><string>dev.detach.notch-component-preview</string>
+  <key>CFBundleExecutable</key><string>notch-preview</string>
+  <key>CFBundleName</key><string>Notch component preview</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+</dict>
+</plist>
