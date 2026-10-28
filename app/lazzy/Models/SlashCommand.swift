@@ -2,7 +2,6 @@ import Foundation
 
 enum SettingsLaunchIntent {
   case account
-  case createQuickAction
   case createWorkflow
   case connectMCP
 
@@ -10,8 +9,6 @@ enum SettingsLaunchIntent {
     switch self {
     case .account:
       return "account"
-    case .createQuickAction:
-      return "quick_actions"
     case .createWorkflow:
       return "workflows"
     case .connectMCP:
@@ -21,14 +18,11 @@ enum SettingsLaunchIntent {
 }
 
 enum ComposerCommandDestination {
-  case createQuickAction
   case createWorkflow
   case connectMCP
 
   var settingsLaunchIntent: SettingsLaunchIntent {
     switch self {
-    case .createQuickAction:
-      return .createQuickAction
     case .createWorkflow:
       return .createWorkflow
     case .connectMCP:
@@ -37,7 +31,7 @@ enum ComposerCommandDestination {
   }
 }
 
-struct SlashCommandAlias: Identifiable, Hashable {
+struct SlashCommandAlias: Identifiable, Hashable, Codable {
   let id: String
   let command: String
   let title: String

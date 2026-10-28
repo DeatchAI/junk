@@ -5,61 +5,25 @@
 //  General application settings
 //
 
-import OSLog
-import ServiceManagement
-import SwiftUI
+import Foundation
 
 struct AppSettings {
-  private static let logger = Logger(
-    subsystem: Bundle.main.bundleIdentifier ?? "com.lazzy.app", category: "AppSettings")
+  static let notchLiveActivitiesKey = "notch_live_activities_enabled"
+  static let activityIslandPlacementKey = "activity_island_placement"
 
-  // MARK: - Keys
-  private enum Keys {
-    static let launchAtLogin = "launch_at_login"
+  static var notchLiveActivitiesEnabled: Bool {
+    UserDefaults.standard.object(forKey: notchLiveActivitiesKey) as? Bool ?? true
   }
 
-  // MARK: - Properties with AppStorage
-
-  @AppStorage(Keys.launchAtLogin)
-  static var launchAtLogin: Bool = false {
-    didSet {
-      updateLaunchAtLogin(isEnabled: launchAtLogin)
-    }
+  static var activityIslandPlacement: ActivityIslandPlacement {
+    ActivityIslandPlacement(
+      rawValue: UserDefaults.standard.string(forKey: activityIslandPlacementKey) ?? ""
+    ) ?? .defaultPlacement
   }
 
-  // MARK: - Methods
-
-  /// Updates the auto-launch state using SMAppService
-  static func updateLaunchAtLogin(isEnabled: Bool) {
-    let service = SMAppService.mainApp
-
-    do {
-      if isEnabled {
-        if service.status != .enabled {
-          try service.register()
-          logger.info("Successfully registered auto-launch service")
-        }
-      } else {
-        if service.status == .enabled {
-          try service.unregister()
-          logger.info("Successfully unregistered auto-launch service")
-        }
-      }
-    } catch {
-      logger.error("Failed to update auto-launch service: \(error.localizedDescription)")
-      // Reset the value if it fails?
-      // Better to let the user know via UI if possible, but for now we'll just log.
-    }
+  /// History occupies the other side so it never covers the live activity panel.
+  static var historyPanelPlacement: ActivityIslandPlacement {
+    activityIslandPlacement == .left ? .right : .left
   }
 
-  /// Synchronizes the AppStorage value with the actual SMAppService status
-  static func syncLaunchAtLoginStatus() {
-    let status = SMAppService.mainApp.status
-    let isEnabled = status == .enabled
-    if launchAtLogin != isEnabled {
-      // We use the storage as source of truth usually, but on first launch or if changed outside
-      // we might want to sync. For now, let's keep it simple.
-      logger.debug("Syncing launch at login status: \(isEnabled)")
-    }
-  }
 }

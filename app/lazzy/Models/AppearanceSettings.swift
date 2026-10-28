@@ -2,15 +2,16 @@
 //  AppearanceSettings.swift
 //  lazzy
 //
-//  User-configurable appearance settings with Solid/Gradient modes
+//  Persisted theme, material, and shape preferences.
 //
 
 import SwiftUI
 
-/// Appearance mode: solid colors, glassy, or gradient
+/// Keep existing raw values so saved appearance preferences remain compatible.
 enum AppearanceMode: String, CaseIterable {
   case solid = "Solid"  // Pure solid colors, no glass effect
   case glassy = "Glassy"  // Glass/blur effect with opacity
+  case liquidGlass = "Liquid Glass"
 }
 
 /// User appearance settings stored in UserDefaults
@@ -24,6 +25,7 @@ struct AppearanceSettings {
     static let foregroundColor = "appearance_fg_color"
     static let accentColor = "appearance_accent_color"
     static let borderRadius = "appearance_border_radius"
+    static let glassTranslucency = "appearance_glass_translucency"
   }
 
   // MARK: - Defaults (Current dark theme)
@@ -31,6 +33,7 @@ struct AppearanceSettings {
   static let defaultForegroundColor = "#FFFFFF"  // White
   static let defaultAccentColor = "#F64900"  // Color(white: 0.4)
   static let defaultBorderRadius: Double = 12.0  // Default corner radius
+  static let defaultGlassTranslucency = 0.6
 
   // MARK: - Properties with UserDefaults persistence
 
@@ -52,6 +55,19 @@ struct AppearanceSettings {
   @AppStorage(Keys.borderRadius)
   static var borderRadius: Double = defaultBorderRadius
 
+  @AppStorage(Keys.glassTranslucency)
+  private static var storedGlassTranslucency: Double = defaultGlassTranslucency
+
+  /// The preference controls the background tint, never the opacity of text or controls.
+  static var glassTranslucency: Double {
+    get { normalizedTranslucency(storedGlassTranslucency) }
+    set { storedGlassTranslucency = normalizedTranslucency(newValue) }
+  }
+
+  private static func normalizedTranslucency(_ value: Double) -> Double {
+    value.isFinite ? min(max(value, 0), 1) : defaultGlassTranslucency
+  }
+
   // MARK: - Computed Properties
 
   static var preset: ThemePreset {
@@ -71,6 +87,7 @@ struct AppearanceSettings {
   static func resetToDefaults() {
     accentColorHex = defaultAccentColor
     borderRadius = defaultBorderRadius
+    glassTranslucency = defaultGlassTranslucency
   }
 }
 

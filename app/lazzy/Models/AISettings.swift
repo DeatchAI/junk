@@ -15,7 +15,6 @@ struct AISettings {
     static let temperature = "ai_temperature"
     static let maxSteps = "ai_max_steps"
     static let systemPrompt = "ai_system_prompt"
-    static let imageModel = "ai_image_model"
     static let zeroDataRetention = "ai_zero_data_retention"
   }
 
@@ -23,9 +22,18 @@ struct AISettings {
   static let defaultModelValue = "Codex"
   static let defaultTemperature: Double = 0.7
   static let defaultMaxSteps: Int = 30
-  static let defaultImageModelValue = "DALL-E 3"
-  static let defaultSystemPrompt =
+  static let defaultSystemPrompt = ""
+  private static let legacySystemPrompt =
     "You are Detach, a local AI assistant that helps with coding, macOS tasks, and browser work."
+
+  static var additionalInstructions: String? {
+    let value = systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    return value.isEmpty || value == legacySystemPrompt ? nil : value
+  }
+
+  static func retireDefaultPersona() {
+    if systemPrompt == legacySystemPrompt { systemPrompt = "" }
+  }
   static let defaultZeroDataRetention: Bool = true
 
   // MARK: - Properties with AppStorage persistence
@@ -42,8 +50,6 @@ struct AISettings {
   @AppStorage(Keys.systemPrompt)
   static var systemPrompt: String = defaultSystemPrompt
 
-  @AppStorage(Keys.imageModel)
-  static var imageModel: String = defaultImageModelValue
 
   @AppStorage(Keys.zeroDataRetention)
   static var zeroDataRetention: Bool = defaultZeroDataRetention
@@ -55,7 +61,6 @@ struct AISettings {
     temperature = defaultTemperature
     maxSteps = defaultMaxSteps
     systemPrompt = defaultSystemPrompt
-    imageModel = defaultImageModelValue
     zeroDataRetention = defaultZeroDataRetention
   }
 }
@@ -65,13 +70,39 @@ struct DetachSettings {
     static let selectedAgent = "detach_selected_agent"
     static let selectedModelPrefix = "detach_selected_model_"
     static let selectedModelSettingsPrefix = "detach_selected_model_settings_"
-    static let migratedHostedOpenCodeSelection = "detach_migrated_hosted_opencode_selection_v1"
+    static let permissionModePrefix = "detach_permission_mode_"
   }
 
   static let defaultAgent = "codex"
+  static let permissionModeDidChange = Notification.Name("DetachPermissionModeDidChange")
 
-  @AppStorage(Keys.selectedAgent)
-  static var selectedAgent: String = defaultAgent
+  static func permissionMode(for agent: String) -> AgentPermissionMode {
+    guard AgentPermissionMode.supportsOverrides(for: agent),
+      let value = UserDefaults.standard.string(forKey: Keys.permissionModePrefix + agent)
+    else { return .native }
+    return AgentPermissionMode(rawValue: value) ?? .native
+  }
+
+  static func setPermissionMode(_ mode: AgentPermissionMode, for agent: String) {
+    let key = Keys.permissionModePrefix + agent
+    guard UserDefaults.standard.string(forKey: key) != mode.rawValue else { return }
+    UserDefaults.standard.set(mode.rawValue, forKey: key)
+    NotificationCenter.default.post(name: permissionModeDidChange, object: nil, userInfo: ["agent": agent])
+  }
+
+  static var selectedAgent: String {
+    get {
+      let saved = UserDefaults.standard.string(forKey: Keys.selectedAgent) ?? defaultAgent
+      guard let provider = AgentProvider(rawValue: saved) else {
+        UserDefaults.standard.set(defaultAgent, forKey: Keys.selectedAgent)
+        return defaultAgent
+      }
+      return provider.id
+    }
+    set {
+      UserDefaults.standard.set(AgentProvider(rawValue: newValue)?.id ?? defaultAgent, forKey: Keys.selectedAgent)
+    }
+  }
 
   static func selectedModel(for agent: String) -> String? {
     let value = UserDefaults.standard.string(forKey: Keys.selectedModelPrefix + agent)
@@ -109,18 +140,5 @@ struct DetachSettings {
     return Keys.selectedModelSettingsPrefix + agent + "_" + modelKey
   }
 
-  /// Until Detach Cloud was split out, its persisted agent identifier was
-  /// `opencode`. Preserve that existing choice once, then leave future
-  /// standalone OpenCode selections untouched.
-  static func migrateLegacyHostedOpenCodeSelection(availableAgentIDs: Set<String>) {
-    guard !UserDefaults.standard.bool(forKey: Keys.migratedHostedOpenCodeSelection) else { return }
-    defer { UserDefaults.standard.set(true, forKey: Keys.migratedHostedOpenCodeSelection) }
 
-    guard selectedAgent == "opencode", availableAgentIDs.contains("hosted") else { return }
-    if let selectedModel = selectedModel(for: "opencode") {
-      setSelectedModel(selectedModel, for: "hosted")
-      setSelectedModel(nil, for: "opencode")
-    }
-    selectedAgent = "hosted"
-  }
 }

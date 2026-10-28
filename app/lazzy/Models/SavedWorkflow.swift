@@ -1,7 +1,7 @@
 import Foundation
 
-/// Represents a quick action button in the floating menu
-struct QuickAction: Identifiable, Equatable, Codable {
+/// A saved, explicitly selected workflow. Legacy storage fields remain decodable.
+struct SavedWorkflow: Identifiable, Equatable, Codable {
   let id: String
   let title: String
   let shortcut: String?  // e.g. "⌘L"
@@ -51,8 +51,8 @@ struct QuickAction: Identifiable, Equatable, Codable {
     prompt: String? = nil, integrations: [String]? = nil, mcpServerIds: [String]? = nil,
     skills: [SkillAttachment]? = nil, learnedSkillPath: String? = nil,
     learnedSkillVersion: Int? = nil, learningStatus: String? = nil,
-    lastSuccessfulRunAt: Int? = nil, kind: String = "quick_action",
-    trigger: String = "selection_menu", inputPolicy: String = "optional_selection",
+    lastSuccessfulRunAt: Int? = nil, kind: String = "workflow",
+    trigger: String = "manual", inputPolicy: String = "optional_selection",
     executionMode: String = "run_immediately", enabled: Bool = true, position: Int = 0,
     isCustom: Bool = false
   ) {
@@ -96,8 +96,8 @@ struct QuickAction: Identifiable, Equatable, Codable {
     learnedSkillVersion = try container.decodeIfPresent(Int.self, forKey: .learnedSkillVersion)
     learningStatus = try container.decodeIfPresent(String.self, forKey: .learningStatus)
     lastSuccessfulRunAt = try container.decodeIfPresent(Int.self, forKey: .lastSuccessfulRunAt)
-    kind = try container.decodeIfPresent(String.self, forKey: .kind) ?? "quick_action"
-    trigger = try container.decodeIfPresent(String.self, forKey: .trigger) ?? "selection_menu"
+    kind = try container.decodeIfPresent(String.self, forKey: .kind) ?? "workflow"
+    trigger = try container.decodeIfPresent(String.self, forKey: .trigger) ?? "manual"
     inputPolicy =
       try container.decodeIfPresent(String.self, forKey: .inputPolicy) ?? "optional_selection"
     executionMode =
@@ -130,15 +130,5 @@ struct QuickAction: Identifiable, Equatable, Codable {
     try container.encode(isCustom, forKey: .isCustom)
   }
 
-  static let defaultActions: [QuickAction] = [
-    QuickAction(
-      id: "chat", title: "Chat", shortcut: "⌘L", systemImage: "bubble.left", prompt: nil,
-      integrations: nil, isCustom: false),
-    QuickAction(
-      id: "screenshot", title: "Snip", shortcut: nil, systemImage: "camera.viewfinder", prompt: nil,
-      integrations: nil, isCustom: false),
-    QuickAction(
-      id: "more", title: "…", shortcut: nil, systemImage: nil, prompt: nil, integrations: nil,
-      isCustom: false),
-  ]
+
 }

@@ -83,10 +83,10 @@ extension NSEvent {
 struct ShortcutSettings {
   // MARK: - Keys
   private enum Keys {
-    static let quickActionsCode = "shortcut_qa_code"
-    static let quickActionsMods = "shortcut_qa_mods"
     static let floatingChatCode = "shortcut_fc_code"
     static let floatingChatMods = "shortcut_fc_mods"
+    static let closeComposerCode = "shortcut_close_composer_code"
+    static let closeComposerMods = "shortcut_close_composer_mods"
     static let resumeLastChatCode = "shortcut_rlc_code"
     static let resumeLastChatMods = "shortcut_rlc_mods"
     static let historyPanelCode = "shortcut_hp_code"
@@ -98,31 +98,14 @@ struct ShortcutSettings {
   }
 
   // MARK: - Defaults
-  static let defaultQuickActions = KeyShortcut(keyCode: kVK_Space, modifiers: optionKey)
   static let defaultFloatingChat = KeyShortcut(keyCode: kVK_Space, modifiers: optionKey | shiftKey)
+  static let defaultCloseComposer = KeyShortcut(keyCode: kVK_ANSI_W, modifiers: optionKey | shiftKey)
   static let defaultResumeLastChat = KeyShortcut(keyCode: kVK_ANSI_R, modifiers: optionKey | shiftKey)
   static let defaultHistoryPanel = KeyShortcut(keyCode: kVK_ANSI_H, modifiers: optionKey)
   static let defaultChatSubmit = KeyShortcut(keyCode: kVK_Return, modifiers: 0)
   static let defaultChatNewChat = KeyShortcut(keyCode: kVK_Return, modifiers: optionKey)
 
   // MARK: - Computed Properties for Easy Access
-
-  static var quickActions: KeyShortcut {
-    get {
-      KeyShortcut(
-        keyCode: UserDefaults.standard.integer(forKey: Keys.quickActionsCode) == 0
-          && UserDefaults.standard.object(forKey: Keys.quickActionsCode) == nil
-          ? defaultQuickActions.keyCode
-          : UserDefaults.standard.integer(forKey: Keys.quickActionsCode),
-        modifiers: UserDefaults.standard.object(forKey: Keys.quickActionsMods) == nil
-          ? defaultQuickActions.modifiers
-          : UserDefaults.standard.integer(forKey: Keys.quickActionsMods))
-    }
-    set {
-      UserDefaults.standard.set(newValue.keyCode, forKey: Keys.quickActionsCode)
-      UserDefaults.standard.set(newValue.modifiers, forKey: Keys.quickActionsMods)
-    }
-  }
 
   static var floatingChat: KeyShortcut {
     get {
@@ -138,6 +121,23 @@ struct ShortcutSettings {
     set {
       UserDefaults.standard.set(newValue.keyCode, forKey: Keys.floatingChatCode)
       UserDefaults.standard.set(newValue.modifiers, forKey: Keys.floatingChatMods)
+    }
+  }
+
+  static var closeComposer: KeyShortcut {
+    get {
+      KeyShortcut(
+        keyCode: UserDefaults.standard.integer(forKey: Keys.closeComposerCode) == 0
+          && UserDefaults.standard.object(forKey: Keys.closeComposerCode) == nil
+          ? defaultCloseComposer.keyCode
+          : UserDefaults.standard.integer(forKey: Keys.closeComposerCode),
+        modifiers: UserDefaults.standard.object(forKey: Keys.closeComposerMods) == nil
+          ? defaultCloseComposer.modifiers
+          : UserDefaults.standard.integer(forKey: Keys.closeComposerMods))
+    }
+    set {
+      UserDefaults.standard.set(newValue.keyCode, forKey: Keys.closeComposerCode)
+      UserDefaults.standard.set(newValue.modifiers, forKey: Keys.closeComposerMods)
     }
   }
 
@@ -212,8 +212,8 @@ struct ShortcutSettings {
 
   // MARK: - Reset
   static func resetToDefaults() {
-    quickActions = defaultQuickActions
     floatingChat = defaultFloatingChat
+    closeComposer = defaultCloseComposer
     resumeLastChat = defaultResumeLastChat
     historyPanel = defaultHistoryPanel
     chatSubmit = defaultChatSubmit

@@ -5,10 +5,21 @@ import UniformTypeIdentifiers
 
 /// Represents a pending file attachment in the chat UI
 struct ChatAttachment: Identifiable, Equatable {
-  let id = UUID()
+  let id: UUID
   let thumbnail: NSImage  // For preview in UI
   let fileRequest: FileAttachmentRequest  // For sending to server
   let fileName: String
+  var conversationID: String? = nil
+  var hasMediaPreview = true
+
+  init(thumbnail: NSImage, fileRequest: FileAttachmentRequest, fileName: String,
+    conversationID: String? = nil, hasMediaPreview: Bool = true, id: UUID = UUID()) {
+    self.id = id; self.thumbnail = thumbnail; self.fileRequest = fileRequest; self.fileName = fileName
+    self.conversationID = conversationID; self.hasMediaPreview = hasMediaPreview
+  }
+
+  var canPreviewMedia: Bool { isMedia && hasMediaPreview }
+  var isAvailable: Bool { FileManager.default.isReadableFile(atPath: fileRequest.path) }
 
   var isMedia: Bool {
     fileRequest.mimeType.hasPrefix("image/") || fileRequest.mimeType.hasPrefix("video/")
@@ -24,6 +35,7 @@ enum AttachmentHelper {
 
   /// Create an attachment from an existing file URL
   static func createAttachment(from url: URL) -> ChatAttachment? {
+    guard url.isFileURL, FileManager.default.isReadableFile(atPath: url.path) else { return nil }
     let mimeType = url.hasDirectoryPath ? "inode/directory" : getMimeType(for: url)
 
     let fileRequest = FileAttachmentRequest(
@@ -32,12 +44,13 @@ enum AttachmentHelper {
     )
 
     // Generate thumbnail: image/PDF content or generic file icon
-    let thumbnail = generateThumbnail(for: url)
+    let preview = generateThumbnail(for: url, mimeType: mimeType)
 
     return ChatAttachment(
-      thumbnail: thumbnail,
+      thumbnail: preview.image,
       fileRequest: fileRequest,
-      fileName: url.lastPathComponent
+      fileName: url.lastPathComponent,
+      hasMediaPreview: preview.isMedia
     )
   }
 
@@ -48,7 +61,7 @@ enum AttachmentHelper {
 
     let timestamp = ISO8601DateFormatter().string(from: Date())
       .replacingOccurrences(of: ":", with: "-")
-    let filename = "pasted-image-\(timestamp).png"
+    let filename = "pasted-image-\(timestamp)-\(UUID().uuidString).png"
     let fileURL = tempDir.appendingPathComponent(filename)
 
     guard let tiffData = image.tiffRepresentation,
@@ -69,7 +82,7 @@ enum AttachmentHelper {
       mimeType: "image/png"
     )
 
-    let thumbnail = createThumbnail(from: image, maxSize: 60)
+    let thumbnail = createThumbnail(from: image, maxSize: 120)
 
     return ChatAttachment(
       thumbnail: thumbnail,
@@ -131,24 +144,24 @@ enum AttachmentHelper {
   }
 
   /// Generate a preview thumbnail for a file
-  private static func generateThumbnail(for url: URL) -> NSImage {
-    let maxSize: CGFloat = 60
+  private static func generateThumbnail(for url: URL, mimeType: String) -> (image: NSImage, isMedia: Bool) {
+    let maxSize: CGFloat = 120
 
     // For images and PDFs, try to get a content preview
-    if let image = NSImage(contentsOf: url) {
-      return createThumbnail(from: image, maxSize: maxSize)
+    if mimeType.hasPrefix("image/"), let image = NSImage(contentsOf: url), image.isValid {
+      return (createThumbnail(from: image, maxSize: maxSize), true)
     }
 
     // A first-frame preview keeps dragged videos identifiable in the compact
     // pill bar; fall back to the system movie icon if the asset is unavailable.
-    if getMimeType(for: url).hasPrefix("video/"),
+    if mimeType.hasPrefix("video/"),
       let image = videoThumbnail(for: url)
     {
-      return createThumbnail(from: image, maxSize: maxSize)
+      return (createThumbnail(from: image, maxSize: maxSize), true)
     }
 
     // Fallback: Use the system icon for this file type
-    return NSWorkspace.shared.icon(forFile: url.path)
+    return (NSWorkspace.shared.icon(forFile: url.path), false)
   }
 
   private static func videoThumbnail(for url: URL) -> NSImage? {
