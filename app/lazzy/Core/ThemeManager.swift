@@ -21,6 +21,7 @@ class ThemeManager: ObservableObject {
   @Published var foregroundColorHex: String = AppearanceSettings.foregroundColorHex
   @Published var accentColorHex: String = AppearanceSettings.accentColorHex
   @Published var borderRadius: Double = AppearanceSettings.borderRadius
+  @Published var glassTranslucency: Double = AppearanceSettings.glassTranslucency
   @Published var fontName: String = "Geist-Regular"
 
   private var cancellables = Set<AnyCancellable>()
@@ -43,6 +44,7 @@ class ThemeManager: ObservableObject {
     foregroundColorHex = AppearanceSettings.foregroundColorHex
     accentColorHex = AppearanceSettings.accentColorHex
     borderRadius = AppearanceSettings.borderRadius
+    glassTranslucency = AppearanceSettings.glassTranslucency
   }
 
   // MARK: - Computed Color Properties
@@ -125,49 +127,12 @@ class ThemeManager: ObservableObject {
 
   // MARK: - Computed Fills
 
-  /// Whether the current mode uses glass/blur effect
-  var usesGlassEffect: Bool {
-    mode == .glassy
-  }
-
-  /// Main background fill - either solid color or gradient based on mode
-  @ViewBuilder
-  var backgroundFill: some View {
-    switch mode {
-    case .solid:
-      if preset == .aurora {
-        LinearGradient(
-          colors: [
-            Color(hex: "#0F2027"),
-            Color(hex: "#203A43"),
-            Color(hex: "#2C5364"),
-          ],
-          startPoint: .topLeading,
-          endPoint: .bottomTrailing
-        )
-      } else {
-        backgroundColor
-      }
-
-    case .glassy:
-      // For glassy mode, use solid background - the glass effect is applied on top by individual views
-      backgroundColor
-    }
-  }
-
-  /// Glass overlay for floating UI elements (used on response/input areas)
-  /// Returns nil for solid mode (no glass effect)
-  var glassOverlay: LinearGradient? {
-    switch mode {
-    case .solid:
-      nil  // No glass overlay for solid mode
-    case .glassy:
-      LinearGradient(
-        colors: [backgroundColor.opacity(0.3), backgroundColor.opacity(0.3)],
-        startPoint: .top,
-        endPoint: .bottom
-      )
-    }
+  /// Select the color scheme whose primary text has the stronger black or white contrast.
+  var surfaceColorScheme: ColorScheme? {
+    guard preset != .system,
+      let color = NSColor(backgroundColor).usingColorSpace(.sRGB) else { return nil }
+    let brightness = color.redComponent * 0.2126 + color.greenComponent * 0.7152 + color.blueComponent * 0.0722
+    return brightness < 0.179 ? .dark : .light
   }
 
   /// Solid background for non-glass modes
@@ -184,7 +149,18 @@ class ThemeManager: ObservableObject {
 
   /// Input background (slightly lighter than main background)
   var inputBackgroundColor: Color {
-    Color(nsColor: NSColor(Color(hex: backgroundColorHex)).withAlphaComponent(0.1))
+    if mode == .liquidGlass { return controlBackgroundColor }
+    return Color(nsColor: NSColor(Color(hex: backgroundColorHex)).withAlphaComponent(0.1))
+  }
+
+  /// Local controls share their containing glass instead of adding another optical layer.
+  var controlBackgroundColor: Color {
+    textColor.opacity(mode == .liquidGlass ? 0.04 + (1 - glassTranslucency) * 0.1 : 0.055)
+  }
+
+  /// Maximum translucency retains a light painted tint for readability and native input.
+  var glassBackgroundOpacity: Double {
+    1 - glassTranslucency * 0.88
   }
 
   /// Border color
@@ -259,6 +235,11 @@ class ThemeManager: ObservableObject {
   func updateBorderRadius(_ radius: Double) {
     AppearanceSettings.borderRadius = radius
     borderRadius = radius
+  }
+
+  func updateGlassTranslucency(_ value: Double) {
+    AppearanceSettings.glassTranslucency = value
+    glassTranslucency = AppearanceSettings.glassTranslucency
   }
 
   func resetToDefaults() {

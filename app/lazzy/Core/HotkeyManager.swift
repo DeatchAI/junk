@@ -17,8 +17,8 @@ class HotkeyManager: ObservableObject {
   private var currentShortcuts: [Action: KeyShortcut] = [:]
 
   // Callbacks
-  var onQuickActionsTriggered: (() -> Void)?
   var onFloatingChatTriggered: (() -> Void)?
+  var onCloseComposerTriggered: (() -> Void)?
   var onResumeLastChatTriggered: (() -> Void)?
   var onHistoryTriggered: (() -> Void)?
 
@@ -36,15 +36,15 @@ class HotkeyManager: ObservableObject {
   // MARK: - Dynamic Hotkey Registration
 
   enum Action: String {
-    case quickActions = "quickActions"
     case floatingChat = "floatingChat"
+    case closeComposer = "closeComposer"
     case resumeLastChat = "resumeLastChat"
     case history = "history"
 
     var id: UInt32 {
       switch self {
-      case .quickActions: return 1
       case .floatingChat: return 2
+      case .closeComposer: return 5
       case .resumeLastChat: return 3
       case .history: return 4
       }
@@ -134,10 +134,10 @@ class HotkeyManager: ObservableObject {
 
       DispatchQueue.main.async {
         switch hotKeyID.id {
-        case Action.quickActions.id:
-          manager.onQuickActionsTriggered?()
         case Action.floatingChat.id:
           manager.onFloatingChatTriggered?()
+        case Action.closeComposer.id:
+          manager.onCloseComposerTriggered?()
         case Action.resumeLastChat.id:
           manager.onResumeLastChatTriggered?()
         case Action.history.id:

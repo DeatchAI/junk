@@ -225,7 +225,7 @@ class AuthManager: ObservableObject {
 
   func signOut() async {
     isLoading = true
-    // Remove both hosted-model and Composio control-plane credentials from the
+    // Remove both Composio control-plane credentials from the
     // bundled runtime before another account can use this app instance.
     await syncProfileToServer(clear: true)
     do {
@@ -241,7 +241,7 @@ class AuthManager: ObservableObject {
   }
 
   /// Sends the signed-in session to the local Bun runtime over loopback. The
-  /// runtime uses it to obtain scoped hosted-model and Composio sessions; it
+  /// runtime uses it to obtain scoped Composio sessions; it
   /// never forwards the Supabase token to an agent process.
   func syncProfileToServer(clear: Bool = false) async {
     let accessToken = session?.accessToken.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -259,7 +259,7 @@ class AuthManager: ObservableObject {
     var body: [String: Any] = [:]
     if let accessToken, !accessToken.isEmpty {
       // This token is sent only over localhost to the child runtime. The
-      // runtime exchanges it for scoped hosted-model and Composio sessions.
+      // runtime exchanges it for scoped Composio sessions.
       body["accessToken"] = accessToken
     } else {
       body["accessToken"] = NSNull()
@@ -272,7 +272,7 @@ class AuthManager: ObservableObject {
       if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
         print("✅ User profile synced to local server via HTTP")
         await MainActor.run {
-          NotificationCenter.default.post(name: .detachHostedProfileDidSync, object: nil)
+          NotificationCenter.default.post(name: .detachProfileDidSync, object: nil)
         }
       } else {
         print("⚠️ Failed to sync profile to local server")
@@ -367,5 +367,5 @@ class AuthManager: ObservableObject {
 }
 
 extension Notification.Name {
-  static let detachHostedProfileDidSync = Notification.Name("detach.hostedProfileDidSync")
+  static let detachProfileDidSync = Notification.Name("detach.profileDidSync")
 }

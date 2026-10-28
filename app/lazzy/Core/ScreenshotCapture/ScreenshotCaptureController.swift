@@ -17,6 +17,11 @@ class ScreenshotCaptureController: NSObject {
   /// Start the screenshot capture process
   func startCapture(completion: @escaping (NSImage?) -> Void) {
     self.onScreenshotCaptured = completion
+    guard CGPreflightScreenCaptureAccess() else {
+      NativePermissionRequests.requestScreenCapture()
+      onScreenshotCaptured?(nil)
+      return
+    }
     showOverlay()
   }
 
