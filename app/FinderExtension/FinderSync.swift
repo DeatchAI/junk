@@ -25,7 +25,7 @@ final class FinderSync: FIFinderSync {
         systemSymbolName: "wand.and.stars",
         accessibilityDescription: "Detach"
       )
-      detachItem.submenu = makeQuickActionsMenu()
+      detachItem.submenu = makeAttachmentMenu()
       menu.addItem(detachItem)
       return menu
 
@@ -35,7 +35,7 @@ final class FinderSync: FIFinderSync {
       else {
         return nil
       }
-      return makeQuickActionsMenu()
+      return makeAttachmentMenu()
 
     default:
       return nil
@@ -57,30 +57,18 @@ final class FinderSync: FIFinderSync {
     return image
   }
 
-  private func makeQuickActionsMenu() -> NSMenu {
-    let menu = NSMenu(title: "Detach Quick Actions")
-
-    for action in FinderQuickActionCatalog.load() {
-      let item = NSMenuItem(
-        title: action.title,
-        action: #selector(runQuickAction(_:)),
-        keyEquivalent: ""
-      )
-      item.target = self
-      item.representedObject = action.id
-      if let systemImage = action.systemImage {
-        item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: action.title)
-      }
-      menu.addItem(item)
-    }
-
+  private func makeAttachmentMenu() -> NSMenu {
+    let menu = NSMenu(title: "Detach")
+    let item = NSMenuItem(title: "Attach to new chat", action: #selector(attachToChat(_:)), keyEquivalent: "")
+    item.target = self
+    item.image = NSImage(systemSymbolName: "paperclip", accessibilityDescription: "Attach to new chat")
+    menu.addItem(item)
     return menu
   }
 
-  @objc private func runQuickAction(_ sender: NSMenuItem) {
+  @objc private func attachToChat(_ sender: NSMenuItem) {
     guard let selectedURLs = FIFinderSyncController.default().selectedItemURLs(),
-      !selectedURLs.isEmpty,
-      let actionId = sender.representedObject as? String
+      !selectedURLs.isEmpty
     else {
       return
     }
@@ -88,7 +76,7 @@ final class FinderSync: FIFinderSync {
     var components = URLComponents()
     components.scheme = "detach"
     components.host = "finder"
-    components.queryItems = [URLQueryItem(name: "action", value: actionId)] + selectedURLs.map {
+    components.queryItems = selectedURLs.map {
       URLQueryItem(name: "path", value: $0.standardizedFileURL.path)
     }
 
