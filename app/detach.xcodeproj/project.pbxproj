@@ -11,16 +11,14 @@
 		A10000000000000000000002 /* FinderSync.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A10000000000000000000009 /* FinderSync.framework */; };
 		A10000000000000000000003 /* Detach Finder Extension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A10000000000000000000005 /* Detach Finder Extension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		A10000000000000000000013 /* FinderSync.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A10000000000000000000009 /* FinderSync.framework */; };
-		A10000000000000000000015 /* FinderQuickActionCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000014 /* FinderQuickActionCatalog.swift */; };
-		A10000000000000000000016 /* FinderQuickActionCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000014 /* FinderQuickActionCatalog.swift */; };
 		F000F4192EFA6D0200FB9D42 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = F000F4182EFA6D0200FB9D42 /* Supabase */; };
 		F00C73582EED1EDD008F30AE /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = F00C73572EED1EDD008F30AE /* MarkdownUI */; };
 		F020BDBD2F03D1CC009B02B3 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = F020BDBC2F03D1CC009B02B3 /* Sparkle */; };
-		F10000000000000000000004 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = F10000000000000000000003 /* WhisperKit */; };
 		F07367C52F2F431200EA9FBD /* Realtime in Frameworks */ = {isa = PBXBuildFile; productRef = F07367C42F2F431200EA9FBD /* Realtime */; };
 		F0B25E592EFA6054006069CD /* Auth in Frameworks */ = {isa = PBXBuildFile; productRef = F0B25E582EFA6054006069CD /* Auth */; };
 		F0FE06E22EF7FEAF006C04D2 /* SDWebImageSVGCoder in Frameworks */ = {isa = PBXBuildFile; productRef = F0FE06E12EF7FEAF006C04D2 /* SDWebImageSVGCoder */; };
 		F0FE06E52EF7FEC9006C04D2 /* SDWebImageSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = F0FE06E42EF7FEC9006C04D2 /* SDWebImageSwiftUI */; };
+		F10000000000000000000004 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = F10000000000000000000003 /* WhisperKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -53,7 +51,6 @@
 		A10000000000000000000007 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A10000000000000000000008 /* FinderExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = FinderExtension.entitlements; sourceTree = "<group>"; };
 		A10000000000000000000009 /* FinderSync.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = FinderSync.framework; path = System/Library/Frameworks/FinderSync.framework; sourceTree = SDKROOT; };
-		A10000000000000000000014 /* FinderQuickActionCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinderQuickActionCatalog.swift; sourceTree = "<group>"; };
 		F036A8F12EE2E5BA008B2707 /* Detach.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Detach.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -119,7 +116,6 @@
 		A10000000000000000000017 /* Shared */ = {
 			isa = PBXGroup;
 			children = (
-				A10000000000000000000014 /* FinderQuickActionCatalog.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -173,6 +169,7 @@
 				F036A8ED2EE2E5BA008B2707 /* Sources */,
 				F036A8EE2EE2E5BA008B2707 /* Frameworks */,
 				A30000000000000000000001 /* Build Bundled Runtime */,
+				A40000000000000000000001 /* Build Keep Awake Helper */,
 				F036A8EF2EE2E5BA008B2707 /* Resources */,
 				A20000000000000000000001 /* Sign Bundled OpenCode */,
 				F0A5CDC72EEAF33100EDCCE8 /* Embed App Extensions */,
@@ -264,21 +261,6 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		A30000000000000000000001 /* Build Bundled Runtime */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputPaths = (
-			);
-			name = "Build Bundled Runtime";
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "set -eu\nif [ \"${CONFIGURATION}\" = \"Debug\" ]; then\n  cd \"${SRCROOT}/server-v2\"\n  /usr/bin/env bun run build\n  /usr/bin/ditto \"${SRCROOT}/server-v2/detach-runtime\" \"${SRCROOT}/lazzy/detach-runtime\"\n  /bin/mkdir -p \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\n  /usr/bin/ditto \"${SRCROOT}/server-v2/detach-runtime\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/detach-runtime\"\nfi\nEXTENSION_SOURCE=\"${SRCROOT}/../chrome-extension\"\nEXTENSION_DESTINATION=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/chrome-extension\"\n/bin/rm -rf \"${EXTENSION_DESTINATION}\"\n/bin/mkdir -p \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\n/usr/bin/ditto \"${EXTENSION_SOURCE}\" \"${EXTENSION_DESTINATION}\"\n";
-		};
 		A20000000000000000000001 /* Sign Bundled OpenCode */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -294,6 +276,36 @@
 			shellPath = /bin/sh;
 			shellScript = "OPENCODE_PATH=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/opencode\"\nif [ -f \"$OPENCODE_PATH\" ] && [ \"${CODE_SIGNING_ALLOWED:-YES}\" != \"NO\" ] && [ -n \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" ]; then\n  /bin/chmod 755 \"$OPENCODE_PATH\"\n  /usr/bin/codesign --force --options runtime --timestamp --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" \"$OPENCODE_PATH\"\nfi\n";
 		};
+		A30000000000000000000001 /* Build Bundled Runtime */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Build Bundled Runtime";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\nexport PATH=\"${HOME}/.bun/bin:${PATH}\"\nif [ \"${CONFIGURATION}\" = \"Debug\" ]; then\n  cd \"${SRCROOT}/server-v2\"\n  /usr/bin/env bun run build\n  /usr/bin/ditto \"${SRCROOT}/server-v2/detach-runtime\" \"${SRCROOT}/lazzy/detach-runtime\"\n  /bin/mkdir -p \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\n  /usr/bin/ditto \"${SRCROOT}/server-v2/detach-runtime\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/detach-runtime\"\nfi\nEXTENSION_SOURCE=\"${SRCROOT}/../chrome-extension\"\nEXTENSION_DESTINATION=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/chrome-extension\"\n/bin/rm -rf \"${EXTENSION_DESTINATION}\"\n/bin/mkdir -p \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\n/usr/bin/ditto \"${EXTENSION_SOURCE}\" \"${EXTENSION_DESTINATION}\"\n";
+		};
+		A40000000000000000000001 /* Build Keep Awake Helper */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Build Keep Awake Helper";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "\"${SRCROOT}/scripts/build-keep-awake-helper.sh\"\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -302,7 +314,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000001 /* FinderSync.swift in Sources */,
-				A10000000000000000000016 /* FinderQuickActionCatalog.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -310,7 +321,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A10000000000000000000015 /* FinderQuickActionCatalog.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -542,7 +552,6 @@
 				DEVELOPMENT_TEAM = RZJT39VU7M;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
 				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
@@ -550,14 +559,15 @@
 				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
 				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
 				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = lazzy/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Detach;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "This app needs to control Finder to detect selected files.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Detach uses the microphone only while voice input is active in the composer.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Detach uses the microphone only while voice input is active in the composer.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -597,7 +607,6 @@
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = RZJT39VU7M;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
 				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
@@ -605,14 +614,15 @@
 				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
 				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
 				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = lazzy/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Detach;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "This app needs to control Finder to detect selected files.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Detach uses the microphone only while voice input is active in the composer.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Detach uses the microphone only while voice input is active in the composer.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
