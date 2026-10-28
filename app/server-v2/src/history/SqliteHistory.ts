@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Conversation, Message, MessagePart, SearchResult } from "../protocol/messages";
 import { defaultDatabasePath } from "./databasePath";
+import { ConversationMetadata } from "./ConversationMetadata";
 
 const schema = `
 CREATE TABLE IF NOT EXISTS conversations (
@@ -65,6 +66,7 @@ END;
 
 export class SqliteHistory {
   private readonly db: Database;
+  readonly metadata: ConversationMetadata;
 
   constructor(dbPath = defaultDatabasePath()) {
     mkdirSync(dirname(dbPath), { recursive: true });
@@ -75,6 +77,8 @@ export class SqliteHistory {
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(schema);
     ensureColumn(this.db, "messages", "parts_json", "TEXT");
+    ensureColumn(this.db, "conversations", "title_attempted", "INTEGER NOT NULL DEFAULT 0");
+    this.metadata = new ConversationMetadata(this.db);
     rebuildFtsIfEmpty(this.db);
   }
 
@@ -83,7 +87,7 @@ export class SqliteHistory {
       .query<Conversation, [number, number]>(
         "SELECT id, title, created_at, updated_at FROM conversations ORDER BY updated_at DESC LIMIT ? OFFSET ?"
       )
-      .all(limit, offset);
+      .all(limit, offset).map((conversation) => this.metadata.decorate(conversation));
   }
 
   get(conversationId: string) {
@@ -94,13 +98,38 @@ export class SqliteHistory {
     if (!conversation) return undefined;
 
     return {
-      conversation,
+      conversation: this.metadata.decorate(conversation),
       messages: this.getMessages(conversationId),
     };
   }
 
   deleteConversation(conversationId: string) {
     this.db.run("DELETE FROM conversations WHERE id = ?", [conversationId]);
+  }
+
+  claimTitleGeneration(conversationId: string) {
+    return this.db.transaction(() => {
+      const conversation = this.db.query<{ title: string | null; title_attempted: number }, [string]>(
+        "SELECT title, title_attempted FROM conversations WHERE id = ?"
+      ).get(conversationId);
+      if (!conversation || conversation.title_attempted) return;
+      const first = this.db.query<{ content: string }, [string]>(
+        "SELECT content FROM messages WHERE conversation_id = ? AND role = 'user' ORDER BY created_at, rowid LIMIT 1"
+      ).get(conversationId);
+      if (!first?.content.trim()) return;
+      // Preserve custom/legacy names. Only replace Detach's initial placeholder.
+      if (conversation.title && conversation.title !== createTitle(first.content)) return;
+      this.db.run("UPDATE conversations SET title_attempted = 1 WHERE id = ?", [conversationId]);
+      return { title: conversation.title, message: first.content };
+    })();
+  }
+
+  setGeneratedTitle(conversationId: string, expectedTitle: string | null, title: string) {
+    // Do not reorder history or overwrite a rename/deletion while inference was running.
+    return this.db.run(
+      "UPDATE conversations SET title = ? WHERE id = ? AND title IS ? AND title_attempted = 1",
+      [title, conversationId, expectedTitle]
+    ).changes > 0;
   }
 
   getMCPServerIds(conversationId: string): string[] {
@@ -142,15 +171,6 @@ export class SqliteHistory {
     return this.addMessage(conversationId, "assistant", content);
   }
 
-  addMediaMessage(
-    conversationId: string,
-    role: "user" | "assistant",
-    content: string,
-    parts: MessagePart[],
-  ) {
-    return this.addMessage(conversationId, role, content, parts);
-  }
-
   updateMessageParts(messageId: string, content: string, parts: MessagePart[]) {
     const result = this.db.run(
       "UPDATE messages SET content = ?, parts_json = ? WHERE id = ?",
@@ -160,13 +180,20 @@ export class SqliteHistory {
   }
 
   editMessage(messageId: string, content: string) {
+    this.invalidateMessageSession(messageId);
     const result = this.db.run("UPDATE messages SET content = ? WHERE id = ?", [content, messageId]);
     return result.changes > 0;
   }
 
   deleteMessage(messageId: string) {
+    this.invalidateMessageSession(messageId);
     const result = this.db.run("DELETE FROM messages WHERE id = ?", [messageId]);
     return result.changes > 0;
+  }
+
+  private invalidateMessageSession(messageId: string) {
+    const row = this.db.query<{ conversation_id: string }, [string]>("SELECT conversation_id FROM messages WHERE id = ?").get(messageId);
+    if (row) this.metadata.invalidateSessions(row.conversation_id);
   }
 
   search(query: string, limit = 20): SearchResult[] {
@@ -249,7 +276,7 @@ export class SqliteHistory {
   private getMessages(conversationId: string) {
     return this.db
       .query<MessageRow, [string]>(
-        "SELECT id, conversation_id, role, content, parts_json, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC"
+        "SELECT id, conversation_id, role, content, parts_json, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC, rowid ASC"
       )
       .all(conversationId)
       .map(parseMessageRow);

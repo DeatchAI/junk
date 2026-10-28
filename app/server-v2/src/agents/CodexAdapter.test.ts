@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
 import type { MCPServerConfig } from "../protocol/messages";
-import { buildCodexExecArgs, buildCodexMCPEnv, buildCodexPrompt, codexActivityFromEvent } from "./CodexAdapter";
+import { buildCodexAppServerArgs, buildCodexTurnParams, buildCodexMCPEnv, buildCodexPrompt, codexActivityFromEvent } from "./CodexAdapter";
 
 describe("CodexAdapter MCP configuration", () => {
-  test("pre-approves each trusted built-in tool server for non-interactive runs", () => {
-    const args = buildCodexExecArgs("", undefined, [
+  test("preserves approvals for trusted built-in tool servers", () => {
+    const args = buildCodexAppServerArgs([
       mcpServer({
         id: "detach-browser-tools",
         name: "Detach Browser",
@@ -28,7 +28,7 @@ describe("CodexAdapter MCP configuration", () => {
   });
 
   test("does not pre-approve user-configured MCP servers", () => {
-    const args = buildCodexExecArgs("", undefined, [mcpServer({
+    const args = buildCodexAppServerArgs([mcpServer({
       id: "mcp_custom",
       name: "Custom MCP",
     })]);
@@ -47,7 +47,7 @@ describe("CodexAdapter MCP configuration", () => {
       headers: { "x-api-key": "secret" },
       approvalPolicy: "auto-approve",
     })];
-    const args = buildCodexExecArgs("", undefined, servers);
+    const args = buildCodexAppServerArgs(servers);
     const env = buildCodexMCPEnv(servers);
 
     expect(args).toContain('mcp_servers.composio_mcp.env_http_headers={"x-api-key"="DETACH_MCP_COMPOSIO_MCP_X_API_KEY"}');
@@ -56,33 +56,30 @@ describe("CodexAdapter MCP configuration", () => {
     expect(env).toEqual({ DETACH_MCP_COMPOSIO_MCP_X_API_KEY: "secret" });
   });
 
-  test("passes image attachments to codex exec as real images", () => {
-    const args = buildCodexExecArgs("", undefined, [], [
-      { path: "/tmp/reference.png", mimeType: "image/png" },
-      { path: "/tmp/notes.txt", mimeType: "text/plain" },
-      { path: "/tmp/photo.jpg" },
+  test("passes image attachments to Codex as real local images", () => {
+    const params = buildCodexTurnParams({
+      type: "chat", text: "inspect these", files: [
+        { path: "/tmp/reference.png", mimeType: "image/png" },
+        { path: "/tmp/notes.txt", mimeType: "text/plain" },
+        { path: "/tmp/photo.jpg" },
+      ],
+    }, "/tmp/workspace", "thread-test", "inspect these");
+    expect(params.input).toEqual([
+      { type: "text", text: "inspect these", text_elements: [] },
+      { type: "localImage", path: "/tmp/reference.png" },
+      { type: "localImage", path: "/tmp/photo.jpg" },
     ]);
-
-    expect(args).toContain("--image");
-    expect(args).toContain("/tmp/reference.png");
-    expect(args).toContain("/tmp/photo.jpg");
-    expect(args).not.toContain("/tmp/notes.txt");
   });
 
-  test("passes the selected reasoning effort through Codex config", () => {
-    const args = buildCodexExecArgs(
-      "",
-      "gpt-5.6-sol",
-      [],
-      [],
-      { reasoningEffort: "xhigh" },
-    );
-
-    expect(args).toContain("-c");
-    expect(args).toContain('model_reasoning_effort="xhigh"');
+  test("passes the selected model and reasoning effort through turn settings", () => {
+    const params = buildCodexTurnParams({
+      type: "chat", text: "hello", model: "gpt-5.6-sol", modelSettings: { reasoningEffort: "xhigh" },
+    }, "/tmp/workspace", "thread-test", "hello");
+    expect(params.model).toBe("gpt-5.6-sol");
+    expect(params.effort).toBe("xhigh");
   });
 
-  test("instructs Codex to use direct Composio tools instead of multi-execute loops", () => {
+  test("does not paste account or tool tutorials into a Composio user turn", () => {
     const prompt = buildCodexPrompt({
       type: "chat",
       text: "list unread emails",
@@ -99,9 +96,7 @@ describe("CodexAdapter MCP configuration", () => {
       })],
     });
 
-    expect(prompt).toContain("Connected toolkit(s): gmail");
-    expect(prompt).toContain("Do not call COMPOSIO_MULTI_EXECUTE_TOOL");
-    expect(prompt).toContain("already-authorized Composio account");
+    expect(prompt).toBe("list unread emails");
   });
 });
 

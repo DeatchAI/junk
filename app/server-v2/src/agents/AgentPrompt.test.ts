@@ -1,60 +1,50 @@
 import { describe, expect, test } from "bun:test";
+import type { ChatRequest } from "../protocol/messages";
+import { agentAttachmentContext, buildAgentContent, buildAgentPrompt } from "./AgentPrompt";
+import { buildCodexPrompt, codexAdditionalContext } from "./codex/CodexPrompt";
+import { buildClaudeArgs } from "./ClaudeAdapter";
 
-import type { ChatRequest, MCPServerConfig } from "../protocol/messages";
-import { buildAgentPrompt } from "./AgentPrompt";
+const plain: ChatRequest = { type: "chat", text: "Fix the button spacing.\nKeep the labels.",
+  mcpServers: [{ id: "detach-capability-tools", name: "Detach", transport: "stdio", enabled: true,
+    created_at: 0, updated_at: 0 }] };
 
-describe("agent tool instructions", () => {
-  test("teaches every adapter the same semantic macOS workflow", () => {
-    const request: ChatRequest = {
-      type: "chat",
-      text: "Open Notes and write a sentence",
-      mcpServers: [mcpServer("detach-macos-tools")],
-    };
-
-    const prompt = buildAgentPrompt(request);
-    expect(prompt).toContain("Use detach_macos_* tools for native apps and the desktop");
-    expect(prompt).toContain("Prefer detach_macos_snapshot followed by ref-based actions");
-    expect(prompt).toContain("Secure text fields are intentionally blocked");
+describe("native message content", () => {
+  test("plain and resumed turns contain exactly the user's text with tools connected", () => {
+    for (const request of [plain, { ...plain, providerSessionId: "saved-thread" }]) {
+      expect(buildAgentPrompt(request)).toBe(plain.text);
+      expect(buildAgentContent(request)).toBe(plain.text);
+      expect(buildCodexPrompt(request)).toBe(plain.text);
+      expect(codexAdditionalContext(request)).toBeUndefined();
+    }
   });
 
-  test("loads only the generic bundled browser skill", () => {
-    const request: ChatRequest = {
-      type: "chat",
-      text: "Log in to my Hugging Face account",
-      mcpServers: [mcpServer("detach-browser-tools")],
-    };
-
-    const prompt = buildAgentPrompt(request);
-    expect(prompt).toContain("# Detach Browser");
-    expect(prompt).toContain("Never use macOS typing or clicks inside Chrome");
-    expect(prompt).not.toContain("# Hugging Face login");
-    expect(prompt).not.toContain('input[autocomplete="username"]');
+  test("Codex keeps explicitly chosen instructions separate from untrusted attachment context", () => {
+    const request: ChatRequest = { ...plain, systemPrompt: "Use the selected review checklist.",
+      attachmentContext: "Selected text: example", files: [{ path: "/tmp/reference.png", mimeType: "image/png" }],
+      contextMessages: [{ role: "user", content: "Earlier question" }] };
+    expect(buildCodexPrompt(request)).toBe(plain.text);
+    expect(codexAdditionalContext(request)).toEqual({
+      "detach.selected-instructions": { kind: "application", value: request.systemPrompt! },
+      "detach.attachments": { kind: "untrusted", value: agentAttachmentContext(request) },
+    });
+    expect(agentAttachmentContext(request)).toContain("Earlier question");
+    expect(agentAttachmentContext(request)).toContain("/tmp/reference.png");
   });
 
-  test("teaches the agent to discover capabilities through the compact broker", () => {
-    const request: ChatRequest = {
-      type: "chat",
-      text: "Inspect the page in Chrome",
-      mcpServers: [mcpServer("detach-capability-tools")],
-    };
+  test("Claude appends selected instructions without replacing its native system prompt", () => {
+    const request = { ...plain, systemPrompt: "Check accessibility." };
+    const args = buildClaudeArgs(buildAgentContent(request), request);
+    expect(args[1]).toBe(plain.text);
+    expect(args).toContain("--append-system-prompt");
+    expect(args).not.toContain("--system-prompt");
+    expect(args.at(-1)).toBe(request.systemPrompt);
+  });
 
-    const prompt = buildAgentPrompt(request);
-    expect(prompt).toContain("detach_capabilities_list");
-    expect(prompt).toContain("detach_capability_describe");
-    expect(prompt).toContain("detach_capability_invoke");
-    expect(prompt).not.toContain("detach_browser_execute");
+  test("fallback adapters retain only explicit context and instructions", () => {
+    const request = { ...plain, systemPrompt: "Review only.", files: [{ path: "/tmp/example.txt" }] };
+    expect(buildAgentPrompt(request)).toContain("Review only.");
+    expect(buildAgentPrompt(request)).toContain("/tmp/example.txt");
+    expect(buildAgentPrompt(request)).not.toContain("memory");
+    expect(buildAgentPrompt(request)).not.toContain("capability directory");
   });
 });
-
-function mcpServer(id: string): MCPServerConfig {
-  return {
-    id,
-    name: "Detach macOS",
-    transport: "stdio",
-    command: "/tmp/detach-runtime",
-    args: ["--mcp-macos-tools"],
-    enabled: true,
-    created_at: 0,
-    updated_at: 0,
-  };
-}

@@ -1,45 +1,19 @@
 import type { AgentCapability, AgentModelCapability } from "../protocol/messages";
 import type { AgentKind } from "../protocol/messages";
-import type { HostedModelSessionManager } from "../hosted/HostedModelSessionManager";
+import { executableSearchDirs } from "./ExecutablePaths";
 import { runProcess } from "./ProcessRunner";
-
-const homeExecutableDirs = Bun.env.HOME
-  ? [
-      `${Bun.env.HOME}/.grok/bin`,
-      `${Bun.env.HOME}/.local/bin`,
-      `${Bun.env.HOME}/.bun/bin`,
-      `${Bun.env.HOME}/Applications/ChatGPT.app/Contents/Resources`,
-      `${Bun.env.HOME}/Applications/Codex.app/Contents/Resources`,
-    ]
-  : [];
-
-const commonExecutableDirs = [
-  ...homeExecutableDirs,
-  "/Applications/ChatGPT.app/Contents/Resources",
-  "/Applications/Codex.app/Contents/Resources",
-  "/opt/homebrew/bin",
-  "/usr/local/bin",
-  "/usr/bin",
-  "/bin",
-  "/usr/sbin",
-  "/sbin",
-];
+import { discoverAdditionalAgents } from "./providers/AdditionalAgents";
 
 export async function findExecutable(name: string): Promise<string | undefined> {
-  if (name === "fx") {
-    const configured = Bun.env.DETACH_FX_PATH?.trim();
-    if (configured && await Bun.file(configured).exists()) return configured;
-  }
-
-  if (name === "opencode") {
-    const configured = Bun.env.DETACH_OPENCODE_PATH?.trim();
+  if (["fx", "opencode", "pi", "amp", "omp"].includes(name)) {
+    const configured = Bun.env[`DETACH_${name.toUpperCase()}_PATH`]?.trim();
     if (configured && await Bun.file(configured).exists()) return configured;
   }
 
   const fromPath = await which(name);
   if (fromPath) return fromPath;
 
-  for (const dir of commonExecutableDirs) {
+  for (const dir of executableSearchDirs()) {
     const candidate = `${dir}/${name}`;
     if (await Bun.file(candidate).exists()) {
       return candidate;
@@ -51,7 +25,6 @@ export async function findExecutable(name: string): Promise<string | undefined> 
 
 export async function getCapabilities(
   defaultAgent: AgentKind,
-  hostedModels?: HostedModelSessionManager,
 ): Promise<AgentCapability[]> {
   const [codexPath, claudePath, grokPath, fxPath, openCodePath] = await Promise.all([
     findExecutable("codex"),
@@ -60,8 +33,7 @@ export async function getCapabilities(
     findExecutable("fx"),
     findExecutable("opencode"),
   ]);
-  const hostedConfigured = hostedModels?.isConfigured() === true;
-  const [codexModels, grokCatalog, fxCatalog, standaloneOpenCodeCatalog, openCodeCatalog] = await Promise.all([
+  const [codexModels, grokCatalog, fxCatalog, standaloneOpenCodeCatalog, additionalAgents] = await Promise.all([
     codexPath ? discoverCodexModels(codexPath) : Promise.resolve([]),
     grokPath ? discoverGrokModels(grokPath) : Promise.resolve({ models: [], defaultModel: undefined }),
     fxPath
@@ -70,15 +42,7 @@ export async function getCapabilities(
     openCodePath
       ? discoverOpenCodeModels(openCodePath)
       : Promise.resolve({ models: [], error: undefined }),
-    hostedConfigured
-      ? hostedModels.capability()
-        .then((catalog) => ({ ...catalog, error: undefined }))
-        .catch((error) => ({
-          models: [],
-          defaultModel: undefined,
-          error: error instanceof Error ? error.message : String(error),
-        }))
-      : Promise.resolve({ models: [], defaultModel: undefined, error: undefined }),
+    discoverAdditionalAgents(findExecutable),
   ]);
 
   return [
@@ -129,36 +93,14 @@ export async function getCapabilities(
         : "The OpenCode harness is missing. Reinstall or update Detach.",
       models: standaloneOpenCodeCatalog.models,
     },
-    {
-      id: "hosted" as const,
-      displayName: "Detach Cloud",
-      installed: Boolean(openCodePath && hostedConfigured && openCodeCatalog.models.length > 0),
-      executablePath: openCodePath,
-      authHint: hostedOpenCodeCapabilityHint(
-        openCodePath,
-        hostedConfigured,
-        openCodeCatalog.error,
-      ),
-      models: openCodeCatalog.models,
-      defaultModel: openCodeCatalog.defaultModel,
-    },
+    ...additionalAgents,
   ].sort((a, b) => (a.id === defaultAgent ? -1 : b.id === defaultAgent ? 1 : 0));
-}
-
-function hostedOpenCodeCapabilityHint(
-  executablePath: string | undefined,
-  hostedConfigured: boolean,
-  sessionError?: string,
-) {
-  if (!executablePath) return "The OpenCode harness is missing. Reinstall or update Detach.";
-  if (!hostedConfigured) return "Sign in to Detach to use Detach Cloud models and credits.";
-  return sessionError;
 }
 
 const claudeOpusReasoningEfforts = ["low", "medium", "high", "xhigh", "max"];
 const claudeSonnetReasoningEfforts = ["low", "medium", "high", "max"];
 
-const claudeModels: AgentModelCapability[] = [
+export const claudeModels: AgentModelCapability[] = [
   {
     id: "opus",
     displayName: "Opus",
@@ -174,7 +116,7 @@ const claudeModels: AgentModelCapability[] = [
   { id: "haiku", displayName: "Haiku" },
 ];
 
-async function discoverCodexModels(executable: string): Promise<AgentModelCapability[]> {
+export async function discoverCodexModels(executable: string): Promise<AgentModelCapability[]> {
   try {
     const task = runProcess({ command: executable, args: ["debug", "models"] });
     const result = await resultWithTimeout(task, 5_000);
@@ -213,7 +155,7 @@ async function discoverCodexModels(executable: string): Promise<AgentModelCapabi
   }
 }
 
-async function discoverGrokModels(executable: string): Promise<{ models: AgentModelCapability[]; defaultModel?: string }> {
+export async function discoverGrokModels(executable: string): Promise<{ models: AgentModelCapability[]; defaultModel?: string }> {
   try {
     const task = runProcess({ command: executable, args: ["models"] });
     const result = await resultWithTimeout(task, 5_000);

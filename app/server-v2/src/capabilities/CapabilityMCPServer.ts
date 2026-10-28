@@ -1,16 +1,18 @@
 import { CAPABILITY_BROKER_ID } from "./CapabilityConstants";
+import { ASK_USER_TOOL } from "../questions/AgentQuestion";
 
 const DEFAULT_RUNTIME_URL = "http://127.0.0.1:3847";
 
 export const CAPABILITY_MCP_TOOLS = [
+  ASK_USER_TOOL,
   tool(
     "detach_capabilities_list",
-    "List Detach's compact first-party capability directory. This returns availability and operation counts, not every operation schema.",
+    "Discover tools for native macOS app testing (launch, inspect, click, screenshot), signed-in Chrome/browser work, and Touch ID credential fill. Returns real connection/permission status and operation counts. Use this when verifying UI changes or working with apps/sites.",
     { query: { type: "string", description: "Optional capability name or task keyword." } },
   ),
   tool(
     "detach_capability_describe",
-    "Load the operation schemas for one capability only. Call this after listing capabilities and before invoking an operation.",
+    "Load one capability's instructions and operation schemas: macos for native app UI verification, browser for Chrome DOM work, secrets for Touch ID. Describe before invoking; follow any connection/permission hint.",
     { capabilityId: { type: "string", enum: ["browser", "macos", "secrets"] } },
     ["capabilityId"],
   ),
@@ -132,6 +134,12 @@ class CapabilityMCPServer {
   }
 
   private async callRuntime(name: string, args: Record<string, unknown>) {
+    if (name === "detach_ask_user") {
+      return this.request("/api/agent/questions", {
+        method: "POST",
+        body: JSON.stringify({ ...args, runId: resolveRunId() }),
+      });
+    }
     if (name === "detach_capabilities_list") {
       const query = typeof args.query === "string" && args.query.trim() ? `?query=${encodeURIComponent(args.query.trim())}` : "";
       return this.request(`/api/agent/capabilities${query}`, { method: "GET" });

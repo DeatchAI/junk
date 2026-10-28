@@ -1,3 +1,5 @@
+import { acpModelCatalog } from "./ACPModelCatalog";
+import { processEnv } from "../runtime/ProcessRunner";
 import type { AgentPermissionRequest, AgentStreamCallbacks } from "./AgentAdapter";
 import {
   autoApprovedMCPToolIdentities,
@@ -20,6 +22,7 @@ export interface ACPAgentProcessOptions {
   /** ACP agents select the model and optional reasoning effort after creating the session. */
   model?: string;
   modelSettings?: AgentModelSettings;
+  resumeSessionId?: string;
   activityAgent: AgentKind;
   callbacks: AgentStreamCallbacks;
 }
@@ -41,6 +44,8 @@ export class ACPAgentProcess {
   private fullText = "";
   private sessionId?: string;
   private disposed = false;
+  private loadingHistory = false;
+  private permissionQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: ACPAgentProcessOptions) {
     this.callbacks = options.callbacks;
@@ -48,7 +53,7 @@ export class ACPAgentProcess {
     this.process = Bun.spawn([options.command, ...options.args], {
       cwd: options.cwd,
       env: {
-        ...Bun.env,
+        ...processEnv(),
         ...withoutUndefined(options.env ?? {}),
       },
       stdin: "pipe",
@@ -63,27 +68,7 @@ export class ACPAgentProcess {
 
   async run(prompt: string) {
     try {
-      await this.request("initialize", {
-        protocolVersion: 1,
-        clientCapabilities: {
-          fs: { readTextFile: false, writeTextFile: false },
-          terminal: false,
-        },
-        clientInfo: {
-          name: "detach",
-          title: "Detach",
-          version: "0.1.0",
-        },
-      });
-
-      const session = asRecord(await this.request("session/new", {
-        cwd: this.options.cwd,
-        mcpServers: buildACPMCPServers(this.options.mcpServers),
-      }));
-      this.sessionId = getString(session?.sessionId);
-      if (!session || !this.sessionId) {
-        throw new Error("ACP agent did not return a session ID.");
-      }
+      const session = await this.createSession();
 
       const model = this.options.model?.trim();
       if (model) {
@@ -124,6 +109,46 @@ export class ACPAgentProcess {
     } finally {
       this.dispose();
     }
+  }
+
+  async catalog() {
+    try { return acpModelCatalog(await this.createSession()); }
+    finally { this.dispose(); }
+  }
+
+  private async createSession() {
+    const initialized = asRecord(await this.request("initialize", {
+      protocolVersion: 1,
+      clientCapabilities: {
+        fs: { readTextFile: false, writeTextFile: false },
+        terminal: false,
+      },
+      clientInfo: {
+        name: "detach",
+        title: "Detach",
+        version: "0.1.0",
+      },
+    }));
+
+    const resume = this.options.resumeSessionId;
+    if (resume && asRecord(initialized?.agentCapabilities)?.loadSession !== true) {
+      throw new Error("This version of the provider cannot resume saved sessions. Update the provider or start a new chat using the imported transcript.");
+    }
+    this.sessionId = resume;
+    this.loadingHistory = Boolean(resume);
+    const session = asRecord(await this.request(resume ? "session/load" : "session/new", {
+      ...(resume ? { sessionId: resume } : {}),
+      cwd: this.options.cwd,
+      mcpServers: buildACPMCPServers(this.options.mcpServers),
+    }));
+    this.loadingHistory = false;
+    this.sessionId = resume || getString(session?.sessionId);
+    if (!session || !this.sessionId) {
+      throw new Error("ACP agent did not return a session ID.");
+    }
+    this.callbacks.onSession?.({ id: this.sessionId, workspacePath: this.options.cwd,
+      canResume: asRecord(initialized?.agentCapabilities)?.loadSession === true });
+    return session;
   }
 
   cancel() {
@@ -224,7 +249,14 @@ export class ACPAgentProcess {
     }
 
     if (message.method === "session/request_permission" && typeof message.id === "number") {
-      await this.handlePermissionRequest(message.id, message.params);
+      const id = message.id;
+      if (this.loadingHistory) {
+        this.write({ jsonrpc: "2.0", id, result: { outcome: { outcome: "cancelled" } } });
+        return;
+      }
+      this.permissionQueue = this.permissionQueue.then(async () => {
+        if (!this.disposed) await this.handlePermissionRequest(id, message.params);
+      }).catch(() => this.write({ jsonrpc: "2.0", id, result: { outcome: { outcome: "cancelled" } } }));
       return;
     }
 
@@ -234,9 +266,16 @@ export class ACPAgentProcess {
   }
 
   private handleSessionUpdate(value: unknown) {
+    if (this.loadingHistory) return; // History was imported already; replay is not a new response.
     const params = asRecord(value);
     const update = asRecord(params?.update);
     const kind = getString(update?.sessionUpdate);
+
+    if (kind === "session_info_update" && params?.sessionId === this.sessionId) {
+      const title = getString(update?.title);
+      if (title) this.callbacks.onTitle?.(title);
+      return;
+    }
 
     if (kind === "agent_message_chunk") {
       const text = contentText(update?.content);
@@ -437,6 +476,7 @@ function acpToolActivity(
     userFacing: true,
     sourceEventType: "acp.session.update",
     sourceItemType: "tool_call",
+    details: { input: toolCall.rawInput, content: toolCall.content, locations: toolCall.locations },
   };
 }
 

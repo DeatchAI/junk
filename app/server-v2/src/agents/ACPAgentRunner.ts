@@ -43,6 +43,7 @@ export function runACPAgent(options: ACPAgentRunOptions): AgentRun {
       modelSettings: options.modelSettings,
       activityAgent: options.activityAgent,
       callbacks: options.callbacks,
+      resumeSessionId: options.request.providerSessionId,
     });
     if (cancelled) process.cancel();
 
@@ -53,6 +54,7 @@ export function runACPAgent(options: ACPAgentRunOptions): AgentRun {
         cancelled = true;
         process?.cancel();
       },
+      options.request.runId,
     );
     return { text: result.text };
   })();

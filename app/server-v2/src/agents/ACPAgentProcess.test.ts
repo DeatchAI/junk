@@ -157,7 +157,7 @@ for await (const chunk of Bun.stdin.stream()) {
       command: process.execPath,
       args: [fakeAgent.path],
       cwd: process.cwd(),
-      activityAgent: "hosted",
+      activityAgent: "opencode",
       callbacks: {
         onActivity() {},
         onChunk() {},

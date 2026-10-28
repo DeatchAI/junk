@@ -12,8 +12,11 @@ This replaces the legacy Lazzy AI Gateway server with a small process-backed Det
 
 The runtime supports first-class local agent adapters for:
 
-- Codex via `codex exec --json`
+- Codex via `codex app-server` over local stdio, with streamed responses and native approval prompts
 - Claude via `claude -p --output-format stream-json`
+- Pi via bidirectional RPC, with run-local MCP registration and native question/approval replies
+- Amp via execute-mode streaming JSON, with private per-run MCP configuration
+- Omp (Oh My Pi) via ACP, including native permissions and configured model selection
 - Grok via `grok -p --output-format streaming-json`
 - OpenCode through the user's own OpenCode login and provider configuration
 - Detach Cloud via a separate bundled OpenCode ACP harness and the Detach Cloud control plane
@@ -41,7 +44,15 @@ ACP `--pure` mode with isolated state under
 `~/Library/Application Support/Detach/OpenCode`, and injects an inline provider
 configuration for each run. Both routes retain Detach's native tool approval UI.
 
-Chat history, quick actions, and MCP server configs are stored locally in SQLite at:
+See [additional provider setup](../../docs/additional-providers.md) for installation,
+authentication, version requirements, and verification limits for Pi, Amp, and Omp.
+
+Conversations are owned by their providers and discovered automatically. A derived
+`provider-history-index.sqlite` supplies local full-text search. Existing Detach-only
+chats remain a read-only legacy archive; new turns do not append to that archive.
+See [provider-owned history](../../docs/provider-history.md).
+
+Legacy chat history, quick actions, and MCP server configs remain in SQLite at:
 
 ```text
 ~/Library/Application Support/Detach/chats.sqlite
@@ -65,9 +76,33 @@ Enabled MCP servers are stored once in Detach. `MCPServerConfig` is the agent-ne
 - Grok runs over Agent Client Protocol (ACP), so Detach injects MCP servers in `session/new` without editing `~/.grok/config.toml`.
 - Future ACP agents such as OpenCode can reuse `ACPAgentProcess` and only need to supply their executable/arguments and output identity.
 
-Built-in Detach tools may opt into `approvalPolicy: "auto-approve"`. User-configured MCP servers default to prompting. ACP permission requests that are not covered by a pre-approved policy are forwarded to the existing macOS approval window.
+Built-in Detach tools may opt into `approvalPolicy: "auto-approve"`. User-configured MCP servers default to prompting. Codex and ACP permission requests that are not covered by a pre-approved policy are forwarded to the existing macOS approval window.
+
+Codex creates persistent provider threads and resumes their native IDs with a `workspace-write` sandbox and
+`on-request` approvals reviewed by the user. Commands, file changes outside the
+workspace, and additional access requests use Detach's Approve/Deny controls.
+Network access remains restricted until approved; approved commands run once,
+and explicit permission grants last only for the current turn. These per-run
+settings do not modify the user's Codex configuration.
 
 ## Built-in automation bridges
+
+### Clarification across agents
+
+The shared Detach capability server exposes `detach_ask_user` to MCP-capable
+agents. It accepts up to three questions with optional choices and waits for a
+native answer before returning to the same task. Codex's native
+`item/tool/requestUserInput` requests (and the older `tool/requestUserInput`
+spelling) use this same question broker and UI.
+Questions appear in the notch, with a reply window when notch activities are
+disabled. Each reply is bound to its originating connection and run. Cancelling
+the task or disconnecting clears its questions; waiting does not consume the
+agent execution timeout. Clarifications are recorded by the provider's native tool transcript, not appended as competing Detach messages.
+
+In a Debug build, use **Notch Debug > Clarification** to exercise choices,
+free-text answers, and multiple questions without starting an agent. Run
+`bash app/scripts/test-questions.sh` from the repository root for native
+question-state and wire-contract checks.
 
 The browser and desktop bridges use the same agent-neutral MCP pipeline:
 

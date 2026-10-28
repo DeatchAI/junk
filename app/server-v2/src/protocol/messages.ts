@@ -1,42 +1,25 @@
+import type { AgentQuestionClientMessage, AgentQuestionServerMessage } from "../questions/AgentQuestion";
+import type { ChatImportClientMessage, ChatImportServerMessage, ConversationImportSource } from "../imports/ImportTypes";
+import type { BranchFrom, BranchPoint, ConversationBranchState } from "../branches/BranchTypes";
+
 export type ClientMessage =
+  | ChatImportClientMessage
+  | AgentQuestionClientMessage
   | ChatRequest
-  | { type: "list_media_models" }
-  | {
-      type: "quote_media";
-      requestId: string;
-      model: string;
-      prompt: string;
-      config: Record<string, unknown>;
-      inputRoles?: string[];
-    }
-  | MediaGenerateRequest
   | { type: "ping" }
   | { type: "stop_stream" }
   | { type: "capabilities" }
-  | { type: "list_conversations"; limit?: number; offset?: number }
+  | { type: "list_conversations"; limit?: number; offset?: number; refreshLoaded?: boolean }
+  | { type: "refresh_provider_history" }
+  | { type: "restore_hidden_history" }
+  | { type: "search_conversations"; requestId: string; query: string }
   | { type: "get_conversation"; conversationId: string }
+  | { type: "get_conversation_branches"; conversationId: string }
   | { type: "delete_conversation"; conversationId: string }
   | { type: "delete_message"; messageId: string }
   | { type: "edit_message"; messageId: string; content: string }
   | { type: "search"; query: string; limit?: number }
   | { type: "update_ai_settings"; agent?: AgentKind; model?: string }
-  | { type: "list_quick_actions" }
-  | ({ type: "add_quick_action" } & ActionDefinitionCreateFields)
-  | {
-      type: "update_quick_action";
-      actionId: string;
-      name?: string;
-      prompt?: string;
-      integrations?: string[];
-      systemImage?: string;
-      shortcut?: string;
-      enabled?: boolean;
-      position?: number;
-      mcpServerIds?: string[];
-      skills?: SkillAttachment[];
-      inputPolicy?: ActionInputPolicy;
-      executionMode?: ActionExecutionMode;
-    }
   | { type: "list_workflows" }
   | ({ type: "add_workflow" } & ActionDefinitionCreateFields)
   | {
@@ -54,7 +37,6 @@ export type ClientMessage =
       executionMode?: ActionExecutionMode;
     }
   | { type: "delete_workflow"; actionId: string }
-  | { type: "delete_quick_action"; actionId: string }
   | { type: "list_mcp_servers" }
   | {
       type: "add_mcp_server";
@@ -76,11 +58,6 @@ export type ClientMessage =
   | { type: "connect_composio_account"; toolkit: string; userId?: string; callbackUrl?: string }
   | { type: "list_composio_connections"; userId?: string }
   | { type: "disconnect_composio_account"; connectionId: string; userId?: string }
-  | { type: "list_memories"; limit?: number; offset?: number }
-  | { type: "add_memory"; content: string; category?: string; importance?: number }
-  | { type: "update_memory"; id: string; content: string; category?: string }
-  | { type: "delete_memory"; id: string }
-  | { type: "clear_memories" }
   | { type: "desktop_command_result"; id: string; ok: boolean; result?: unknown; error?: string }
   | { type: "secret_command_result"; id: string; ok: boolean; resultJson?: string; error?: string }
   | { type: "command_approval_response"; requestId: string; approved: boolean }
@@ -112,9 +89,8 @@ export type ClientMessage =
 
 /**
  * `fx` and `opencode` use the customer's own CLI configuration and credentials.
- * `hosted` is Detach's separately authenticated, provider-neutral proxy.
  */
-export type AgentKind = "codex" | "claude" | "grok" | "fx" | "opencode" | "hosted";
+export type AgentKind = "codex" | "claude" | "grok" | "fx" | "opencode" | "pi" | "amp" | "omp";
 
 export type ComposerMode = "explain_only" | "plan_only" | "review_only" | "debug_only";
 
@@ -142,8 +118,19 @@ export interface ChatRequest {
   displayText?: string;
   files?: FileAttachmentRequest[];
   conversationId?: string;
+  branchFrom?: BranchFrom;
+  /** Runtime-owned native fork boundary; never trusted from a client. */
+  providerFork?: BranchPoint;
+  /** Runtime-owned binding. Client-supplied values are always discarded. */
+  providerSessionId?: string;
+  /** Runtime-owned path for providers whose native CLI resumes a saved file. */
+  providerSessionPath?: string;
   contextMessages?: ConversationContextMessage[];
   systemPrompt?: string;
+  /** Explicitly attached text, separate from selected instructions. */
+  attachmentContext?: string;
+  /** Omitted/native preserves the provider's own permission configuration. */
+  permissionMode?: "native" | "supervised" | "auto";
   composerMode?: ComposerMode;
   slashCommandId?: string;
   fastMode?: boolean;
@@ -168,6 +155,16 @@ export interface FileAttachmentRequest {
   mimeType?: string;
 }
 
+export interface ChatContextSummary {
+  runId?: string;
+  userCharacters: number;
+  instructionCharacters: number;
+  attachmentCharacters: number;
+  fileCount: number;
+  toolServerCount: number;
+  permissionMode: string;
+}
+
 export interface BrowserTabAttachment {
   id: number;
   windowId?: number;
@@ -176,79 +173,10 @@ export interface BrowserTabAttachment {
   url: string;
 }
 
-export interface MediaGenerateRequest {
-  type: "generate_media";
-  /** Stable client-generated identity for notch/background progress. */
-  runId?: string;
-  /** Debug builds can route exact image/video prompts to local demo assets. */
-  demoMode?: boolean;
-  /** Output kind is explicit for the native composer and debug media routing. */
-  kind?: "image" | "video";
-  requestKey: string;
-  prompt: string;
-  model: string;
-  config: Record<string, unknown>;
-  inputs?: MediaInputRequest[];
-  conversationId?: string;
-}
-
-export interface MediaInputRequest {
-  path: string;
-  mimeType: string;
-  role: string;
-}
-
-export interface MediaConfigOption {
-  id: string;
-  label: string;
-}
-
-export interface MediaModelCapability {
-  id: string;
-  displayName: string;
-  kind: "image" | "video";
-  description?: string;
-  aspectRatios: MediaConfigOption[];
-  resolutions: MediaConfigOption[];
-  durations?: number[];
-  supportsAudio: boolean;
-  outputFormats: MediaConfigOption[];
-  defaults: Record<string, unknown>;
-  inputRoles: string[];
-  maxInputs: number;
-  maxInputsByRole?: Record<string, number>;
-}
-
-export interface MediaAsset {
-  id: string;
-  kind: "image" | "video";
-  mimeType: string;
-  url: string;
-  byteSize?: number;
-  width?: number;
-  height?: number;
-  durationSeconds?: number;
-}
-
-export interface MediaJob {
-  id: string;
-  kind: "image" | "video";
-  model: string;
-  state: string;
-  progress: number;
-  prompt?: string;
-  config: Record<string, unknown>;
-  quote?: { kieCredits: string; detachCredits: string };
-  actual?: { kieCredits: string; detachCredits: string };
-  error?: { code: string; message: string };
-  assets: MediaAsset[];
-  createdAt?: string;
-  updatedAt?: string;
-}
-
-export type MessagePart =
-  | { type: "text"; text: string }
-  | { type: "media_job"; job: MediaJob };
+export type MessagePart = {
+  type: string; text?: string; id?: string; title?: string; kind?: string;
+  status?: string; command?: string; output?: string; toolName?: string;
+};
 
 export interface SkillAttachment {
   id: string;
@@ -279,6 +207,14 @@ export interface Conversation {
   title?: string;
   created_at: number;
   updated_at: number;
+  provider?: AgentKind;
+  workspacePath?: string;
+  model?: string;
+  importSource?: ConversationImportSource;
+  origin?: "provider" | "legacy";
+  canResume?: boolean;
+  historyWarning?: string;
+  searchSnippet?: string;
 }
 
 export interface Message {
@@ -287,6 +223,7 @@ export interface Message {
   role: "user" | "assistant";
   content: string;
   parts?: MessagePart[];
+  branchPoint?: BranchPoint;
   created_at: number;
 }
 
@@ -296,22 +233,18 @@ export interface ConversationContextMessage {
 }
 
 export type ServerMessage =
+  | ConversationBranchState
+  | { type: "command_approval_resolved"; id: string; outcome: "approved" | "declined" | "timed_out" | "cancelled" | "connection_lost" }
+  | { type: "context_summary"; contextSummary: ChatContextSummary }
+  | { type: "provider_history_status"; syncing: boolean; indexing: boolean; pending: number; indexedChats: number; notices: string[]; revision: number; catalogRevision: number }
+  | { type: "history_search_results"; requestId: string; query: string; conversations: Conversation[]; indexing: boolean }
+  | { type: "provider_session"; runId: string; conversation: Conversation }
+  | { type: "history_error"; error: string }
+  | ChatImportServerMessage
+  | AgentQuestionServerMessage
+  | { type: "conversation_title"; conversationId: string; title: string }
   | { type: "pong" }
   | { type: "capabilities"; agents: AgentCapability[]; defaultAgent: AgentKind }
-  | { type: "media_models"; models: MediaModelCapability[] }
-  | {
-      type: "media_quote";
-      requestId: string;
-      quote: { kieCredits?: string; detachCredits?: string; summary?: string };
-    }
-  | {
-      type: "media_job";
-      runId?: string;
-      conversationId: string;
-      userMessageId: string;
-      assistantMessageId: string;
-      job: MediaJob;
-    }
   | {
       type: "activity";
       runId?: string;
@@ -331,15 +264,11 @@ export type ServerMessage =
       durationMs?: number;
     }
   | { type: "error"; error: string; runId?: string }
-  | { type: "conversations_list"; conversations: Conversation[] }
+  | { type: "conversations_list"; conversations: Conversation[]; offset?: number; hasMore?: boolean }
   | { type: "conversation"; conversation: Conversation; messages: Message[] }
   | { type: "search_results"; results: SearchResult[] }
   | { type: "deleted"; id: string }
   | { type: "updated"; id: string }
-  | { type: "quick_actions_list"; actions: ActionDefinition[] }
-  | { type: "quick_action_added"; action: ActionDefinition }
-  | { type: "quick_action_updated"; action: ActionDefinition }
-  | { type: "quick_action_deleted"; actionId: string }
   | { type: "action_learning_started"; actionId: string; actionName: string }
   | { type: "action_learning_completed"; action: ActionDefinition }
   | { type: "workflows_list"; workflows: ActionDefinition[] }
@@ -371,11 +300,6 @@ export type ServerMessage =
   | { type: "composio_connections"; connections: ComposioConnection[] }
   | { type: "composio_connected"; toolkit: string; connectionId: string; connectionStatus: string }
   | { type: "composio_disconnected"; connectionId: string }
-  | { type: "memories_list"; memories: unknown[]; total: number }
-  | { type: "memory_added"; memory: unknown }
-  | { type: "memory_updated"; success: boolean; id: string }
-  | { type: "memory_deleted"; success: boolean; id: string }
-  | { type: "memories_cleared"; success: boolean }
   | {
       type: "command_approval_request";
       id: string;

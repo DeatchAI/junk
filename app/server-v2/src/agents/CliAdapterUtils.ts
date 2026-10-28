@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { AgentRun } from "./AgentAdapter";
+import { isWaitingForAnswer, questionWaitMs } from "../questions/QuestionWait";
 
 export function consumeJsonLines<T>(
   chunk: string,
@@ -15,26 +16,34 @@ export function consumeJsonLines<T>(
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    try {
-      onEvent(JSON.parse(trimmed) as T);
-    } catch {
-      // CLIs sometimes mix human-readable lines into structured streams.
-    }
+    let event: T;
+    try { event = JSON.parse(trimmed) as T; }
+    catch { continue; } // Ignore human-readable noise, never swallow a session/permission failure.
+    onEvent(event);
   }
 
   return { remainder };
 }
 
-export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, onTimeout: () => void) {
+export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, onTimeout: () => void, runId?: string) {
   let timeoutId: Timer | undefined;
+  const startedAt = Date.now();
+  const initialWait = questionWaitMs(runId);
   try {
     return await Promise.race([
       promise,
       new Promise<T>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          onTimeout();
-          reject(new Error(`Agent did not finish within ${Math.round(timeoutMs / 1000)}s`));
-        }, timeoutMs);
+        const tick = () => {
+          const now = Date.now();
+          const remaining = timeoutMs - (now - startedAt) + questionWaitMs(runId) - initialWait;
+          if (remaining <= 0 && !isWaitingForAnswer(runId)) {
+            onTimeout();
+            reject(new Error(`Agent did not finish within ${Math.round(timeoutMs / 1000)}s`));
+          } else {
+            timeoutId = setTimeout(tick, isWaitingForAnswer(runId) ? 250 : Math.min(250, Math.max(1, remaining)));
+          }
+        };
+        timeoutId = setTimeout(tick, Math.min(250, timeoutMs));
       }),
     ]);
   } finally {

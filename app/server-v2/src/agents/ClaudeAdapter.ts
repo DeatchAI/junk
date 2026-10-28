@@ -1,9 +1,10 @@
+import { ProviderToolActivity } from "../activity/ProviderToolActivity";
 import type { ChatRequest } from "../protocol/messages";
 import { findExecutable } from "../runtime/CapabilityDetector";
 import { runProcess } from "../runtime/ProcessRunner";
 import type { AgentAdapter, AgentRun, AgentStreamCallbacks } from "./AgentAdapter";
-import { buildAgentPrompt, resolveWorkspace } from "./AgentPrompt";
-import { asStringRecord, consumeJsonLines, createTempJsonFile, getString, summarizeShellCommand, withTimeout } from "./CliAdapterUtils";
+import { buildAgentContent, resolveWorkspace } from "./AgentPrompt";
+import { asStringRecord, consumeJsonLines, createTempJsonFile, getString, withTimeout } from "./CliAdapterUtils";
 import { buildClaudeAllowedTools, buildClaudeMCPConfig, enabledMCPServers } from "./MCPConfig";
 import { isRetryableNetworkError } from "../activity/ActivityNormalizer";
 
@@ -29,7 +30,7 @@ export class ClaudeAdapter implements AgentAdapter {
 
       callbacks.onActivity("Starting Claude");
 
-      const prompt = buildAgentPrompt(request);
+      const prompt = buildAgentContent(request);
       const cwd = resolveWorkspace(request.workspacePath);
       const args = buildClaudeArgs(prompt, request);
       const mcpServerCount = enabledMCPServers(request.mcpServers).length;
@@ -48,6 +49,7 @@ export class ClaudeAdapter implements AgentAdapter {
       let stdoutBuffer = "";
       let stderrBuffer = "";
       let jsonLineBuffer = "";
+      const tools = new ProviderToolActivity(this.id, callbacks);
       let lastAssistantSnapshot = "";
       let lastActivityAt = Date.now();
 
@@ -64,7 +66,7 @@ export class ClaudeAdapter implements AgentAdapter {
           stdoutBuffer += chunk;
           lastActivityAt = Date.now();
           const parsed = consumeJsonLines<ClaudeStreamEvent>((chunk), (event) => {
-            handleClaudeEvent(event, callbacks, (text) => {
+            handleClaudeEvent(event, callbacks, tools, (text) => {
               if (!text) return;
               const delta = deltaFromSnapshot(lastAssistantSnapshot, text);
               lastAssistantSnapshot = text;
@@ -95,11 +97,11 @@ export class ClaudeAdapter implements AgentAdapter {
       const result = await withTimeout(commandRun.finished, resolveAgentTimeout(request.timeoutMs, Bun.env.DETACH_CLAUDE_TIMEOUT_MS), () => {
         cancelled = true;
         commandRun?.cancel();
-      });
+      }, request.runId);
 
       if (jsonLineBuffer.trim()) {
         consumeJsonLines<ClaudeStreamEvent>("\n", (event) => {
-          handleClaudeEvent(event, callbacks, (text) => {
+          handleClaudeEvent(event, callbacks, tools, (text) => {
             const delta = deltaFromSnapshot(lastAssistantSnapshot, text);
             lastAssistantSnapshot = text;
             if (!delta) return;
@@ -118,7 +120,7 @@ export class ClaudeAdapter implements AgentAdapter {
         throw new Error(detail);
       }
 
-      return { text: fullText || extractClaudeFinalText(stdoutBuffer) || result.stdout.trim() };
+      return { text: fullText || extractClaudeFinalText(stdoutBuffer) };
     })();
 
     const cleanup = () => {
@@ -152,10 +154,16 @@ export function buildClaudeArgs(prompt: string, request: ChatRequest) {
     "stream-json",
     "--verbose",
     "--include-partial-messages",
-    "--no-session-persistence",
-    "--permission-mode",
-    Bun.env.DETACH_CLAUDE_PERMISSION_MODE?.trim() || "auto",
   ];
+  const permissionMode = request.permissionMode === "supervised" ? "default"
+    : request.permissionMode === "auto" ? "auto"
+    : request.permissionMode === "native" ? undefined : Bun.env.DETACH_CLAUDE_PERMISSION_MODE?.trim();
+  if (permissionMode) args.push("--permission-mode", permissionMode);
+  if (request.systemPrompt?.trim()) args.push("--append-system-prompt", request.systemPrompt.trim());
+  if (request.providerSessionId) args.push("--resume", request.providerSessionId);
+  if (request.providerFork?.kind === "claude") {
+    args.push("--fork-session", "--resume-session-at", request.providerFork.resumeSessionAt);
+  }
 
   if (request.model?.trim()) {
     args.push("--model", request.model.trim());
@@ -185,8 +193,10 @@ type ClaudeStreamEvent = {
   content?: unknown;
 };
 
-function handleClaudeEvent(event: ClaudeStreamEvent, callbacks: AgentStreamCallbacks, onText: (text: string) => void) {
+function handleClaudeEvent(event: ClaudeStreamEvent, callbacks: AgentStreamCallbacks, tools: ProviderToolActivity, onText: (text: string) => void) {
   if (event.type === "system" && event.subtype === "init") {
+    const sessionID = getString((event as unknown as Record<string, unknown>).session_id);
+    if (sessionID) callbacks.onSession?.({ id: sessionID, canResume: true });
     callbacks.onActivity("Claude session started");
     return;
   }
@@ -207,28 +217,7 @@ function handleClaudeEvent(event: ClaudeStreamEvent, callbacks: AgentStreamCallb
   const text = content.filter((item) => item.type === "text" && item.text).map((item) => item.text).join("");
   if (text) onText(text);
 
-  const toolUse = content.find((item) => item.type === "tool_use" && item.name);
-  if (toolUse?.name) {
-    callbacks.onActivity(activityForToolUse(toolUse.name, toolUse.input), toolUse.name);
-  }
-}
-
-function activityForToolUse(name: string, input: unknown) {
-  if (name === "Bash") {
-    const command = getString(asStringRecord(input)?.command);
-    return summarizeShellCommand(command);
-  }
-
-  if (name === "Read") {
-    const filePath = getString(asStringRecord(input)?.file_path);
-    return filePath ? `Reading ${filePath.split("/").slice(-2).join("/")}` : "Reading a file";
-  }
-
-  if (name === "Grep") return "Searching files";
-  if (name === "Glob") return "Finding files";
-  if (name === "Edit" || name === "MultiEdit" || name === "Write") return "Editing files";
-
-  return `Using ${name}`;
+  tools.blocks(content);
 }
 
 function summarizeClaudeStderr(chunk: string) {

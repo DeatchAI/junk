@@ -1,3 +1,5 @@
+import { capabilityGuide } from "../capabilities/CapabilityGuides";
+
 const DEFAULT_RUNTIME_URL = "http://127.0.0.1:3847";
 
 export async function runBrowserMCPServer() {
@@ -64,6 +66,7 @@ class BrowserMCPServer {
           id: request.id,
           result: {
             protocolVersion: "2024-11-05",
+            instructions: capabilityGuide("browser"),
             capabilities: {
               tools: {},
             },

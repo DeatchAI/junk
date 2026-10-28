@@ -1,3 +1,6 @@
+import { MACOS_TOOLS, MACOS_TOOL_COMMANDS } from "./DesktopTools";
+import { MACOS_GUIDE } from "../capabilities/CapabilityGuides";
+
 const DEFAULT_RUNTIME_URL = "http://127.0.0.1:3847";
 
 export async function runDesktopMCPServer() {
@@ -56,6 +59,7 @@ class DesktopMCPServer {
             protocolVersion: "2024-11-05",
             capabilities: { tools: {} },
             serverInfo: { name: "detach-macos", version: "0.1.0" },
+            instructions: MACOS_GUIDE,
           },
         });
         return;
@@ -113,7 +117,7 @@ class DesktopMCPServer {
     const response = await fetch(`${this.runtimeUrl}/api/desktop/command`, {
       method: "POST",
       headers: runtimeHeaders(),
-      body: JSON.stringify({ command, payload: args }),
+      body: JSON.stringify({ command, payload: args, runId: Bun.env.DETACH_DESKTOP_RUN_ID?.trim() }),
     });
 
     const json = await response.json() as { ok?: boolean; result?: unknown; error?: string };
@@ -135,82 +139,7 @@ interface MCPRequest {
   params?: unknown;
 }
 
-export const MACOS_TOOL_COMMANDS: Record<string, string> = {
-  detach_macos_status: "desktop.status",
-  detach_macos_list_apps: "desktop.list_apps",
-  detach_macos_list_windows: "desktop.list_windows",
-  detach_macos_activate_app: "desktop.activate_app",
-  detach_macos_open_app: "desktop.open_app",
-  detach_macos_snapshot: "desktop.snapshot",
-  detach_macos_screenshot: "desktop.screenshot",
-  detach_macos_click: "desktop.click",
-  detach_macos_type: "desktop.type",
-  detach_macos_key: "desktop.key",
-  detach_macos_scroll: "desktop.scroll",
-};
-
-const appTarget = {
-  pid: { type: "number", description: "Process ID of a running application." },
-  bundleId: { type: "string", description: "Application bundle identifier." },
-  appName: { type: "string", description: "Localized application name." },
-};
-
-export const MACOS_TOOLS = [
-  tool("detach_macos_status", "Check the native macOS bridge and required Accessibility and Screen Recording permissions.", {}),
-  tool("detach_macos_list_apps", "List running foreground-capable macOS applications.", {}),
-  tool("detach_macos_list_windows", "List accessibility windows for an app, defaulting to the frontmost app.", appTarget),
-  tool("detach_macos_activate_app", "Bring an already-running application to the foreground.", appTarget),
-  tool("detach_macos_open_app", "Launch or foreground an application by bundle ID or application name.", {
-    bundleId: appTarget.bundleId,
-    appName: appTarget.appName,
-  }),
-  tool("detach_macos_snapshot", "Inspect a native app's accessibility tree and return fresh element refs. Prefer refs over coordinates.", {
-    ...appTarget,
-    maxDepth: { type: "number", minimum: 1, maximum: 12 },
-    maxElements: { type: "number", minimum: 1, maximum: 1000 },
-  }),
-  tool("detach_macos_screenshot", "Capture the current macOS display. Requires Screen Recording permission and returns an MCP image.", {
-    displayId: { type: "number" },
-    maxWidth: { type: "number", minimum: 320, maximum: 3840 },
-    showsCursor: { type: "boolean" },
-  }),
-  tool("detach_macos_click", "Click a recent accessibility ref, or explicit screen coordinates when no semantic element exists.", {
-    ref: { type: "string" },
-    x: { type: "number" },
-    y: { type: "number" },
-    button: { type: "string", enum: ["left", "right"] },
-    clickCount: { type: "number", minimum: 1, maximum: 3 },
-  }),
-  tool("detach_macos_type", "Enter text into a focused or referenced editable element. Secure text fields are refused.", {
-    ref: { type: "string" },
-    text: { type: "string" },
-    replace: { type: "boolean" },
-  }, ["text"]),
-  tool("detach_macos_key", "Press a key or keyboard shortcut in the active app.", {
-    key: { type: "string", description: "A letter, digit, or named key such as return, tab, escape, delete, or arrow_up." },
-    modifiers: {
-      type: "array",
-      items: { type: "string", enum: ["command", "option", "control", "shift", "fn"] },
-    },
-    repeat: { type: "number", minimum: 1, maximum: 20 },
-  }, ["key"]),
-  tool("detach_macos_scroll", "Scroll at the pointer or at explicit screen coordinates. Positive deltaY scrolls up; negative scrolls down.", {
-    deltaX: { type: "number" },
-    deltaY: { type: "number" },
-    x: { type: "number" },
-    y: { type: "number" },
-  }),
-];
-
-export const MACOS_TOOL_NAMES = MACOS_TOOLS.map((item) => item.name);
-
-function tool(name: string, description: string, properties: Record<string, unknown>, required: string[] = []) {
-  return {
-    name,
-    description,
-    inputSchema: { type: "object", properties, required, additionalProperties: false },
-  };
-}
+export { MACOS_TOOLS, MACOS_TOOL_COMMANDS, MACOS_TOOL_NAMES } from "./DesktopTools";
 
 function mcpContent(result: unknown) {
   const record = asRecord(result);

@@ -57,6 +57,7 @@ export class GrokAdapter implements AgentAdapter {
         },
         mcpServers: request.mcpServers,
         activityAgent: "grok",
+        resumeSessionId: request.providerSessionId,
         callbacks: activityCallbacks,
       });
 
@@ -75,7 +76,8 @@ export class GrokAdapter implements AgentAdapter {
           () => {
             cancelled = true;
             process?.cancel();
-          }
+          },
+          request.runId,
         );
       } catch (error) {
         const stderr = process.getStderr();

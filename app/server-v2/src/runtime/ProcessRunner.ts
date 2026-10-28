@@ -1,3 +1,5 @@
+import { executableSearchDirs } from "./ExecutablePaths";
+
 export interface ProcessRunOptions {
   command: string;
   args: string[];
@@ -13,7 +15,6 @@ export interface RunningProcess {
   finished: Promise<{ stdout: string; stderr: string; exitCode: number | null }>;
 }
 
-const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 
 export function runProcess(options: ProcessRunOptions): RunningProcess {
@@ -42,11 +43,12 @@ export function runProcess(options: ProcessRunOptions): RunningProcess {
     },
     finished: Promise.all([process.exited, stdoutPromise, stderrPromise]).then(
       ([exitCode, stdout, stderr]) => ({ stdout, stderr, exitCode })
-    ),
+    ).catch((error) => { process.kill(); throw error; }),
   };
 }
 
 async function readStream(stream: ReadableStream<Uint8Array>, onChunk?: (chunk: string) => void) {
+  const decoder = new TextDecoder();
   let full = "";
   const reader = stream.getReader();
 
@@ -67,27 +69,9 @@ async function readStream(stream: ReadableStream<Uint8Array>, onChunk?: (chunk: 
   return full;
 }
 
-function processEnv() {
+export function processEnv() {
   const env = { ...Bun.env };
-  const extraPath = [
-    ...(Bun.env.HOME
-      ? [
-          `${Bun.env.HOME}/.grok/bin`,
-          `${Bun.env.HOME}/.local/bin`,
-          `${Bun.env.HOME}/.bun/bin`,
-          `${Bun.env.HOME}/Applications/ChatGPT.app/Contents/Resources`,
-          `${Bun.env.HOME}/Applications/Codex.app/Contents/Resources`,
-        ]
-      : []),
-    "/Applications/ChatGPT.app/Contents/Resources",
-    "/Applications/Codex.app/Contents/Resources",
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    "/usr/bin",
-    "/bin",
-    "/usr/sbin",
-    "/sbin",
-  ].join(":");
+  const extraPath = executableSearchDirs().join(":");
 
   env.PATH = env.PATH ? `${env.PATH}:${extraPath}` : extraPath;
   return env;

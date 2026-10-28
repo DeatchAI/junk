@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { macOSReadiness } from "./MacOSReadiness";
 
 import { CapabilityBroker } from "./CapabilityBroker";
 import type { BrowserAutomation } from "../browser/BrowserAutomation";
@@ -23,6 +24,8 @@ describe("capability broker", () => {
     expect(description.id).toBe("macos");
     expect(description.tools.length).toBeGreaterThan(1);
     expect(description.tools.some((tool) => tool.name === "detach_macos_snapshot")).toBe(true);
+    expect(description.instructions).toContain("exact rebuilt app");
+    expect(description.connection).toBe("ready");
   });
 
   test("starts Browser lazily on the first broker invocation", async () => {
@@ -63,10 +66,39 @@ function createBroker(browserAutomation = {
   const browserBridge = {} as BrowserBridge;
   const desktopBridge = {
     getStatus: () => ({ appConnected: true }),
-    execute: async () => ({ ok: true }),
+    execute: async () => ({ accessibilityGranted: true, screenRecordingGranted: true }),
   } as unknown as DesktopBridge;
   const secretBridge = {
     isAppConnected: () => true,
   } as unknown as SecretBridge;
   return new CapabilityBroker(browserAutomation, browserBridge, desktopBridge, secretBridge);
 }
+
+describe("native UI permission readiness", () => {
+  const bridge = (status: unknown, connected = true) => ({
+    getStatus: () => ({ appConnected: connected }),
+    execute: async () => status,
+  }) as unknown as DesktopBridge;
+
+  test("a connected socket does not imply Accessibility permission", async () => {
+    expect(await macOSReadiness(bridge({ accessibilityGranted: false, screenRecordingGranted: false,
+      permissionHelp: { accessibility: "Exact Accessibility hint" } }))).toMatchObject({
+      ready: false, needsPermission: true, hint: "Exact Accessibility hint",
+    });
+  });
+
+  test("missing Screen Recording still allows inspection and input", async () => {
+    const status = await macOSReadiness(bridge({ accessibilityGranted: true, screenRecordingGranted: false }));
+    expect(status.ready).toBe(true);
+    expect(status.permissions).toEqual({ accessibility: true, screenRecording: false });
+    expect(status.hint).toContain("Screenshots require Screen Recording");
+  });
+
+  test("disconnected, incomplete and failed probes never report ready", async () => {
+    expect((await macOSReadiness(bridge({}, false))).ready).toBe(false);
+    expect((await macOSReadiness(bridge({}))).ready).toBe(false);
+    const failed = bridge({});
+    failed.execute = async () => { throw new Error("bridge timed out"); };
+    expect(await macOSReadiness(failed)).toMatchObject({ ready: false, hint: "Native status check failed: bridge timed out" });
+  });
+});

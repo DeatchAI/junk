@@ -37,7 +37,7 @@ describe("activity normalization", () => {
 
   test("replaces generic ACP labels for known Detach tools", () => {
     expect(normalizeAgentActivity(
-      "hosted",
+      "opencode",
       "Using a tool",
       "detach_macos_snapshot",
     )).toMatchObject({

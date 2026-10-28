@@ -6,6 +6,8 @@ import { MACOS_TOOLS, MACOS_TOOL_COMMANDS } from "../desktop/DesktopMCPServer";
 import { SecretBridge } from "../secrets/SecretBridge";
 import { SECRETS_TOOLS } from "../secrets/SecretsMCPServer";
 import { CAPABILITY_BROKER_ID, type CapabilityId } from "./CapabilityConstants";
+import { capabilityGuide } from "./CapabilityGuides";
+import { macOSReadiness } from "./MacOSReadiness";
 
 export { CAPABILITY_BROKER_ID } from "./CapabilityConstants";
 
@@ -14,12 +16,14 @@ export interface CapabilityDescriptor {
   name: string;
   summary: string;
   whenToUse: string;
-  connection: "ready" | "needs_connection";
+  connection: "ready" | "needs_connection" | "needs_permission";
+  permissions?: { accessibility: boolean; screenRecording: boolean };
   hint?: string;
   operationCount: number;
 }
 
 export interface CapabilityDescription extends CapabilityDescriptor {
+  instructions: string;
   tools: CapabilityTool[];
 }
 
@@ -88,7 +92,7 @@ export class CapabilityBroker {
 
   async describe(capabilityId: string): Promise<CapabilityDescription> {
     const definition = this.definition(capabilityId);
-    return { ...await this.toDescriptor(definition), tools: definition.tools };
+    return { ...await this.toDescriptor(definition), instructions: capabilityGuide(definition.id), tools: definition.tools };
   }
 
   registerRun(runId: string, options: { allowedUploadPaths?: string[]; activitySink?: BrowserActivitySink } = {}) {
@@ -141,6 +145,7 @@ export class CapabilityBroker {
       return this.desktopBridge.execute({
         command,
         payload,
+        runId: invocation.runId,
       });
     }
 
@@ -220,8 +225,9 @@ export class CapabilityBroker {
       name: definition.name,
       summary: definition.summary,
       whenToUse: definition.whenToUse,
-      connection: connection.ready ? "ready" : "needs_connection",
-      ...(connection.hint ? { hint: connection.hint } : {}),
+      connection: connection.ready ? "ready" : "needsPermission" in connection && connection.needsPermission ? "needs_permission" : "needs_connection",
+      ...("permissions" in connection ? { permissions: connection.permissions } : {}),
+      ...("hint" in connection && connection.hint ? { hint: connection.hint } : {}),
       operationCount: definition.tools.length,
     };
   }
@@ -234,9 +240,7 @@ export class CapabilityBroker {
         : { ready: false as const, hint: "Open the Detach Browser Agent extension popup in signed-in Chrome; it must connect to this runtime." };
     }
     if (capabilityId === "macos") {
-      return this.desktopBridge.getStatus().appConnected
-        ? { ready: true as const }
-        : { ready: false as const, hint: "The Detach macOS app socket is not connected." };
+      return macOSReadiness(this.desktopBridge);
     }
     return this.secretBridge.isAppConnected()
       ? { ready: true as const }
