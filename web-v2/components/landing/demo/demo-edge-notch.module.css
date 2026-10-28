@@ -1,0 +1,15 @@
+.edge::before, .edge::after {
+  position: absolute;
+  content: "";
+  left: 0;
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+}
+.edge::before { top: -18px; border-radius: 0 0 0 18px; box-shadow: -7px 7px 0 6px var(--app-bg); }
+.edge::after { bottom: -18px; border-radius: 18px 0 0; box-shadow: -7px -7px 0 6px var(--app-bg); }
+.edge[data-notch-edge="right"]::before, .edge[data-notch-edge="right"]::after {
+  left: auto;
+  right: 0;
+  transform: scaleX(-1);
+}

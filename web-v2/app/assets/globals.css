@@ -1,0 +1,73 @@
+@import "tailwindcss";
+
+@custom-variant dark {
+  &:where([data-theme="dark"], [data-theme="dark"] *) { @slot; }
+  @media (prefers-color-scheme: dark) {
+    &:where(:root:not([data-theme="light"]), :root:not([data-theme="light"]) *) { @slot; }
+  }
+}
+
+@font-face {
+  font-family: "display";
+  src: url("./CursorDisplay_Medium.p.1fwtb6832xwwy.woff2");
+}
+
+@font-face {
+  font-family: "gothic";
+  src: url("./CursorGothic_Regular-s.p.33lgp-j65tbsf.woff2");
+}
+
+@font-face {
+  font-family: "mono";
+  src: url("./BerkeleyMono_Regular.p.2o12_8yhj893d.woff2");
+}
+
+.brand {
+  font-family: "display", sans-serif;
+}
+
+.gothic {
+  font-family: "gothic", sans-serif;
+}
+
+.mono {
+  font-family: "mono", sans-serif;
+}
+
+@theme inline {
+  --font-sans: var(--font-inter), Arial, sans-serif;
+  --font-mono: var(--font-geist-mono), monospace;
+  --color-background: var(--page-bg);
+  --color-foreground: var(--page-fg);
+  --color-muted: var(--page-muted);
+  --color-surface: var(--page-surface);
+  --color-card: var(--page-card);
+  --color-accent: var(--page-accent);
+}
+
+@layer base {
+  html { @apply scroll-smooth scroll-pt-28; }
+  h1 { @apply text-[clamp(2rem,5.2vw,4.5rem)] leading-[1.12] font-normal tracking-tighter; }
+  h1 > span { @apply text-muted; }
+  h2 { @apply text-[clamp(1.75rem,3.4vw,2.8rem)] leading-tight font-normal tracking-tighter; }
+  h3 { @apply text-lg font-normal tracking-tighter; }
+  a, button { @apply focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground; }
+  svg { @apply shrink-0; }
+  ::selection { @apply bg-foreground text-background; }
+}
+
+@utility mono {
+  font-family: var(--font-geist-mono), monospace;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { transition: none !important; }
+}
+
+@utility page-width {
+  width: 100%;
+  max-width: 1280px;
+  margin-inline: auto;
+  padding-inline: clamp(20px, 4.5vw, 64px);
+}
