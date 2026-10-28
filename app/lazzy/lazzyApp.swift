@@ -84,7 +84,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
       }
 
       // Supabase returns both OAuth and magic-link sign-ins here. This must be
-      // handled before the onboarding gate: the hosted branch observes the
+      // handled before the onboarding gate: integration setup observes the
       // authenticated session that this callback establishes.
       if url.host?.lowercased() == "login-callback" {
         if !AuthManager.shared.handleOAuthCallback(url) {
@@ -105,22 +105,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         continue
       }
 
-      if url.host?.lowercased() == "credits-complete" {
-        NotificationCenter.default.post(name: .detachHostedCreditsDidChange, object: nil)
-        DispatchQueue.main.async {
-          NSApp.activate(ignoringOtherApps: true)
-          if coordinator.hasCompletedOnboarding {
-            MenuBarContentView.showSettings(
-              wsManager: coordinator.wsManager,
-              onRunWorkflow: coordinator.runWorkflow
-            )
-          } else {
-            coordinator.onboardingWindow.show()
-          }
-        }
-        continue
-      }
-
       guard coordinator.hasCompletedOnboarding else {
         DispatchQueue.main.async {
           coordinator.onboardingWindow.show()
@@ -130,7 +114,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
       if url.host?.lowercased() == "finder" {
         let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-        let actionId = queryItems.first(where: { $0.name == "action" })?.value ?? "chat"
         let paths = queryItems
           .filter { $0.name == "path" }
           .compactMap(\.value)
@@ -138,7 +121,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         DispatchQueue.main.async {
           NSApp.setActivationPolicy(.accessory)
-          coordinator.runFinderQuickAction(actionId, forFinderItems: fileURLs)
+          coordinator.handleFinderFiles(fileURLs)
         }
         continue
       }
@@ -194,7 +177,6 @@ struct MenuBarContentView: View {
   @ObservedObject var appDelegate: AppDelegate
   @ObservedObject var updaterViewModel: UpdaterViewModel
   @StateObject private var auth = AuthManager.shared
-  @StateObject private var hostedSubscription = HostedSubscriptionManager.shared
   @State private var showMCPSettings = false
 
   var body: some View {
@@ -221,14 +203,7 @@ struct MenuBarContentView: View {
 
       OnboardingMenuSection(coordinator: coordinator)
 
-      if coordinator.hasCompletedOnboarding && auth.isAuthenticated {
-        Divider()
-        HostedCreditsMenuSection(
-          hostedSubscription: hostedSubscription,
-          wsManager: coordinator.wsManager,
-          onRunWorkflow: coordinator.runWorkflow
-        )
-      }
+      KeepAwakeMenuSection(controller: coordinator.keepAwake)
 
       // Button(
       //   FIFinderSyncController.isExtensionEnabled
@@ -245,6 +220,7 @@ struct MenuBarContentView: View {
         Button("Plan update") { coordinator.showNotchDebugScenario(.plan) }
         Divider()
         Button("Approval request") { coordinator.showNotchDebugScenario(.approval) }
+        Button("Clarification") { coordinator.showNotchDebugScenario(.question) }
         Button("Failure") { coordinator.showNotchDebugScenario(.failure) }
         Button("Completed") { coordinator.showNotchDebugScenario(.completed) }
         Button("Multiple agents") { coordinator.showNotchDebugScenario(.multiAgent) }
@@ -277,9 +253,6 @@ struct MenuBarContentView: View {
         Text("Initializing...")
       }
     }
-    .task(id: auth.isAuthenticated) {
-      await hostedSubscription.refresh()
-    }
   }
 
   // Store a reference to prevent deallocation
@@ -287,7 +260,7 @@ struct MenuBarContentView: View {
 
   static func showSettings(
     wsManager: WebSocketManager,
-    onRunWorkflow: ((QuickAction) -> Void)? = nil,
+    onRunWorkflow: ((SavedWorkflow) -> Void)? = nil,
     launchIntent: SettingsLaunchIntent? = nil
   ) {
     NSApp.activate(ignoringOtherApps: true)
@@ -296,7 +269,8 @@ struct MenuBarContentView: View {
     if let existingController = Self.settingsWindowController,
       let existingWindow = existingController.window
     {
-      existingWindow.contentView = NSHostingView(
+      existingWindow.isMovableByWindowBackground = false
+      existingWindow.contentView = FirstClickHostingView(
         rootView: SettingsView(
           wsManager: wsManager,
           onRunWorkflow: onRunWorkflow,
@@ -314,14 +288,14 @@ struct MenuBarContentView: View {
       backing: .buffered,
       defer: false
     )
-    window.isMovableByWindowBackground = true
+    window.isMovableByWindowBackground = false
     window.backgroundColor = .clear
     window.isOpaque = false
     window.hasShadow = true
     window.isReleasedWhenClosed = false
 
     // Create hosting view
-    let hostingView = NSHostingView(
+    let hostingView = FirstClickHostingView(
       rootView: SettingsView(
         wsManager: wsManager,
         onRunWorkflow: onRunWorkflow,
@@ -336,48 +310,6 @@ struct MenuBarContentView: View {
 
     window.center()
     controller.showWindow(nil)
-  }
-}
-
-private struct HostedCreditsMenuSection: View {
-  @ObservedObject var hostedSubscription: HostedSubscriptionManager
-  let wsManager: WebSocketManager
-  let onRunWorkflow: (QuickAction) -> Void
-
-  var body: some View {
-    if hostedSubscription.credits != nil,
-      let progress = hostedSubscription.availableCreditProgress,
-      let percentage = hostedSubscription.availableCreditPercentage
-    {
-      VStack(alignment: .leading, spacing: 7) {
-        Text("Detach Cloud credits")
-          .font(.caption)
-          .foregroundColor(.secondary)
-
-        HostedCreditsProgressView(progress: progress, percentage: percentage)
-          .frame(width: 230)
-
-        Text("\(percentage)% of allowance remaining")
-          .font(.caption2)
-          .foregroundColor(.secondary)
-
-        Button("Manage allowance…") {
-          MenuBarContentView.showSettings(
-            wsManager: wsManager,
-            onRunWorkflow: onRunWorkflow,
-            launchIntent: .account
-          )
-        }
-      }
-      .padding(.vertical, 4)
-      .onAppear {
-        Task { await hostedSubscription.refresh() }
-      }
-    } else if hostedSubscription.isLoading {
-      Text("Loading Detach Cloud credits…")
-        .font(.caption)
-        .foregroundColor(.secondary)
-    }
   }
 }
 
