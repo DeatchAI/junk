@@ -5,6 +5,7 @@ enum ComposerAttachmentMenuPage: Equatable {
   case root
   case files
   case browserTabs
+  case conversations
   case skills
   case discoverSkills
   case remoteSkillDetail
@@ -17,6 +18,7 @@ enum ComposerAttachmentMenuPage: Equatable {
 struct ComposerAttachmentPanelAnchor<MenuContent: View>: NSViewRepresentable {
   @Binding var isPresented: Bool
   let preferredWidth: CGFloat
+  var caretRect: NSRect? = nil
   /// Most picker state is owned inside the detached SwiftUI host. Refresh the
   /// root only when the page or another caller-owned mode value changes.
   /// File results are observed inside the host so AppKit does not continuously
@@ -39,6 +41,7 @@ struct ComposerAttachmentPanelAnchor<MenuContent: View>: NSViewRepresentable {
       context.coordinator.present(
         menu: menu,
         preferredWidth: preferredWidth,
+        caretRect: caretRect,
         contentRefreshID: contentRefreshID,
         from: anchorView
       )
@@ -62,6 +65,7 @@ struct ComposerAttachmentPanelAnchor<MenuContent: View>: NSViewRepresentable {
     func present(
       menu: MenuContent,
       preferredWidth: CGFloat,
+      caretRect: NSRect?,
       contentRefreshID: AnyHashable?,
       from anchorView: NSView
     ) {
@@ -72,10 +76,10 @@ struct ComposerAttachmentPanelAnchor<MenuContent: View>: NSViewRepresentable {
       if let existingHostingView = self.hostingView {
         hostingView = existingHostingView
         if shouldRefreshContent {
-          hostingView.rootView = AnyView(menu.padding(22))
+          hostingView.rootView = AnyView(menu.padding(ComposerMenuStyle.panelInset))
         }
       } else {
-        hostingView = NSHostingView(rootView: AnyView(menu.padding(22)))
+        hostingView = FirstClickHostingView(rootView: AnyView(menu.padding(ComposerMenuStyle.panelInset)))
         hostingView.layer?.backgroundColor = NSColor.clear.cgColor
         self.hostingView = hostingView
       }
@@ -119,20 +123,18 @@ struct ComposerAttachmentPanelAnchor<MenuContent: View>: NSViewRepresentable {
       var sizeChanged = false
 
       if shouldRelayout {
-        hostingView.frame.size.width = preferredWidth + 44
+        hostingView.frame.size.width = preferredWidth + ComposerMenuStyle.panelInset * 2
         hostingView.layoutSubtreeIfNeeded()
-        let fittingHeight = min(max(hostingView.fittingSize.height, 80), 390)
-        let targetSize = NSSize(width: preferredWidth + 44, height: fittingHeight)
+        let fittingHeight = min(max(hostingView.fittingSize.height, 48), 390)
+        let targetSize = NSSize(width: preferredWidth + ComposerMenuStyle.panelInset * 2, height: fittingHeight)
         let currentSize = menuPanel.contentView?.bounds.size ?? .zero
         sizeChanged = abs(currentSize.width - targetSize.width) > 0.5
           || abs(currentSize.height - targetSize.height) > 0.5
         if sizeChanged {
           menuPanel.setContentSize(targetSize)
         }
-        if isNewPanel || parentWindowChanged || sizeChanged {
-          position(menuPanel, relativeTo: anchorView)
-        }
       }
+      position(menuPanel, relativeTo: anchorView, caretRect: caretRect)
       lastPreferredWidth = preferredWidth
       if !menuPanel.isVisible {
         menuPanel.orderFront(nil)
@@ -150,20 +152,19 @@ struct ComposerAttachmentPanelAnchor<MenuContent: View>: NSViewRepresentable {
       lastPreferredWidth = nil
     }
 
-    private func position(_ panel: NSPanel, relativeTo anchorView: NSView) {
+    private func position(_ panel: NSPanel, relativeTo anchorView: NSView, caretRect: NSRect?) {
       guard let window = anchorView.window else { return }
       let boundsInWindow = anchorView.convert(anchorView.bounds, to: nil)
       let boundsInScreen = window.convertToScreen(boundsInWindow)
       let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
       let panelSize = panel.frame.size
 
-      // Align visual menu left (with 22pt transparent padding) to anchorView left with a 12pt visual inset:
-      // origin.x + 22 = boundsInScreen.minX + 12 => origin.x = boundsInScreen.minX - 10
-      var originX = boundsInScreen.minX - 10
-
-      // Position the visual top of the menu to overlap just below the top of the input view (14pt overlay):
-      // origin.y + panelSize.height - 22 = boundsInScreen.maxY - 14 => origin.y = boundsInScreen.maxY - panelSize.height + 8
-      var originY = boundsInScreen.maxY - panelSize.height + 8
+      let caret = caretRect.map { window.convertToScreen($0) } ?? boundsInScreen
+      var originX = caret.minX - ComposerMenuStyle.panelInset
+      var originY = caret.minY - panelSize.height + ComposerMenuStyle.panelInset - 4
+      if originY < visibleFrame.minY, caret.maxY + panelSize.height <= visibleFrame.maxY {
+        originY = caret.maxY + 4 - ComposerMenuStyle.panelInset
+      }
 
       originX = min(max(originX, visibleFrame.minX), visibleFrame.maxX - panelSize.width)
       originY = min(max(originY, visibleFrame.minY), visibleFrame.maxY - panelSize.height)

@@ -2,15 +2,15 @@ import SwiftUI
 
 struct WorkflowsSettingsView: View {
   @ObservedObject var wsManager: WebSocketManager
-  var onRunWorkflow: ((QuickAction) -> Void)?
+  var onRunWorkflow: ((SavedWorkflow) -> Void)?
 
   @ObservedObject private var theme = ThemeManager.shared
   @State private var showForm = false
-  @State private var editingWorkflow: QuickAction?
+  @State private var editingWorkflow: SavedWorkflow?
 
   init(
     wsManager: WebSocketManager,
-    onRunWorkflow: ((QuickAction) -> Void)? = nil,
+    onRunWorkflow: ((SavedWorkflow) -> Void)? = nil,
     startInCreateMode: Bool = false
   ) {
     self.wsManager = wsManager
@@ -110,7 +110,7 @@ struct WorkflowsSettingsView: View {
 }
 
 private struct WorkflowRow: View {
-  let workflow: QuickAction
+  let workflow: SavedWorkflow
   let onRun: () -> Void
   let onEdit: () -> Void
   let onDelete: () -> Void
@@ -206,7 +206,7 @@ private struct WorkflowRow: View {
 
 private struct WorkflowFormView: View {
   @ObservedObject var wsManager: WebSocketManager
-  let editingWorkflow: QuickAction?
+  let editingWorkflow: SavedWorkflow?
   let onDismiss: () -> Void
 
   @ObservedObject private var theme = ThemeManager.shared

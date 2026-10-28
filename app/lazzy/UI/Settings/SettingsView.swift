@@ -9,7 +9,7 @@ import SwiftUI
 
 struct SettingsView: View {
   @ObservedObject var wsManager: WebSocketManager
-  var onRunWorkflow: ((QuickAction) -> Void)? = nil
+  var onRunWorkflow: ((SavedWorkflow) -> Void)? = nil
   var launchIntent: SettingsLaunchIntent?
   @Environment(\.dismiss) var dismiss
 
@@ -23,7 +23,7 @@ struct SettingsView: View {
 
   init(
     wsManager: WebSocketManager,
-    onRunWorkflow: ((QuickAction) -> Void)? = nil,
+    onRunWorkflow: ((SavedWorkflow) -> Void)? = nil,
     launchIntent: SettingsLaunchIntent? = nil
   ) {
     self.wsManager = wsManager
@@ -34,16 +34,15 @@ struct SettingsView: View {
 
   private var menuItems: [(title: String, id: String, icon: String)] {
     return [
-      ("Account", "account", "person.crop.circle"),
       ("General", "general", "gearshape"),
-      ("Quick Actions", "quick_actions", "bolt"),
+      ("Auto router", "router", "arrow.triangle.branch"),
       ("Workflows", "workflows", "point.3.connected.trianglepath.dotted"),
-      ("MCP", "mcp", "server.rack"),
+      ("Tools & integrations", "mcp", "server.rack"),
       ("Browser", "browser", "globe"),
       ("Secrets", "secrets", "key"),
       ("Appearance", "appearance", "paintbrush"),
       ("Shortcuts", "shortcuts", "keyboard"),
-      // ("Privacy", "privacy", "hand.raised"),
+      ("Privacy & data", "privacy", "hand.raised"),
       // ("About", "about", "info.circle"),
     ]
   }
@@ -55,12 +54,12 @@ struct SettingsView: View {
         // macOS Style Close Button
         Button(action: { dismiss() }) {
           Circle()
-            .fill(Color.red)
+            .fill(theme.textColor.opacity(isCloseHovered ? 0.9 : 0.3))
             .frame(width: 12, height: 12)
             .overlay(
               Image(systemName: "xmark")
                 .font(.appFont(size: 8, weight: .bold))
-                .foregroundColor(.black.opacity(isCloseHovered ? 0.5 : 0))
+                .foregroundColor(theme.backgroundColor.opacity(isCloseHovered ? 1 : 0))
             )
         }
         .buttonStyle(.plain)
@@ -76,16 +75,17 @@ struct SettingsView: View {
         }) {
           Image(systemName: isSidebarVisible ? "sidebar.left" : "sidebar.right")
             .font(.appFont(size: 13))
-            .foregroundColor(isSidebarHovered ? theme.accentColor : theme.textColor.opacity(0.6))
+            .foregroundColor(isSidebarHovered ? theme.textColor : theme.textColor.opacity(0.6))
             .frame(width: 24, height: 24)
-            .background(isSidebarHovered ? theme.accentColor.opacity(0.1) : Color.clear)
+            .background(isSidebarHovered ? theme.textColor.opacity(0.1) : Color.clear)
             .cornerRadius(4)
         }
         .buttonStyle(.plain)
         .onHover { isSidebarHovered = $0 }
         .help(isSidebarVisible ? "Hide Sidebar" : "Show Sidebar")
 
-        Spacer()
+        SettingsWindowDragRegion()
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
 
         Text("Detach")
           .font(.appFont(size: 11, weight: .semibold))
@@ -94,16 +94,15 @@ struct SettingsView: View {
       }
       .frame(height: 42)
       .border(theme.textColor.opacity(0.25), width: 0.25)
-      .background(theme.backgroundColor)
+      .background(theme.mode == .liquidGlass ? Color.clear : theme.backgroundColor)
 
       HStack(alignment: .top, spacing: 0) {
         if isSidebarVisible {
           // Sidebar
           VStack(alignment: .leading, spacing: 4) {
-            Text("SETTINGS")
+            Text("Settings")
               .font(.appFont(size: 9, weight: .bold))
               .foregroundColor(theme.secondaryTextColor.opacity(0.7))
-              .tracking(1.1)
               .padding(.horizontal, 10)
               .padding(.bottom, 7)
 
@@ -140,7 +139,7 @@ struct SettingsView: View {
       }
     }
     .frame(width: 920, height: 680)
-    .background(theme.backgroundFill)
+    .themedSurface(in: RoundedRectangle(cornerRadius: theme.borderRadius))
     .clipShape(RoundedRectangle(cornerRadius: theme.borderRadius))
   }
 
@@ -172,7 +171,7 @@ struct SettingsView: View {
       .padding(.vertical, 8)
       .background(
         RoundedRectangle(cornerRadius: theme.borderRadius)
-          .fill(isSelected ? theme.accentColor : Color.clear)
+          .fill(isSelected ? theme.textColor : Color.clear)
       )
     }
   }
@@ -197,15 +196,12 @@ struct SettingsView: View {
           AccountSettingsView()
         case "general":
           GeneralSettingsView(wsManager: wsManager)
+        case "router":
+          RouterSettingsView(wsManager: wsManager)
         case "appearance":
           AppearanceSettingsView()
         case "shortcuts":
           ShortcutsSettingsView()
-        case "quick_actions":
-          QuickActionsSettingsView(
-            wsManager: wsManager,
-            startInCreateMode: launchIntent == .createQuickAction
-          )
         case "workflows":
           WorkflowsSettingsView(
             wsManager: wsManager,
@@ -222,7 +218,7 @@ struct SettingsView: View {
         case "secrets":
           SecretsSettingsView()
         case "privacy":
-          PrivacySettingsView()
+          PrivacySettingsView(wsManager: wsManager)
         case "about":
           AboutSettingsView()
         default:
@@ -241,9 +237,8 @@ struct SettingsView: View {
     case "general": return "General"
     case "appearance": return "Appearance"
     case "shortcuts": return "Shortcuts"
-    case "quick_actions": return "Quick Actions"
     case "workflows": return "Workflows"
-    case "mcp": return "MCP"
+    case "mcp": return "Tools & integrations"
     case "browser": return "Browser"
     case "about": return "About"
     default: return ""
@@ -306,7 +301,7 @@ struct SettingsCard<Content: View>: View {
     VStack(spacing: 0) {
       content
     }
-    .background(theme.textColor.opacity(0.025))
+    .background(theme.mode == .liquidGlass ? theme.controlBackgroundColor : theme.textColor.opacity(0.025))
     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     .overlay(
       RoundedRectangle(cornerRadius: 12, style: .continuous)

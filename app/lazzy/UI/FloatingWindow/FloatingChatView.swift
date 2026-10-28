@@ -20,6 +20,7 @@ struct FloatingChatView: View {
   @State var pendingCommandAliases: [SlashCommandAlias] = []
   @StateObject var skillsDirectory = SkillsDirectoryService()
   @StateObject var browserTabStore = BrowserTabStore()
+  @StateObject var conversationStore = ComposerConversationStore()
   @StateObject var workingDirectoryStore = WorkingDirectoryStore()
   @State var isInlineAttachmentMenuRequested = false
   @State var isInlineAttachmentMenuActive = false
@@ -27,6 +28,13 @@ struct FloatingChatView: View {
   @State var debugMenuStep: DebugComposerMenuStep?
 
   @State var inputText = ""
+  @State var editorDocumentID = UUID()
+  @State var revisionSession = ComposerRevisionSession()
+  @State var revisionTarget: ConversationBranchFrom?
+  @State var branchSubmission: ComposerBranchSubmission?
+  @State var branchRecoveryDraft: ComposerDraft?
+  @State var branchSnapshots: [String: ComposerBranchSnapshot] = [:]
+  @State var loadingBranchID: String?
   @State var messages: [ChatMessage] = []  // All chat exchanges
   @State var streamingResponse = ""  // Current streaming AI response
   @State var lastCompletedResponse = ""  // Keeps the last response visible after streaming ends
@@ -34,12 +42,6 @@ struct FloatingChatView: View {
   @State var isThinking = false  // Shows loading state before first chunk arrives
   @State var activeMessageIndex: Int? = nil  // Index of the message currently being viewed
   @State var selectedMode = "Auto"
-  @State var outputMode: ComposerOutputMode = .agent
-  @State var selectedMediaModelID = ""
-  @State var mediaConfig = MediaGenerationConfig()
-  @State var mediaQuote: MediaQuote?
-  @State var mediaQuoteRequestID = ""
-  @State var latestMediaJob: MediaJob?
   @State var isMediaDropTargeted = false
   @State var fastMode = false  // Fast mode toggle
   @FocusState var isInputFocused: Bool
@@ -56,52 +58,52 @@ struct FloatingChatView: View {
 
   // Theme manager reference
   @ObservedObject var theme = ThemeManager.shared
+  @ObservedObject var questions = AgentQuestionCenter.shared
+
+  private var pendingQuestion: AgentQuestionEnvelope? {
+    questions.question(for: ObjectIdentifier(wsManager))
+  }
 
   var body: some View {
     ZStack(alignment: .topTrailing) {
-      VStack(spacing: 12) {
+      Group {
         if controller.isExpanded {
-          expandedSection
-        } else {
-          if hasConversationNavigation {
-            FloatingChatHeaderView(
-              sessionContexts: sessionContexts,
-              messages: messages,
-              activeMessageIndex: $activeMessageIndex,
-              lastCompletedResponse: $lastCompletedResponse,
-              activeMediaJob: $latestMediaJob,
-              pendingAttachments: pendingAttachments,
-              onRemoveAttachment: removeAttachment
-            )
-            .padding(.top, 16)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
-            .zIndex(2)
+          FloatingChatExpandedLayout {
+            expandedSection
+          } composer: {
+            VStack(spacing: 12) {
+              conversationHeader
+              composerSection
+            }
           }
-        }
-
-        if !controller.isExpanded
-          && (!streamingResponse.isEmpty || !lastCompletedResponse.isEmpty
-            || !visibleResponseEvents.isEmpty || isThinking || errorMessage != nil
-            || latestMediaJob != nil)
-        {
-          responseSection
-        }
-
-        VStack(spacing: 0) {
-          inputAndToolbarSection
-          WorkingDirectoryTray(store: workingDirectoryStore)
+        } else {
+          VStack(spacing: 12) {
+            conversationHeader
+            if revisionSession.messageNumber == nil && (!streamingResponse.isEmpty || !lastCompletedResponse.isEmpty
+              || !visibleResponseEvents.isEmpty || !selectedResponseParts.isEmpty || isThinking || errorMessage != nil)
+            {
+              responseSection
+            }
+            composerSection
+          }
+          .fixedSize(horizontal: false, vertical: true)
         }
       }
       .onAppear {
         setupWSManager()
         loadCurrentConversation()
         refreshComposerResources()
+        if let text = controller.initialDraftText, inputText.isEmpty {
+          inputText = text
+          controller.initialDraftText = nil
+        }
+        wsManager.requestConversationBranches()
         // Add initial content if present
         if let content = controller.detectedContent {
           addContextIfNeeded(content)
         }
-        isInputFocused = true
+        isInputFocused = pendingQuestion == nil
+        questions.setComposerVisible(controller.isVisible, for: ObjectIdentifier(wsManager))
 #if DEBUG
         controller.onDebugDemoKeyDown = { event, functionIsDown in
           guard !isInlineAttachmentMenuActive,
@@ -117,6 +119,8 @@ struct FloatingChatView: View {
         setupShortcutMonitor()
       }
       .onDisappear {
+        rememberBranch(draft: revisionSession.originalDraft)
+        questions.setComposerVisible(false, for: ObjectIdentifier(wsManager))
         removeShortcutMonitor()
 #if DEBUG
         controller.onDebugDemoKeyDown = nil
@@ -124,10 +128,19 @@ struct FloatingChatView: View {
         debugMenuStep = nil
 #endif
       }
+      .onChange(of: controller.initialDraftText) { _, text in
+        if let text, inputText.isEmpty { inputText = text; controller.initialDraftText = nil }
+      }
       .onChange(of: controller.detectedContent) { _, newValue in
         if let content = newValue {
           addContextIfNeeded(content)
         }
+      }
+      .onChange(of: controller.isVisible) { _, visible in
+        questions.setComposerVisible(visible, for: ObjectIdentifier(wsManager))
+      }
+      .onChange(of: pendingQuestion?.id) { _, id in
+        isInputFocused = id == nil && controller.isVisible
       }
       .onChange(of: wsManager.isStreaming) { _, isStreaming in
         // Reset thinking state when streaming stops (e.g., user pressed stop)
@@ -135,24 +148,13 @@ struct FloatingChatView: View {
           isThinking = false
         }
       }
-      .onChange(of: outputMode) { _, _ in
-        selectDefaultMediaModelIfNeeded()
-        requestMediaQuote()
-      }
-      .onChange(of: selectedMediaModelID) { _, _ in
-        if let model = selectedMediaModel {
-          mediaConfig = model.defaults
-        }
-        requestMediaQuote()
-      }
-      .onChange(of: mediaConfig) { _, _ in
-        requestMediaQuote()
-      }
-      .onChange(of: pendingAttachments) { _, _ in
-        requestMediaQuote()
+      .onChange(of: wsManager.conversationBranchState) { _, state in applyBranchReferences(state) }
+      .onChange(of: wsManager.isConnected) { _, connected in
+        if connected { wsManager.requestConversationBranches() }
       }
     }
-    .padding(.top, 15)  // Add top space for the detached button
+    .padding(.top, 8)
+    .padding(.bottom, controller.isExpanded ? 8 : 0)
     // Keep the conversation and composer centered within the borderless panel.
     // A trailing-only inset made the whole surface appear to drift left whenever
     // the response or composer changed its intrinsic width.
@@ -172,7 +174,7 @@ struct FloatingChatView: View {
           .foregroundStyle(theme.textColor)
           .padding(.horizontal, 11)
           .padding(.vertical, 6)
-          .background(.ultraThinMaterial, in: Capsule())
+          .themedSurface(in: Capsule())
           .overlay(Capsule().stroke(theme.accentColor.opacity(0.55), lineWidth: 1))
           .padding(.top, 8)
           .transition(.opacity.combined(with: .scale(scale: 0.95)))
@@ -195,7 +197,41 @@ struct FloatingChatView: View {
     // contract as FloatingComposerPanel. Media players and images must fill
     // this proposal instead of shrinking the entire composer around their
     // intrinsic size.
-    .frame(width: FloatingWindowController.compactWindowWidth, alignment: .leading)
+    // Give the entire expanded hierarchy a finite native height. In particular,
+    // a history reload must not turn the transcript's ideal height into the
+    // proposal used to position the composer.
+    .frame(
+      width: FloatingWindowController.compactWindowWidth,
+      height: controller.isExpanded ? controller.expandedContentHeight : nil,
+      alignment: .topLeading
+    )
+  }
+
+  @ViewBuilder
+  private var conversationHeader: some View {
+    if hasConversationNavigation && !controller.isExpanded {
+      FloatingChatHeaderView(
+        messages: messages,
+        activeMessageIndex: $activeMessageIndex,
+        lastCompletedResponse: $lastCompletedResponse,
+        canRevise: canReviseMessages,
+        onRevise: reviseMessage
+      )
+      .padding(.horizontal, 16)
+      .zIndex(2)
+    }
+  }
+
+  private var composerSection: some View {
+    VStack(spacing: 0) {
+      ProviderConversationNotice(conversation: wsManager.currentConversation, onNewChat: startNewChat)
+      inputAndToolbarSection
+      WorkingDirectoryTray(store: workingDirectoryStore) { presented in
+        isInputFocused = !presented && pendingQuestion == nil
+      }
+    }
+    .fixedSize(horizontal: false, vertical: true)
+    .layoutPriority(1)
   }
 
   @ViewBuilder
@@ -205,25 +241,11 @@ struct FloatingChatView: View {
       isThinking: isThinking,
       streamingResponse: streamingResponse,
       currentActivity: currentActivity,
-      responseEvents: visibleResponseEvents
+      responseEvents: visibleResponseEvents,
+      canRevise: canReviseMessages,
+      onRevise: reviseMessage
     )
-    .background {
-      Group {
-        if theme.usesGlassEffect {
-          ZStack {
-            RoundedRectangle(cornerRadius: theme.borderRadius, style: .continuous)
-              .fill(.ultraThinMaterial)
-            if let overlay = theme.glassOverlay {
-              RoundedRectangle(cornerRadius: theme.borderRadius, style: .continuous)
-                .fill(overlay)
-            }
-          }
-        } else {
-          RoundedRectangle(cornerRadius: theme.borderRadius, style: .continuous)
-            .fill(theme.solidBackground)
-        }
-      }
-    }
+    .themedSurface(in: RoundedRectangle(cornerRadius: theme.borderRadius, style: .continuous))
   }
 
   @ViewBuilder
@@ -231,36 +253,18 @@ struct FloatingChatView: View {
     FloatingChatResponseView(
       streamingResponse: streamingResponse,
       lastCompletedResponse: lastCompletedResponse,
+      completedParts: selectedResponseParts,
       responseEvents: visibleResponseEvents,
       isThinking: isThinking,
       errorMessage: errorMessage,
       currentActivity: currentActivity,
-      mediaJob: latestMediaJob,
       maxStreamingHeight: maxStreamingHeight
     )
-    .background {
-      Group {
-        if theme.usesGlassEffect {
-          ZStack {
-            // 1. The Blur Layer
-            RoundedRectangle(cornerRadius: theme.borderRadius, style: .continuous)
-              .fill(.ultraThinMaterial)
-            // 2. The Universal Tint Layer (The "Sweet Spot")
-            if let overlay = theme.glassOverlay {
-              RoundedRectangle(cornerRadius: theme.borderRadius, style: .continuous)
-                .fill(overlay)
-            }
-          }
-        } else {
-          // Solid mode - no glass effect
-          RoundedRectangle(cornerRadius: theme.borderRadius, style: .continuous)
-            .fill(theme.solidBackground)
-        }
-      }
-    }
+    .themedSurface(in: RoundedRectangle(cornerRadius: theme.borderRadius, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: theme.borderRadius, style: .continuous)
-        .stroke(theme.textColor.opacity(0.10), lineWidth: 0.7)
+        .stroke(theme.textColor.opacity(theme.mode == .liquidGlass ? 0 : 0.10), lineWidth: 0.7)
+        .allowsHitTesting(false)
     }
     .transition(
       .asymmetric(
@@ -272,97 +276,94 @@ struct FloatingChatView: View {
   @ViewBuilder
   private var inputAndToolbarSection: some View {
     VStack(spacing: 0) {
-      // Main input area
-      FloatingChatInputView(
-        inputText: $inputText,
-        debugMenuStep: $debugMenuStep,
-        isInputFocused: $isInputFocused,
-        onClose: onClose,
-        onSubmit: sendMessage,
-        onPasteAttachment: handlePaste,
-        fileAttachments: pendingAttachments,
-        selectedSkills: pendingSkills,
-        selectedBrowserTabs: pendingBrowserTabs,
-        selectedMCPAttachments: pendingMCPAttachments,
-        selectedCommands: pendingCommandAliases,
-        availableMCPAttachments: availableComposerMCPAttachments,
-        isLoadingMCPAttachments: !wsManager.isConnected
-          || wsManager.isLoadingMCPServers
-          || (wsManager.isLoadingComposio && wsManager.composioIntegrations.isEmpty),
-        availableSkills: skillsDirectory.installedSkills,
-        workflows: wsManager.workflows,
-        quickActions: wsManager.customQuickActions,
-        isAttachmentMenuRequested: $isInlineAttachmentMenuRequested,
-        isAttachmentMenuActive: $isInlineAttachmentMenuActive,
-        isCommandMenuActive: $isInlineCommandMenuActive,
-        skillsDirectory: skillsDirectory,
-        workingDirectoryStore: workingDirectoryStore,
-        browserTabStore: browserTabStore,
-        onAttachFile: addFileAttachment,
-        onAttachSkill: addSkillAttachment,
-        onAttachBrowserTab: addBrowserTabAttachment,
-        onRefreshBrowserTabs: browserTabStore.refresh,
-        onAttachMCP: addMCPAttachment,
-        onOpenMCPServers: {
-          wsManager.listMCPServers()
-          wsManager.listComposioIntegrations(limit: 100)
-        },
-        onAttachCommand: addCommandAlias,
-        onCreateCommand: createInlineCommand,
-        onRunCommandAction: runComposerCommandAction,
-        onOpenCommandDestination: openComposerCommandDestination,
-        onRemoveFile: removeAttachment,
-        onRemoveSkill: removeSkillAttachment,
-        onRemoveBrowserTab: removeBrowserTabAttachment,
-        onRemoveMCP: removeMCPAttachment,
-        onRemoveCommand: removeCommandAlias,
-        voiceDictationState: controller.voiceDictationState,
-        voicePartialTranscript: controller.voicePartialTranscript
-      )
-
-      // Bottom toolbar
-      FloatingChatToolbarView(
-        fastMode: $fastMode,
-        inputText: $inputText,
-        selectedMode: $selectedMode,
-        outputMode: $outputMode,
-        selectedMediaModelID: $selectedMediaModelID,
-        mediaConfig: $mediaConfig,
-        canSend: canSendMessage,
-        wsManager: wsManager,
-        controller: controller,
-        onAttach: { isInlineAttachmentMenuRequested = true },
-        onHistory: { onToggleHistory?() },
-        onNewChat: startNewChat,
-        onStartIndexing: startIndexingMode,
-        onVoiceInput: { controller.onVoiceInputToggled?() },
-        onSend: sendMessage
-      )
-
-    }
-    .background {
-      Group {
-        if theme.usesGlassEffect {
-          ZStack {
-            // 1. The Blur Layer
-            RoundedRectangle(cornerRadius: theme.borderRadius, style: .continuous)
-              .fill(.ultraThinMaterial)
-            // 2. The Universal Tint Layer
-            if let overlay = theme.glassOverlay {
-              RoundedRectangle(cornerRadius: theme.borderRadius, style: .continuous)
-                .fill(overlay)
-            }
-          }
-        } else {
-          // Solid mode - no glass effect
-          RoundedRectangle(cornerRadius: theme.borderRadius, style: .continuous)
-            .fill(theme.solidBackground)
+      if let request = pendingQuestion {
+        ComposerQuestionView(request: request, center: questions, controller: controller, onClose: onClose)
+      } else {
+        if let number = revisionSession.messageNumber {
+          ComposerRevisionBanner(messageNumber: number, error: errorMessage, onCancel: cancelMessageRevision)
+            .padding(.horizontal, 18).padding(.top, 12)
         }
+        // Main input area
+        FloatingChatInputView(
+          inputText: $inputText,
+          debugMenuStep: $debugMenuStep,
+          isInputFocused: $isInputFocused,
+          controller: controller,
+          onClose: onClose,
+          onSubmit: sendMessage,
+          onPasteAttachment: handlePaste,
+          fileAttachments: pendingAttachments,
+          textContexts: sessionContexts,
+          onRemoveTextContext: { context in sessionContexts.removeAll { $0 == context } },
+          onAttachTextContext: addContextIfNeeded,
+          editorDocumentID: editorDocumentID,
+          selectedSkills: pendingSkills,
+          selectedBrowserTabs: pendingBrowserTabs,
+          selectedMCPAttachments: pendingMCPAttachments,
+          selectedCommands: pendingCommandAliases,
+          availableMCPAttachments: availableComposerMCPAttachments,
+          isLoadingMCPAttachments: !wsManager.isConnected
+            || wsManager.isLoadingMCPServers
+            || (wsManager.isLoadingComposio && wsManager.composioIntegrations.isEmpty),
+          availableSkills: skillsDirectory.installedSkills,
+          workflows: wsManager.workflows,
+          commands: wsManager.customSlashCommands,
+          isAttachmentMenuRequested: $isInlineAttachmentMenuRequested,
+          isAttachmentMenuActive: $isInlineAttachmentMenuActive,
+          isCommandMenuActive: $isInlineCommandMenuActive,
+          skillsDirectory: skillsDirectory,
+          workingDirectoryStore: workingDirectoryStore,
+          browserTabStore: browserTabStore,
+          conversationStore: conversationStore,
+          currentConversationID: wsManager.currentConversationId,
+          onAttachFile: addFileAttachment,
+          onAttachAttachment: addPendingAttachment,
+          onRemoveFileAttachment: removeAttachment,
+          onAttachSkill: addSkillAttachment,
+          onAttachBrowserTab: addBrowserTabAttachment,
+          onRefreshBrowserTabs: browserTabStore.refresh,
+          onAttachMCP: addMCPAttachment,
+          onOpenMCPServers: {
+            wsManager.listMCPServers()
+            wsManager.listComposioIntegrations(limit: 100)
+          },
+          onAttachCommand: addCommandAlias,
+          onCreateCommand: createInlineCommand,
+          onRunCommandAction: runComposerCommandAction,
+          onOpenCommandDestination: openComposerCommandDestination,
+          onRemoveSkill: removeSkillAttachment,
+          onRemoveBrowserTab: removeBrowserTabAttachment,
+          onRemoveMCP: removeMCPAttachment,
+          onRemoveCommand: removeCommandAlias,
+          voiceDictationState: controller.voiceDictationState,
+          voicePartialTranscript: controller.voicePartialTranscript
+        )
+
+        // Bottom toolbar
+        FloatingChatToolbarView(
+          fastMode: $fastMode,
+          inputText: $inputText,
+          selectedMode: $selectedMode,
+          canSend: canSendMessage,
+          wsManager: wsManager,
+          controller: controller,
+          onAttach: { isInlineAttachmentMenuRequested = true },
+          onHistory: { onToggleHistory?() },
+          onNewChat: startNewChat,
+          onStartIndexing: startIndexingMode,
+          onVoiceInput: { controller.onVoiceInputToggled?() },
+          onSend: sendMessage,
+          isRevising: revisionSession.messageNumber != nil,
+          branches: availableBranches,
+          onSelectBranch: switchConversationBranch
+        )
       }
     }
+    .themedSurface(in: RoundedRectangle(cornerRadius: theme.borderRadius, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: theme.borderRadius, style: .continuous)
-        .stroke(theme.textColor.opacity(0.11), lineWidth: 0.7)
+        .stroke(theme.textColor.opacity(theme.mode == .liquidGlass ? 0 : 0.11), lineWidth: 0.7)
+        .allowsHitTesting(false)
     }
   }
 

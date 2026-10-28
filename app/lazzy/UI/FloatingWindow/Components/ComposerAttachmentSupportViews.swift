@@ -5,6 +5,8 @@ struct ComposerAttachmentMenuRow: View {
   let title: String
   var subtitle: String? = nil
   let systemImage: String
+  var showsSubmenu = false
+  var showsDetail = false
   var isSelected = false
   var isHighlighted = false
   var onHover: (() -> Void)?
@@ -15,44 +17,46 @@ struct ComposerAttachmentMenuRow: View {
 
   var body: some View {
     Button(action: action) {
-      HStack(spacing: 12) {
+      HStack(spacing: 7) {
         Image(systemName: systemImage)
-          .font(.appFont(size: 14, weight: .medium))
+          .font(.appFont(size: 12))
           .foregroundColor(theme.textColor.opacity(0.7))
-          .frame(width: 20)
+          .frame(width: 16)
 
-        VStack(alignment: .leading, spacing: 2) {
           Text(title)
-            .font(.appFont(size: 13, weight: .semibold))
+            .font(.appFont(size: 13))
             .foregroundColor(theme.textColor)
             .lineLimit(1)
 
-          if let subtitle = subtitle, !subtitle.isEmpty {
+          Spacer(minLength: 4)
+          if showsDetail, let subtitle = subtitle, !subtitle.isEmpty {
             Text(subtitle)
               .font(.appFont(size: 11, weight: .regular))
               .foregroundColor(theme.secondaryTextColor)
               .lineLimit(1)
+              .truncationMode(.middle).frame(maxWidth: 100, alignment: .trailing)
           }
-        }
-
-        Spacer(minLength: 8)
 
         if isSelected {
           Image(systemName: "checkmark")
             .font(.appFont(size: 11, weight: .semibold))
             .foregroundColor(theme.accentColor)
+        } else if showsSubmenu {
+          Image(systemName: "chevron.right").font(.system(size: 8, weight: .medium))
+            .foregroundStyle(theme.secondaryTextColor)
         }
       }
       .foregroundColor(theme.textColor)
-      .padding(.horizontal, 10)
-      .padding(.vertical, 6)
-      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.horizontal, 7)
+      .frame(maxWidth: .infinity, minHeight: ComposerMenuStyle.rowHeight, maxHeight: ComposerMenuStyle.rowHeight,
+        alignment: .leading)
       .background {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
           .fill(isHighlighted || isHovered ? theme.textColor.opacity(0.06) : .clear)
       }
     }
     .buttonStyle(.plain)
+    .help(subtitle ?? title)
     .onHover {
       isHovered = $0
       if $0 { onHover?() }
@@ -71,13 +75,13 @@ struct ComposerAttachmentMenuHeader: View {
       Button(action: onBack) {
         Image(systemName: "chevron.left")
           .font(.appFont(size: 11, weight: .semibold))
-          .frame(width: 24, height: 28)
+          .frame(width: 20, height: 24)
       }
       .buttonStyle(.plain)
       .help("Back")
 
       Text(title)
-        .font(.appFont(size: 13, weight: .semibold))
+        .font(.appFont(size: 12, weight: .medium))
       Spacer()
     }
     .foregroundColor(theme.textColor)
@@ -95,7 +99,7 @@ struct ComposerAttachmentMenuEmptyState: View {
     Text(text)
       .font(.appFont(size: 12))
       .foregroundColor(theme.secondaryTextColor)
-      .frame(maxWidth: .infinity, minHeight: 72)
+      .frame(maxWidth: .infinity, minHeight: 48)
   }
 }
 
@@ -264,7 +268,7 @@ struct InlineFileBrowser: View {
           }
         }
       }
-      .frame(height: 294)
+      .frame(height: min(CGFloat(max(catalog.results.count, 1)) * (ComposerMenuStyle.rowHeight + 1), 240))
       .overlay {
         if catalog.isSearching && catalog.results.isEmpty {
           ProgressView().controlSize(.small)
@@ -349,43 +353,10 @@ struct InlineFileResultRow: View {
   let onSelect: () -> Void
   let relativeRoot: URL?
 
-  @ObservedObject private var theme = ThemeManager.shared
-  @State private var isHovered = false
-
   var body: some View {
-    Button(action: onSelect) {
-      HStack(spacing: 12) {
-        Image(systemName: item.systemImage)
-          .font(.appFont(size: 14, weight: .medium))
-          .foregroundColor(item.isDirectory ? theme.accentColor : theme.textColor.opacity(0.7))
-          .frame(width: 20)
-
-        VStack(alignment: .leading, spacing: 2) {
-          Text(item.name)
-            .font(.appFont(size: 13, weight: .semibold))
-            .foregroundColor(theme.textColor)
-            .lineLimit(1)
-
-          Text(item.relativePath(from: relativeRoot))
-            .font(.appFont(size: 11, weight: .regular))
-            .foregroundColor(theme.secondaryTextColor)
-            .lineLimit(1)
-            .truncationMode(.middle)
-        }
-
-        Spacer(minLength: 8)
-      }
-      .foregroundColor(theme.textColor)
-      .padding(.horizontal, 10)
-      .padding(.vertical, 6)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .fill(isSelected || isHovered ? theme.textColor.opacity(0.06) : .clear)
-      }
-    }
-    .buttonStyle(.plain)
-    .onHover { isHovered = $0 }
+    ComposerAttachmentMenuRow(title: item.name, subtitle: item.relativePath(from: relativeRoot),
+      systemImage: item.systemImage, showsDetail: true, isHighlighted: isSelected, action: onSelect)
+      .help(item.url.path)
   }
 }
 
@@ -396,52 +367,10 @@ struct ComposerBrowserTabRow: View {
   let onHover: () -> Void
   let onSelect: () -> Void
 
-  @ObservedObject private var theme = ThemeManager.shared
-  @State private var isHovered = false
-
   var body: some View {
-    Button(action: onSelect) {
-      HStack(spacing: 12) {
-        Image(systemName: "globe")
-          .font(.appFont(size: 14, weight: .medium))
-          .foregroundColor(theme.textColor.opacity(0.7))
-          .frame(width: 20)
-
-        VStack(alignment: .leading, spacing: 2) {
-          Text(tab.title.isEmpty ? tab.url : tab.title)
-            .font(.appFont(size: 13, weight: .semibold))
-            .foregroundColor(theme.textColor)
-            .lineLimit(1)
-
-          Text("\(tab.url) · Chrome")
-            .font(.appFont(size: 11, weight: .regular))
-            .foregroundColor(theme.secondaryTextColor)
-            .lineLimit(1)
-            .truncationMode(.middle)
-        }
-
-        Spacer(minLength: 8)
-
-        if isSelected {
-          Image(systemName: "checkmark")
-            .font(.appFont(size: 11, weight: .semibold))
-            .foregroundColor(theme.accentColor)
-        }
-      }
-      .foregroundColor(theme.textColor)
-      .padding(.horizontal, 10)
-      .padding(.vertical, 6)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .fill(isHighlighted || isHovered ? theme.textColor.opacity(0.06) : .clear)
-      }
-    }
-    .buttonStyle(.plain)
-    .onHover {
-      isHovered = $0
-      if $0 { onHover() }
-    }
-    .help(tab.url)
+    ComposerAttachmentMenuRow(title: tab.title.isEmpty ? tab.url : tab.title,
+      subtitle: URL(string: tab.url)?.host ?? tab.url, systemImage: "globe", showsDetail: true,
+      isSelected: isSelected, isHighlighted: isHighlighted, onHover: onHover, action: onSelect)
+      .help(tab.url)
   }
 }

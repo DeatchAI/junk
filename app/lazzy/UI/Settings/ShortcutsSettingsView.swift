@@ -23,21 +23,21 @@ struct ShortcutsSettingsView: View {
           // Global Shortcuts
           ShortcutSection(title: "Global") {
             ShortcutRow(
-              title: "Show Quick Actions",
-              description: "Open the menu based on selection",
-              shortcut: .init(
-                get: { ShortcutSettings.quickActions },
-                set: { ShortcutSettings.quickActions = $0 }
-              ),
-              isLast: false
-            )
-
-            ShortcutRow(
               title: "New Floating Chat",
               description: "Create a new floating agent task",
               shortcut: .init(
                 get: { ShortcutSettings.floatingChat },
                 set: { ShortcutSettings.floatingChat = $0 }
+              ),
+              isLast: false
+            )
+
+            ShortcutRow(
+              title: "Close Composer",
+              description: "Dismiss the visible composer",
+              shortcut: .init(
+                get: { ShortcutSettings.closeComposer },
+                set: { ShortcutSettings.closeComposer = $0 }
               ),
               isLast: false
             )

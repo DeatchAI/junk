@@ -29,7 +29,7 @@ struct CustomMenu: View {
   }
 
   var body: some View {
-    Button(action: { isPopoverPresented.toggle() }) {
+    Button(action: { isPopoverPresented = opensOnHover ? true : !isPopoverPresented }) {
       HStack(spacing: 8) {
         Text(selectedOption)
           .font(.appFont(size: fontSize))
@@ -53,10 +53,10 @@ struct CustomMenu: View {
           : nil
       )
     }
-    .buttonStyle(.plain)
+    .buttonStyle(ComposerButtonStyle())
     .onHover { hovering in
       isHovered = hovering
-      if opensOnHover && hovering {
+      if opensOnHover && hovering && !isPopoverPresented {
         isPopoverPresented = true
       }
     }
@@ -81,33 +81,19 @@ struct CustomMenu: View {
           .padding(6)
         }
         .frame(maxHeight: 240)
-        .background(menuBackground)
+        .themedSurface(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay {
           RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .stroke(theme.textColor.opacity(0.1), lineWidth: 0.5)
+            .stroke(theme.textColor.opacity(theme.mode == .liquidGlass ? 0 : 0.1), lineWidth: 0.5)
+            .allowsHitTesting(false)
         }
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous)),
-        opensOnHover: opensOnHover
+        opensOnHover: opensOnHover,
+        contentRevision: AnyHashable([selectedOption] + options)
       )
     }
   }
 
-  @ViewBuilder
-  private var menuBackground: some View {
-    if theme.usesGlassEffect {
-      ZStack {
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
-          .fill(.ultraThinMaterial)
-        if let overlay = theme.glassOverlay {
-          RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .fill(overlay)
-        }
-      }
-    } else {
-      RoundedRectangle(cornerRadius: 16, style: .continuous)
-        .fill(theme.solidBackground)
-    }
-  }
 
   struct MenuOptionRow: View {
     let title: String
@@ -137,7 +123,7 @@ struct CustomMenu: View {
             .fill(backgroundFill)
         )
       }
-      .buttonStyle(.plain)
+      .buttonStyle(ComposerButtonStyle())
       .onHover { isHovered = $0 }
     }
 
@@ -159,8 +145,7 @@ struct CustomMenu: View {
   }
 }
 
-/// A model menu that shows premium models as disabled with upgrade tooltip
-/// Used for AI model selection with plan-based restrictions
+/// A shared availability-aware menu for local agents and models.
 struct ModelMenu: View {
   let modelsWithAvailability: [(model: String, isAvailable: Bool)]
   @Binding var selectedOption: String
@@ -174,8 +159,9 @@ struct ModelMenu: View {
   var backgroundColor: Color? = nil
   var borderRadius: CGFloat? = nil
   var showBorder: Bool = true
-  var unavailableHelp: String = "Model only available to Pro users, upgrade to select"
+  var unavailableHelp: String = "This model is not available on this Mac."
   var opensOnHover: Bool = false
+  var showsProviderLogos: Bool = false
 
   @State private var isPopoverPresented = false
   @State private var isHovered = false
@@ -190,8 +176,14 @@ struct ModelMenu: View {
   }
 
   var body: some View {
-    Button(action: { isPopoverPresented.toggle() }) {
+    Button(action: { isPopoverPresented = opensOnHover ? true : !isPopoverPresented }) {
       HStack(spacing: 8) {
+        if showsProviderLogos,
+           let provider = AgentProvider.allCases.first(where: { $0.name == selectedOption }) {
+          Image(provider.asset).resizable().renderingMode(.template).scaledToFit()
+            .frame(width: 15, height: 15).foregroundColor(theme.textColor)
+            .accessibilityHidden(true)
+        }
         Text(selectedOption)
           .font(.appFont(size: fontSize))
           .foregroundColor(theme.textColor)
@@ -212,10 +204,10 @@ struct ModelMenu: View {
           : nil
       )
     }
-    .buttonStyle(.plain)
+    .buttonStyle(ComposerButtonStyle())
     .onHover { hovering in
       isHovered = hovering
-      if opensOnHover && hovering {
+      if opensOnHover && hovering && !isPopoverPresented {
         isPopoverPresented = true
       }
     }
@@ -231,6 +223,7 @@ struct ModelMenu: View {
                 isSelected: selectedOption == item.model,
                 isAvailable: item.isAvailable,
                 unavailableHelp: unavailableHelp,
+                showsProviderLogo: showsProviderLogos,
                 action: {
                   if item.isAvailable {
                     selectedOption = item.model
@@ -244,39 +237,28 @@ struct ModelMenu: View {
           .padding(6)
         }
         .frame(maxHeight: 240)
-        .background(menuBackground)
+        .themedSurface(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay {
           RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .stroke(theme.textColor.opacity(0.1), lineWidth: 0.5)
+            .stroke(theme.textColor.opacity(theme.mode == .liquidGlass ? 0 : 0.1), lineWidth: 0.5)
+            .allowsHitTesting(false)
         }
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous)),
-        opensOnHover: opensOnHover
+        opensOnHover: opensOnHover,
+        contentRevision: AnyHashable([selectedOption, String(showsProviderLogos)]
+          + modelsWithAvailability.flatMap { [$0.model, String($0.isAvailable)] })
       )
     }
   }
 
-  @ViewBuilder
-  private var menuBackground: some View {
-    if theme.usesGlassEffect {
-      ZStack {
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
-          .fill(.ultraThinMaterial)
-        if let overlay = theme.glassOverlay {
-          RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .fill(overlay)
-        }
-      }
-    } else {
-      RoundedRectangle(cornerRadius: 16, style: .continuous)
-        .fill(theme.solidBackground)
-    }
-  }
 
   struct ModelOptionRow: View {
     let title: String
     let isSelected: Bool
     let isAvailable: Bool
     let unavailableHelp: String
+    let showsProviderLogo: Bool
+    var usesMonochromeSelection = false
     let action: () -> Void
 
     @State private var isHovered = false
@@ -284,7 +266,13 @@ struct ModelMenu: View {
 
     var body: some View {
       Button(action: action) {
-        HStack {
+        HStack(spacing: 10) {
+          if showsProviderLogo,
+             let provider = AgentProvider.allCases.first(where: { $0.name == title }) {
+            Image(provider.asset).resizable().renderingMode(.template).scaledToFit()
+              .frame(width: 16, height: 16).foregroundColor(textColor)
+              .accessibilityHidden(true)
+          }
           Text(title)
             .font(.appFont(size: 12, weight: isSelected && isAvailable ? .medium : .regular))
             .foregroundColor(textColor)
@@ -308,7 +296,7 @@ struct ModelMenu: View {
             .fill(backgroundFill)
         )
       }
-      .buttonStyle(.plain)
+      .buttonStyle(ComposerButtonStyle())
       .disabled(!isAvailable)
       .onHover { isHovered = $0 }
       .help(isAvailable ? "" : unavailableHelp)
@@ -316,7 +304,7 @@ struct ModelMenu: View {
     
     private var textColor: Color {
       if isSelected && isAvailable {
-        return .white
+        return usesMonochromeSelection ? theme.backgroundColor : .white
       } else if !isAvailable {
         return theme.textColor.opacity(0.4)
       }
@@ -325,7 +313,7 @@ struct ModelMenu: View {
     
     private var backgroundFill: Color {
       if isSelected && isAvailable {
-        return theme.accentColor
+        return usesMonochromeSelection ? theme.textColor : theme.accentColor
       } else if isHovered && isAvailable {
         return theme.textColor.opacity(0.06)
       }

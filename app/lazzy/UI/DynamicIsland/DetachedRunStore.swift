@@ -1,108 +1,38 @@
 import Combine
 import Foundation
 
-enum DetachedRunState: Equatable {
-  case running
-  case awaitingApproval
-  case awaitingCredential
-  case completed
-  case failed
-}
-
-enum NotchDebugScenario: CaseIterable {
-  case thinking
-  case command
-  case fileChange
-  case mcpTool
-  case plan
-  case approval
-  case failure
-  case completed
-  case multiAgent
-  case multiMixedStates
-  case clear
-
-  var title: String {
-    switch self {
-    case .thinking: return "Thinking"
-    case .command: return "Terminal command"
-    case .fileChange: return "File change"
-    case .mcpTool: return "MCP tool"
-    case .plan: return "Plan update"
-    case .approval: return "Approval request"
-    case .failure: return "Failure"
-    case .completed: return "Completed"
-    case .multiAgent: return "Multiple agents"
-    case .multiMixedStates: return "Multiple states"
-    case .clear: return "Clear notch"
-    }
-  }
-}
-
-struct DetachedRunApproval: Equatable {
-  let id: String
-  let command: String
-  let description: String
-  let riskLevel: String
-}
-
-struct DetachedRunCredential: Equatable {
-  let id: String
-  let label: String
-  let origin: String
-}
-
-struct DetachedAgentRun: Identifiable, Equatable {
-  let id: String
-  var conversationId: String?
-  var agent: String
-  var prompt: String
-  var chatTitle: String
-  var status: String
-  var toolName: String?
-  var event: AgentActivityEvent?
-  var state: DetachedRunState
-  var approval: DetachedRunApproval?
-  var credential: DetachedRunCredential?
-  let isDebugPreview: Bool
-  let startedAt: Date
-  var updatedAt: Date
-
-  var isActive: Bool {
-    state == .running || state == .awaitingApproval || state == .awaitingCredential
-  }
-
-  var displayTitle: String {
-    if let event, !event.title.isEmpty { return event.title }
-    if let toolName, !toolName.isEmpty { return toolName.replacingOccurrences(of: "_", with: " ").capitalized }
-    return agent.capitalized
-  }
-
-  /// Mirrors the runtime-created title so a task can be named before history
-  /// has completed its round trip back to the macOS client.
-  var taskTitle: String {
-    chatTitle.isEmpty ? "New chat" : chatTitle
-  }
-
-  var currentActivity: String {
-    if let toolName, !toolName.isEmpty {
-      return "Using \(toolName.replacingOccurrences(of: "_", with: " "))"
-    }
-    if let event, !event.title.isEmpty, event.title != taskTitle {
-      return event.title
-    }
-    return status
-  }
-}
-
 /// The local source of truth for detached agent work. It intentionally sits above the
 /// floating chat window so closing that window never drops the user-facing run state.
 final class DetachedRunStore: ObservableObject {
   @Published private(set) var runs: [DetachedAgentRun] = []
+  var onUnreadChange: (([DetachedAgentRun]) -> Void)?
+
+  var unreadRuns: [DetachedAgentRun] {
+    runs.filter { $0.state == .completed && $0.isUnread && !$0.isDebugPreview }
+      .sorted { $0.updatedAt > $1.updatedAt }
+  }
+  var hasUnreadResults: Bool { !unreadRuns.isEmpty }
+
+  func restoreUnread(_ saved: [DetachedAgentRun]) {
+    runs.append(contentsOf: saved.filter { saved in !runs.contains { $0.id == saved.id } })
+  }
+
+  func markReviewed(conversationId: String) {
+    for index in runs.indices where runs[index].conversationId == conversationId { runs[index].isUnread = false }
+    onUnreadChange?(unreadRuns)
+  }
+
+  func clearCompletedResults() {
+    runs.removeAll { $0.state == .completed }
+    onUnreadChange?(unreadRuns)
+  }
 
   /// Includes previews so the Notch Debug menu still accurately renders its samples.
   var visibleActiveRuns: [DetachedAgentRun] {
-    runs.filter(\.isActive).sorted { $0.updatedAt > $1.updatedAt }
+    runs.filter(\.isActive).sorted {
+      if $0.needsAttention != $1.needsAttention { return $0.needsAttention }
+      return $0.startedAt < $1.startedAt
+    }
   }
 
   /// Only real agent work participates in lifecycle decisions such as completion
@@ -112,7 +42,7 @@ final class DetachedRunStore: ObservableObject {
   }
 
   var primaryRun: DetachedAgentRun? {
-    visibleActiveRuns.first ?? runs.sorted { $0.updatedAt > $1.updatedAt }.first
+    visibleActiveRuns.first ?? unreadRuns.first ?? runs.sorted { $0.updatedAt > $1.updatedAt }.first
   }
 
   var presentationRuns: [DetachedAgentRun] {
@@ -121,24 +51,38 @@ final class DetachedRunStore: ObservableObject {
       .filter { !$0.isActive }
       .sorted { $0.updatedAt > $1.updatedAt }
       .prefix(3)
-    return active + recent
+    let resumable = recent.filter { $0.state == .stopped || $0.state == .failed }
+    let live = (active + resumable).sorted {
+      if $0.needsAttention != $1.needsAttention { return $0.needsAttention }
+      return $0.startedAt < $1.startedAt
+    }
+    let ordered = live + unreadRuns + recent.filter { $0.state == .completed && $0.isDebugPreview }
+    var conversations = Set<String>()
+    return ordered.filter { conversations.insert($0.conversationId ?? $0.id).inserted }
   }
 
   var hasActiveRuns: Bool { !activeRuns.isEmpty }
+  var hasRecoverableRuns: Bool { presentationRuns.contains { $0.state == .stopped || $0.state == .failed } }
 
   var hasPendingApproval: Bool {
     runs.contains { $0.state == .awaitingApproval && $0.approval != nil }
   }
 
-  func begin(_ request: ChatRequest) {
+  func begin(_ request: ChatRequest, conversationTitle: String? = nil) {
     guard let runId = request.runId else { return }
     discardDebugPreviews()
     let prompt = compact(request.displayText ?? request.text)
-    let chatTitle = makeChatTitle(prompt)
+    let existingTitle = request.conversationId.flatMap { id in
+      runs.first(where: { $0.conversationId == id })?.chatTitle
+    }
+    let chatTitle = conversationTitle ?? existingTitle ?? makeChatTitle(request.displayText ?? request.text)
     upsert(runId) { run in
       run.agent = request.agent ?? run.agent
       run.prompt = prompt
       run.chatTitle = chatTitle
+      run.workspacePath = request.workspacePath
+      run.isUnread = false
+      run.outcome = DetachedRunOutcome()
       run.status = "Starting agent"
       run.state = .running
       run.updatedAt = .now
@@ -157,55 +101,34 @@ final class DetachedRunStore: ObservableObject {
         credential: nil,
         isDebugPreview: false,
         startedAt: .now,
-        updatedAt: .now
+        updatedAt: .now,
+        workspacePath: request.workspacePath
       )
     }
   }
 
-  func beginMedia(_ start: MediaRunStart) {
-    discardDebugPreviews()
-    let prompt = compact(start.prompt)
-    let chatTitle = makeChatTitle(prompt)
-    let kind = start.kind == "video" ? "video" : "image"
-    upsert(start.runId) { run in
-      run.agent = kind
-      run.prompt = prompt
-      run.chatTitle = chatTitle
-      run.status = "Starting \(kind) generation"
-      run.state = .running
-      run.updatedAt = .now
-    } create: {
-      DetachedAgentRun(
-        id: start.runId,
-        conversationId: nil,
-        agent: kind,
-        prompt: prompt,
-        chatTitle: chatTitle,
-        status: "Starting \(kind) generation",
-        toolName: nil,
-        event: nil,
-        state: .running,
-        approval: nil,
-        credential: nil,
-        isDebugPreview: false,
-        startedAt: .now,
-        updatedAt: .now
-      )
+  func updateConversationTitle(conversationId: String, title: String) {
+    guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+    for index in runs.indices where runs[index].conversationId == conversationId && runs[index].chatTitle != title {
+      runs[index].chatTitle = title
     }
   }
 
   func apply(_ update: AgentActivityUpdate) {
-    let runId = update.runId ?? activeRuns.first?.id
+    let matchingRun = update.conversationId.flatMap { id in activeRuns.first { $0.conversationId == id } }
+    let runId = update.runId ?? matchingRun?.id ?? (activeRuns.count == 1 ? activeRuns.first?.id : nil)
     guard let runId else { return }
     discardDebugPreviews()
 
     upsert(runId) { run in
       run.conversationId = update.conversationId ?? run.conversationId
       run.agent = update.event?.agent ?? run.agent
+      guard run.state != .stopping && run.state != .stopped && run.state != .completed && run.state != .failed else { return }
       run.status = update.status
-      run.toolName = update.toolName ?? update.event?.toolName ?? run.toolName
-      run.event = update.event ?? run.event
-      if run.state != .awaitingApproval && run.state != .awaitingCredential { run.state = .running }
+      run.toolName = update.toolName ?? update.event?.toolName
+      run.event = update.event
+      run.outcome.record(update.event)
+      if run.state != .awaitingApproval && run.state != .awaitingCredential && run.state != .awaitingInput { run.state = .running }
       run.updatedAt = .now
     } create: {
       DetachedAgentRun(
@@ -227,25 +150,76 @@ final class DetachedRunStore: ObservableObject {
     }
   }
 
+  func waitForAnswer(runId: String, question: String? = nil) {
+    update(runId) { run in
+      run.state = .awaitingInput
+      run.status = question ?? "Waiting for your answer"
+      run.toolName = nil
+      run.event = nil
+      run.updatedAt = .now
+    }
+  }
+
+  func resumeAfterAnswer(runId: String) {
+    update(runId) { run in
+      guard run.state == .awaitingInput else { return }
+      run.state = .running
+      run.status = "Continuing…"
+      run.updatedAt = .now
+    }
+  }
+
   func complete(runId: String?, conversationId: String) {
     guard let runId = resolvedRealRunId(runId: runId, conversationId: conversationId) else { return }
     update(runId) { run in
       run.conversationId = conversationId
-      run.status = "Completed"
-      run.state = .completed
+      guard run.state != .failed && run.state != .completed else { return }
+      run.state = run.state == .stopping ? .stopped : run.state == .stopped ? .stopped : .completed
+      run.isUnread = run.state == .completed
+      run.status = run.stateLabel
+      run.toolName = nil
+      run.event = nil
+      run.approval = nil
+      run.credential = nil
+      run.updatedAt = .now
+    }
+    onUnreadChange?(unreadRuns)
+  }
+
+  func fail(runId: String?, message: String) {
+    guard let runId = resolvedRealRunId(runId: runId) else { return }
+    update(runId) { run in
+      guard run.isActive, run.state != .stopping else { return }
+      run.status = compact(message)
+      run.state = .failed
       run.approval = nil
       run.credential = nil
       run.updatedAt = .now
     }
   }
 
-  func fail(runId: String?, message: String) {
-    guard let runId = resolvedRealRunId(runId: runId) else { return }
+  func requestStop(runId: String) {
     update(runId) { run in
-      run.status = compact(message)
-      run.state = .failed
+      guard run.isActive else { return }
+      run.state = .stopping
+      run.status = "Stopping…"
+      run.toolName = nil
+      run.event = nil
       run.approval = nil
       run.credential = nil
+      run.updatedAt = .now
+    }
+  }
+
+  func connectionLost(runId: String, message: String) {
+    update(runId) { run in
+      guard run.isActive else { return }
+      run.state = run.state == .stopping ? .stopped : .failed
+      run.status = run.state == .stopped ? "Stopped" : compact(message)
+      run.approval = nil
+      run.credential = nil
+      run.event = nil
+      run.toolName = nil
       run.updatedAt = .now
     }
   }
@@ -288,11 +262,11 @@ final class DetachedRunStore: ObservableObject {
     }
   }
 
-  func resolveApproval(id: String) {
+  func resolveApproval(id: String, status: String = "Continuing agent task") {
     guard let index = runs.firstIndex(where: { $0.approval?.id == id }) else { return }
     runs[index].approval = nil
     runs[index].state = .running
-    runs[index].status = "Continuing agent task"
+    runs[index].status = status
     runs[index].updatedAt = .now
   }
 
@@ -389,6 +363,8 @@ final class DetachedRunStore: ObservableObject {
         riskLevel: "normal"
       )
       run = makeRun(id: "debug-approval-run", agent: "codex", kind: "command", title: "Approval needed", status: "Waiting for your decision", state: .awaitingApproval, toolName: "git push", approval: approval)
+    case .question:
+      run = makeRun(id: "debug-question-run", agent: "preview", kind: "status", title: "Clarification preview", status: "Waiting for your answer", state: .awaitingInput)
     case .failure:
       run = makeRun(id: "debug-failure", agent: "grok", kind: "error", title: "Browser action needs attention", status: "The page did not respond to the requested action", state: .failed, toolName: "browser")
     case .completed:
@@ -433,15 +409,15 @@ final class DetachedRunStore: ObservableObject {
   /// The runtime normally echoes the client run ID. If an older/late event does
   /// not, this single-run runtime can still close the live run by conversation.
   private func resolvedRealRunId(runId: String?, conversationId: String? = nil) -> String? {
-    if let runId, runs.contains(where: { $0.id == runId && !$0.isDebugPreview }) {
-      return runId
+    if let runId {
+      return runs.contains(where: { $0.id == runId && !$0.isDebugPreview }) ? runId : nil
     }
     if let conversationId,
       let matchingRun = activeRuns.first(where: { $0.conversationId == conversationId })
     {
       return matchingRun.id
     }
-    return activeRuns.first?.id
+    return activeRuns.count == 1 ? activeRuns.first?.id : nil
   }
 
   private func upsert(

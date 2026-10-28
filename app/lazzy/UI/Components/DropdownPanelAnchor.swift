@@ -1,11 +1,6 @@
 import AppKit
 import SwiftUI
 
-enum DropdownPanelPlacement {
-  case below
-  case trailing
-}
-
 /// Hosts custom dropdown content in a reusable borderless panel.
 ///
 /// Hover-enabled anchors keep the panel alive while the pointer crosses the
@@ -17,13 +12,15 @@ struct DropdownPanelAnchor<MenuContent: View>: NSViewRepresentable {
   let menu: MenuContent
   var placement: DropdownPanelPlacement = .below
   var opensOnHover: Bool = false
+  var contentRevision: AnyHashable? = nil
+  var acceptsKeyboardInput = false
 
   func makeCoordinator() -> Coordinator {
     Coordinator(isPresented: $isPresented)
   }
 
   func makeNSView(context: Context) -> NSView {
-    let view = NSView()
+    let view = DropdownAnchorView()
     view.postsFrameChangedNotifications = true
     return view
   }
@@ -35,6 +32,8 @@ struct DropdownPanelAnchor<MenuContent: View>: NSViewRepresentable {
         menuWidth: menuWidth,
         placement: placement,
         opensOnHover: opensOnHover,
+        contentRevision: contentRevision,
+        acceptsKeyboardInput: acceptsKeyboardInput,
         from: anchorView
       )
     } else {
@@ -49,14 +48,17 @@ struct DropdownPanelAnchor<MenuContent: View>: NSViewRepresentable {
   @MainActor
   final class Coordinator {
     @Binding var isPresented: Bool
-    private var panel: NSPanel?
+    private var panel: DropdownMenuPanel?
     private var hostingView: NSHostingView<AnyView>?
     private weak var parentWindow: NSWindow?
     private weak var anchorView: NSView?
     private var clickMonitor: Any?
     private var hoverMonitor: Any?
+    private var keyMonitor: Any?
     private var dismissalWorkItem: DispatchWorkItem?
     private var opensOnHover = false
+    private var lastContentRevision: AnyHashable?
+    private var lastMenuWidth: CGFloat = 0
 
     init(isPresented: Binding<Bool>) {
       self._isPresented = isPresented
@@ -67,6 +69,8 @@ struct DropdownPanelAnchor<MenuContent: View>: NSViewRepresentable {
       menuWidth: CGFloat,
       placement: DropdownPanelPlacement,
       opensOnHover: Bool,
+      contentRevision: AnyHashable?,
+      acceptsKeyboardInput: Bool = false,
       from anchorView: NSView
     ) {
       guard let window = anchorView.window else { return }
@@ -75,24 +79,26 @@ struct DropdownPanelAnchor<MenuContent: View>: NSViewRepresentable {
       self.opensOnHover = opensOnHover
       cancelDismissal()
 
-      let rootView = AnyView(menu.padding(22))
+      let needsLayout = hostingView == nil || contentRevision == nil
+        || lastContentRevision != contentRevision || lastMenuWidth != menuWidth
+      let rootView = AnyView(menu)
       let menuHostingView: NSHostingView<AnyView>
       if let existingHostingView = hostingView {
-        existingHostingView.rootView = rootView
+        if needsLayout { existingHostingView.rootView = rootView }
         menuHostingView = existingHostingView
       } else {
-        let newHostingView = NSHostingView(rootView: rootView)
+        let newHostingView = FirstClickHostingView(rootView: rootView)
         newHostingView.layer?.backgroundColor = NSColor.clear.cgColor
         hostingView = newHostingView
         menuHostingView = newHostingView
       }
 
-      let menuPanel: NSPanel
+      let menuPanel: DropdownMenuPanel
       if let panel {
         menuPanel = panel
         menuPanel.contentView = menuHostingView
       } else {
-        menuPanel = NSPanel(
+        menuPanel = DropdownMenuPanel(
           contentRect: .zero,
           styleMask: [.borderless, .nonactivatingPanel],
           backing: .buffered,
@@ -103,15 +109,17 @@ struct DropdownPanelAnchor<MenuContent: View>: NSViewRepresentable {
         menuPanel.hasShadow = false
         menuPanel.hidesOnDeactivate = false
         menuPanel.isFloatingPanel = true
-        menuPanel.becomesKeyOnlyIfNeeded = true
         menuPanel.acceptsMouseMovedEvents = true
         menuPanel.level = window.level
         menuPanel.collectionBehavior = [.transient, .moveToActiveSpace, .fullScreenAuxiliary]
         menuPanel.contentView = menuHostingView
         panel = menuPanel
       }
+      menuPanel.acceptsKeyboardInput = acceptsKeyboardInput
+      menuPanel.becomesKeyOnlyIfNeeded = !acceptsKeyboardInput
 
       setupClickMonitor()
+      setupKeyMonitor()
 
       if parentWindow !== window {
         parentWindow?.removeChildWindow(menuPanel)
@@ -119,11 +127,19 @@ struct DropdownPanelAnchor<MenuContent: View>: NSViewRepresentable {
         parentWindow = window
       }
       menuPanel.level = window.level
+      DropdownPanelSession.shared.activate(menuPanel, parent: window) { [weak self] in
+        self?.dismiss()
+        DispatchQueue.main.async { [weak self] in self?.isPresented = false }
+      }
 
-      menuHostingView.frame.size.width = menuWidth + 44
-      menuHostingView.layoutSubtreeIfNeeded()
-      let fittingHeight = min(max(menuHostingView.fittingSize.height, 40), 320)
-      menuPanel.setContentSize(NSSize(width: menuWidth + 44, height: fittingHeight))
+      if needsLayout {
+        menuHostingView.frame.size.width = menuWidth
+        menuHostingView.layoutSubtreeIfNeeded()
+        let fittingHeight = min(max(menuHostingView.fittingSize.height, 40), 320)
+        menuPanel.setContentSize(NSSize(width: menuWidth, height: fittingHeight))
+        lastContentRevision = contentRevision
+        lastMenuWidth = menuWidth
+      }
       position(menuPanel, relativeTo: anchorView, placement: placement)
 
       if opensOnHover {
@@ -131,14 +147,21 @@ struct DropdownPanelAnchor<MenuContent: View>: NSViewRepresentable {
       } else {
         removeHoverMonitor()
       }
-      menuPanel.orderFront(nil)
+      if !menuPanel.isVisible {
+        if acceptsKeyboardInput { menuPanel.makeKeyAndOrderFront(nil) }
+        else { menuPanel.orderFront(nil) }
+      }
     }
 
     func dismiss() {
       cancelDismissal()
       removeClickMonitor()
       removeHoverMonitor()
+      removeKeyMonitor()
       guard let panel else { return }
+      let restoreParentFocus = panel.isKeyWindow
+      DropdownPanelSession.shared.remove(panel)
+      lastContentRevision = nil
 
       for child in panel.childWindows ?? [] {
         panel.removeChildWindow(child)
@@ -146,6 +169,7 @@ struct DropdownPanelAnchor<MenuContent: View>: NSViewRepresentable {
       }
       parentWindow?.removeChildWindow(panel)
       panel.orderOut(nil)
+      if restoreParentFocus { parentWindow?.makeKey() }
       parentWindow = nil
     }
 
@@ -158,22 +182,9 @@ struct DropdownPanelAnchor<MenuContent: View>: NSViewRepresentable {
       let boundsInWindow = anchorView.convert(anchorView.bounds, to: nil)
       let boundsInScreen = window.convertToScreen(boundsInWindow)
       let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
-      let panelSize = panel.frame.size
-
-      var originX: CGFloat
-      var originY: CGFloat
-      switch placement {
-      case .below:
-        originX = boundsInScreen.minX - 22
-        originY = boundsInScreen.minY - panelSize.height + 18
-      case .trailing:
-        originX = boundsInScreen.maxX - 22
-        originY = boundsInScreen.maxY - panelSize.height + 22
-      }
-
-      originX = min(max(originX, visibleFrame.minX), visibleFrame.maxX - panelSize.width)
-      originY = min(max(originY, visibleFrame.minY), visibleFrame.maxY - panelSize.height)
-      panel.setFrameOrigin(NSPoint(x: originX, y: originY))
+      let frame = DropdownPanelLayout.frame(anchor: boundsInScreen, size: panel.frame.size,
+                                            visibleFrame: visibleFrame, placement: placement)
+      if panel.frame.origin != frame.origin { panel.setFrameOrigin(frame.origin) }
     }
 
     private func setupClickMonitor() {
@@ -199,6 +210,20 @@ struct DropdownPanelAnchor<MenuContent: View>: NSViewRepresentable {
       }
     }
 
+    private func setupKeyMonitor() {
+      guard keyMonitor == nil else { return }
+      keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        guard let self, let panel = self.panel, panel.isVisible,
+          event.window === panel || event.window === self.parentWindow,
+          event.keyCode == 53,
+          event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
+        else { return event }
+        self.isPresented = false
+        self.dismiss()
+        return nil
+      }
+    }
+
     private func updateHover(at location: NSPoint) {
       guard opensOnHover, panel != nil else { return }
       if pointerIsInsidePanelOrAnchor(location) {
@@ -219,7 +244,7 @@ struct DropdownPanelAnchor<MenuContent: View>: NSViewRepresentable {
         self.isPresented = false
       }
       dismissalWorkItem = workItem
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(160), execute: workItem)
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(120), execute: workItem)
     }
 
     private func pointerIsInsidePanelOrAnchor(_ location: NSPoint) -> Bool {
@@ -230,7 +255,9 @@ struct DropdownPanelAnchor<MenuContent: View>: NSViewRepresentable {
       guard let anchorView, let window = anchorView.window else { return false }
       let boundsInWindow = anchorView.convert(anchorView.bounds, to: nil)
       let boundsInScreen = window.convertToScreen(boundsInWindow)
-      return boundsInScreen.insetBy(dx: -5, dy: -5).contains(location)
+      if boundsInScreen.insetBy(dx: -2, dy: -2).contains(location) { return true }
+      guard let panel else { return false }
+      return DropdownPanelLayout.hoverBridge(anchor: boundsInScreen, panel: panel.frame).contains(location)
     }
 
     private func containsMouse(_ location: NSPoint, in window: NSWindow) -> Bool {
@@ -258,5 +285,23 @@ struct DropdownPanelAnchor<MenuContent: View>: NSViewRepresentable {
         self.clickMonitor = nil
       }
     }
+
+    private func removeKeyMonitor() {
+      if let keyMonitor {
+        NSEvent.removeMonitor(keyMonitor)
+        self.keyMonitor = nil
+      }
+    }
   }
+}
+
+/// Searchable custom menus can take focus without changing ordinary hover menus.
+private final class DropdownMenuPanel: NSPanel {
+  var acceptsKeyboardInput = false
+  override var canBecomeKey: Bool { acceptsKeyboardInput }
+}
+
+/// The geometry anchor is behind the SwiftUI button and must never take its clicks.
+private final class DropdownAnchorView: NSView {
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

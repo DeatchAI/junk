@@ -216,9 +216,9 @@ struct DownloadableImageView: View {
             .font(.appFont(size: 10, weight: .medium))
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(.ultraThinMaterial)
+            .themedSurface(in: RoundedRectangle(cornerRadius: 12))
             .cornerRadius(12)
-            .foregroundColor(.white)
+            .foregroundColor(theme.textColor)
           }
           .buttonStyle(.plain)
           .help("Download Image")

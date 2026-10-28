@@ -127,6 +127,7 @@ struct CommandApprovalView: View {
     }
     .padding()
     .frame(width: 450)
+    .themedSurface(in: Rectangle())
     .onAppear {
       startTimer()
     }

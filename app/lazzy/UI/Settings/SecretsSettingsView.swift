@@ -404,6 +404,8 @@ private struct ApplePasswordsImportSheet: View {
     }
     .padding(28)
     .frame(width: 540, height: 510)
+    .themedSurface(in: RoundedRectangle(cornerRadius: 16))
+    .presentationBackground(.clear)
     .fileImporter(isPresented: $showsFileImporter, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
       if case .success(let url) = result { load(url) }
       if case .failure(let error) = result { status = error.localizedDescription }

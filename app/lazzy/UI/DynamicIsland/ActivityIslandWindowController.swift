@@ -12,8 +12,14 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
     let animated: Bool
   }
 
+  private struct PresentationPreferences: Equatable {
+    let enabled = AppSettings.notchLiveActivitiesEnabled
+    let placement = AppSettings.activityIslandPlacement
+  }
+
   private var islandWindow: NSPanel?
   private let runStore: DetachedRunStore
+  private let controls: DetachedRunControls
   private var completionDismissWorkItem: DispatchWorkItem?
   private var hoverCollapseWorkItem: DispatchWorkItem?
   private var approvalShakeWorkItems: [DispatchWorkItem] = []
@@ -29,29 +35,68 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
 
   @Published private(set) var isVisible = false
   @Published private(set) var isExpanded = false
-
-  /// Adds a small amount of breathing room without creating a second lane
-  /// beneath the physical camera cutout.
-  static let compactHeightPadding: CGFloat = 6
+  @Published private(set) var placement = AppSettings.activityIslandPlacement
+  @Published private(set) var physicalNotchHeight: CGFloat = 40
 
   var onOpenConversation: ((String) -> Void)?
   var onApprovalResponse: ((String, Bool) -> Void)?
 
-  private var physicalNotchHeight: CGFloat = 40
-  /// Keep the compact panel close to the hardware notch while leaving enough
-  /// room for the logo and count badge at opposite ends.
-  private let compactSideLaneWidth: CGFloat = 84
-
-  init(runStore: DetachedRunStore) {
+  init(runStore: DetachedRunStore, controls: DetachedRunControls) {
     self.runStore = runStore
+    self.controls = controls
     super.init()
+    NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+      .map { _ in PresentationPreferences() }
+      .prepend(PresentationPreferences())
+      .removeDuplicates()
+      .dropFirst()
+      .receive(on: RunLoop.main)
+      .sink { [weak self] preferences in
+        self?.updatePreferences(enabled: preferences.enabled, placement: preferences.placement)
+      }
+      .store(in: &cancellables)
+    NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
+      .receive(on: RunLoop.main)
+      .sink { [weak self] _ in self?.refreshVisibleFrame() }
+      .store(in: &cancellables)
     runStore.$runs
       .receive(on: RunLoop.main)
       .sink { [weak self] _ in
-        guard let self, self.isVisible, self.isExpanded, let window = self.islandWindow else { return }
-        self.applyFrame(to: window, expanded: true)
+        guard let self, self.isVisible else { return }
+        if !self.runStore.hasActiveRuns && !self.runStore.hasRecoverableRuns && !self.runStore.hasUnreadResults
+          && !self.runStore.presentationRuns.contains(where: \.isDebugPreview) {
+          self.hide()
+        } else if self.isExpanded, let window = self.islandWindow {
+          self.applyFrame(to: window, expanded: true)
+        }
       }
       .store(in: &cancellables)
+  }
+
+  private func updatePreferences(enabled: Bool, placement: ActivityIslandPlacement) {
+    if self.placement != placement {
+      stopApprovalShake()
+      resetPendingFrameWork()
+      hoverCollapseWorkItem?.cancel()
+      hoverCollapseWorkItem = nil
+      isPointerHovering = false
+      self.placement = placement
+    }
+    guard enabled else {
+      hide()
+      return
+    }
+    if isVisible {
+      refreshVisibleFrame()
+      if !hasPendingInterrupt { setHovering(false) }
+    } else if runStore.hasActiveRuns || runStore.hasUnreadResults || hasPendingInterrupt {
+      present()
+    }
+  }
+
+  private func refreshVisibleFrame() {
+    guard isVisible, let window = islandWindow else { return }
+    applyFrame(to: window, expanded: isExpanded)
   }
 
   func show() {
@@ -65,12 +110,17 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
   }
 
   private func present() {
-    completionDismissWorkItem?.cancel()
-    completionDismissWorkItem = nil
-    guard !runStore.presentationRuns.isEmpty else {
+    guard AppSettings.notchLiveActivitiesEnabled else {
       hide()
       return
     }
+    completionDismissWorkItem?.cancel()
+    completionDismissWorkItem = nil
+    guard !runStore.presentationRuns.isEmpty || AgentQuestionCenter.shared.current != nil else {
+      hide()
+      return
+    }
+    if hasPendingInterrupt { isExpanded = true }
     if islandWindow == nil { createWindow() }
     guard let window = islandWindow else { return }
 
@@ -87,7 +137,8 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
     guard isVisible else { return }
 
     let dismissal = DispatchWorkItem { [weak self] in
-      guard let self, !self.runStore.hasActiveRuns else { return }
+      guard let self, !self.runStore.hasActiveRuns, !self.runStore.hasRecoverableRuns,
+        !self.runStore.hasUnreadResults else { return }
       self.hide()
     }
     completionDismissWorkItem = dismissal
@@ -97,17 +148,29 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
   func showApproval() {
     // Approval and credential requests are interrupts: they must be visible
     // even while the originating chat is open, otherwise a waiting agent looks stuck.
+    hoverCollapseWorkItem?.cancel()
+    hoverCollapseWorkItem = nil
     isExpanded = true
     shouldShakeForInterrupt = true
     present()
     startInterruptShakeIfReady()
   }
 
+  func focusQuestion() {
+    showApproval()
+    islandWindow?.makeKeyAndOrderFront(nil)
+  }
+
   /// Makes the notch visible just before a composer animates into it. Returning
   /// the final panel frame lets the source panel use the same destination,
   /// producing a single continuous handoff rather than two unrelated fades.
   func beginComposerHandoff() -> NSRect? {
+    guard AppSettings.notchLiveActivitiesEnabled else { return nil }
     guard runStore.hasActiveRuns else { return nil }
+    if hasPendingInterrupt {
+      showApproval()
+      return islandWindow?.frame
+    }
     if islandWindow == nil { createWindow() }
     guard let window = islandWindow else { return nil }
 
@@ -144,6 +207,7 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
   }
 
   func setExpanded(_ expanded: Bool, animated: Bool) {
+    guard expanded || !hasPendingInterrupt else { return }
     guard isExpanded != expanded else { return }
     isExpanded = expanded
     guard let window = islandWindow else { return }
@@ -169,6 +233,7 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
       setExpanded(true, animated: true)
       return
     }
+    guard !hasPendingInterrupt else { return }
 
     // Resizing the panel can briefly move the AppKit hover boundary. Waiting
     // through that handoff prevents a false exit/re-entry loop from making
@@ -184,8 +249,8 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
   private func createWindow() {
     let screen = NSScreen.main ?? NSScreen.screens.first
     physicalNotchHeight = physicalNotchSize(for: screen).height
-    let initialSize = panelSize(for: screen, expanded: false)
-    let panel = NSPanel(
+    let initialSize = panelFrame(for: screen, expanded: false).size
+    let panel = AgentQuestionPanel(
       contentRect: NSRect(origin: .zero, size: initialSize),
       styleMask: [.borderless, .nonactivatingPanel],
       backing: .buffered,
@@ -206,7 +271,7 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
     let view = ActivityIslandView(
       store: runStore,
       controller: self,
-      physicalNotchHeight: physicalNotchHeight,
+      controls: controls,
       onToggle: { [weak self] in self?.toggleExpanded() },
       onOpenConversation: { [weak self] conversationId in
         self?.onOpenConversation?(conversationId)
@@ -233,13 +298,7 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
 
     let screen = window.screen ?? NSScreen.main ?? NSScreen.screens.first
     guard let screen else { return }
-    let size = panelSize(for: screen, expanded: expanded)
-    let frame = NSRect(
-      x: screen.frame.midX - size.width / 2,
-      y: screen.frame.maxY - size.height,
-      width: size.width,
-      height: size.height
-    )
+    let frame = panelFrame(for: screen, expanded: expanded)
     guard window.frame != frame else {
       frameUpdateDidSettle(on: window)
       return
@@ -313,7 +372,11 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
       let workItem = DispatchWorkItem { [weak self, weak window] in
         guard let self, let window, self.approvalShakeGeneration == generation else { return }
         var frame = restingFrame
-        frame.origin.x += offset
+        if self.placement.isSide {
+          frame.origin.y += offset
+        } else {
+          frame.origin.x += offset
+        }
         window.setFrame(frame, display: true)
         if index == offsets.count - 1 {
           self.isShakingApproval = false
@@ -338,40 +401,35 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
     isShakingApproval = false
   }
 
-  private func panelSize(for screen: NSScreen?, expanded: Bool) -> CGSize {
+  private func panelFrame(for screen: NSScreen?, expanded: Bool) -> NSRect {
     let physicalNotch = physicalNotchSize(for: screen)
-    guard expanded else {
-      return CGSize(
-        width: physicalNotch.width + (compactSideLaneWidth * 2),
-        // Compact mode is exactly as tall as the physical camera cutout.
-        // Its controls occupy the visible side lanes on either end.
-        height: physicalNotch.height + Self.compactHeightPadding
-      )
-    }
-
-    let contentSize = sizeForExpandedState
-    let availableWidth = max(360, (screen?.visibleFrame.width ?? contentSize.width) - 48)
-    let compactWidth = physicalNotch.width + (compactSideLaneWidth * 2)
-    return CGSize(
-      width: min(max(contentSize.width, compactWidth), availableWidth),
-      height: physicalNotch.height + contentSize.height
+    if physicalNotchHeight != physicalNotch.height { physicalNotchHeight = physicalNotch.height }
+    let screenFrame = screen?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+    return ActivityIslandLayout.frame(
+      placement: placement,
+      screenFrame: screenFrame,
+      visibleFrame: screen?.visibleFrame ?? screenFrame,
+      physicalNotch: physicalNotch,
+      expanded: expanded,
+      contentSize: sizeForExpandedState
     )
   }
 
   private var sizeForExpandedState: CGSize {
-    if runStore.hasPendingApproval || hasPendingCredential {
-      return CGSize(width: 560, height: 70)
-    }
-    let taskCount = min(max(runStore.presentationRuns.count, 1), 5)
-    let dividerCount = max(taskCount - 1, 0)
-    return CGSize(
-      width: 560,
-      height: min(380, 36 + CGFloat(taskCount * 64 + dividerCount))
+    ActivityIslandContentLayout.size(
+      taskCount: runStore.presentationRuns.count,
+      hasQuestion: AgentQuestionCenter.shared.current != nil,
+      hasApproval: runStore.hasPendingApproval,
+      hasCredential: hasPendingCredential
     )
   }
 
   private var hasPendingCredential: Bool {
     runStore.presentationRuns.contains { $0.credential != nil }
+  }
+
+  private var hasPendingInterrupt: Bool {
+    runStore.hasPendingApproval || hasPendingCredential || AgentQuestionCenter.shared.current != nil
   }
 
   /// The compact state must occupy the hardware cutout exactly. Using the

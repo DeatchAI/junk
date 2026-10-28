@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct AgentModelMenu: View {
+  let agents: [(model: String, isAvailable: Bool)]
+  let selectedAgentName: String
+  let onSelectAgent: (String) -> Void
   let models: [AgentModelCapability]
   let selectedModelID: String?
   @Binding var selectedModelName: String
@@ -11,82 +14,72 @@ struct AgentModelMenu: View {
   let onSelectModel: (String?) -> Void
   let onSelectReasoningEffort: (String?) -> Void
   let onReset: () -> Void
-
-  var fontSize: CGFloat = 13
-  var horizontalPadding: CGFloat = 12
-  var verticalPadding: CGFloat = 6
-  var iconSize: CGFloat = 10
-  var backgroundColor: Color? = nil
-  var borderRadius: CGFloat? = nil
-  var showBorder: Bool = true
-  var opensOnHover: Bool = false
+  var contextSummary: ChatContextSummary? = nil
+  var isNewConversation = true
 
   @State private var isPopoverPresented = false
-  @State private var isHovered = false
   @ObservedObject private var theme = ThemeManager.shared
+  @ObservedObject private var router = AutoRouter.shared
 
-  private var effectiveBackgroundColor: Color {
-    backgroundColor ?? theme.inputBackgroundColor
+  private var contentRevision: AnyHashable {
+    var values = [selectedModelID ?? "", selectedModelName, selectedEffort ?? "", agentID, String(isLoading), String(router.configuration.enabled), String(router.configuration.fixedChoice.isAutomatic), String(isNewConversation)]
+    values.append(contextSummary?.runId ?? "")
+    for agent in agents { values.append(contentsOf: [agent.model, String(agent.isAvailable)]) }
+    for model in models {
+      values.append(contentsOf: [model.id, model.displayName, model.reasoningLabel ?? ""])
+      values.append(contentsOf: model.reasoningEfforts ?? [])
+    }
+    return AnyHashable(values)
   }
 
-  private var effectiveBorderRadius: CGFloat {
-    borderRadius ?? (theme.borderRadius / 1.5)
+  private var autoSelected: Bool { isNewConversation && router.configuration.enabled && router.configuration.fixedChoice.isAutomatic }
+
+  private var menuPanel: some View {
+    AgentModelMenuPanel(
+      agents: agents,
+      selectedAgentName: selectedAgentName,
+      onSelectAgent: onSelectAgent,
+      models: models,
+      selectedModelID: selectedModelID,
+      selectedModelName: selectedModelName,
+      selectedModel: selectedModel,
+      selectedEffort: selectedEffort,
+      agentID: agentID,
+      isLoading: isLoading,
+      onSelectModel: onSelectModel,
+      onSelectReasoningEffort: onSelectReasoningEffort,
+      onReset: onReset,
+      contextSummary: contextSummary,
+      isNewConversation: isNewConversation
+    )
   }
 
   var body: some View {
     Button(action: { isPopoverPresented.toggle() }) {
-      HStack(spacing: 8) {
-        Text(selectedModelName)
-          .font(.appFont(size: fontSize))
-          .foregroundColor(theme.textColor)
-          .lineLimit(1)
-          .padding(.trailing, 4)
-        Image(systemName: "chevron.up")
-          .font(.appFont(size: iconSize, weight: .bold))
-          .foregroundColor(theme.secondaryTextColor)
-      }
-      .padding(.horizontal, horizontalPadding)
-      .padding(.vertical, verticalPadding)
-      .background(effectiveBackgroundColor)
-      .cornerRadius(effectiveBorderRadius)
-      .overlay(
-        showBorder
-          ? RoundedRectangle(cornerRadius: effectiveBorderRadius)
-            .stroke(isHovered ? theme.accentColor.opacity(0.5) : theme.borderColor, lineWidth: 0.5)
-          : nil
-      )
+      ComposerBrainIcon()
+        .frame(width: 15, height: 15)
+        .foregroundStyle(theme.secondaryTextColor)
+        .frame(width: 26, height: 26)
     }
-    .buttonStyle(.plain)
-    .onHover { hovering in
-      isHovered = hovering
-      if opensOnHover && hovering {
-        isPopoverPresented = true
-      }
-    }
-    .help("Choose a model and configure its reasoning")
+    .buttonStyle(ComposerButtonStyle())
+    .help(autoSelected ? "Auto" : "\(selectedAgentName) · \(selectedModelName)")
+    .accessibilityLabel("Agent and model")
+    .accessibilityValue(autoSelected ? "Auto" : "\(selectedAgentName), \(selectedModelName)")
     .background {
       DropdownPanelAnchor(
         isPresented: $isPopoverPresented,
         menuWidth: 236,
-        menu: AgentModelMenuPanel(
-          models: models,
-          selectedModelID: selectedModelID,
-          selectedModelName: selectedModelName,
-          selectedModel: selectedModel,
-          selectedEffort: selectedEffort,
-          agentID: agentID,
-          isLoading: isLoading,
-          onSelectModel: onSelectModel,
-          onSelectReasoningEffort: onSelectReasoningEffort,
-          onReset: onReset
-        ),
-        opensOnHover: opensOnHover
+        menu: menuPanel,
+        contentRevision: contentRevision
       )
     }
   }
 }
 
 private struct AgentModelMenuPanel: View {
+  let agents: [(model: String, isAvailable: Bool)]
+  let selectedAgentName: String
+  let onSelectAgent: (String) -> Void
   let models: [AgentModelCapability]
   let selectedModelID: String?
   let selectedModelName: String
@@ -97,10 +90,19 @@ private struct AgentModelMenuPanel: View {
   let onSelectModel: (String?) -> Void
   let onSelectReasoningEffort: (String?) -> Void
   let onReset: () -> Void
+  let contextSummary: ChatContextSummary?
+  let isNewConversation: Bool
 
+  @State private var isAgentSubmenuPresented = false
   @State private var isModelSubmenuPresented = false
   @State private var isReasoningSubmenuPresented = false
+  @State private var isPermissionSubmenuPresented = false
+  @State private var isContextPresented = false
+  @State private var permissionMode = AgentPermissionMode.native
   @ObservedObject private var theme = ThemeManager.shared
+  @ObservedObject private var router = AutoRouter.shared
+
+  private var autoSelected: Bool { isNewConversation && router.configuration.enabled && router.configuration.fixedChoice.isAutomatic }
 
   private var settingsLabel: String {
     if let label = selectedModel?.reasoningLabel, !label.isEmpty {
@@ -128,6 +130,26 @@ private struct AgentModelMenuPanel: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 2) {
       AgentNestedMenuRow(
+        title: "Agent",
+        value: autoSelected ? "Auto" : selectedAgentName,
+        menuWidth: 220,
+        isPresented: $isAgentSubmenuPresented,
+        opensOnHover: true,
+        menu: AgentProviderChoicesMenu(agents: agents, selectedAgentName: selectedAgentName,
+          autoSelected: autoSelected, showsAuto: isNewConversation, onSelectAuto: {
+            router.configuration.fixedChoice = RouterPreset()
+            router.configuration.enabled = true
+            isAgentSubmenuPresented = false
+          }) { agent in
+          if isNewConversation { router.configuration.enabled = false }
+          isAgentSubmenuPresented = false
+          onSelectAgent(agent)
+        },
+        contentRevision: AnyHashable([selectedAgentName, String(autoSelected), String(isNewConversation)]
+          + agents.flatMap { [$0.model, String($0.isAvailable)] })
+      )
+
+      if !autoSelected { AgentNestedMenuRow(
         title: "Model",
         value: selectedModelName,
         menuWidth: 220,
@@ -141,10 +163,12 @@ private struct AgentModelMenuPanel: View {
             isModelSubmenuPresented = false
             onSelectModel(modelID)
           }
-        )
-      )
+        ),
+        contentRevision: AnyHashable([selectedModelID ?? "", String(isLoading)]
+          + models.flatMap { [$0.id, $0.displayName] })
+      ) }
 
-      if hasReasoningSettings {
+      if !autoSelected && hasReasoningSettings {
         AgentNestedMenuRow(
           title: settingsLabel,
           value: selectedEffortLabel,
@@ -158,13 +182,34 @@ private struct AgentModelMenuPanel: View {
               isReasoningSubmenuPresented = false
               onSelectReasoningEffort(effort)
             }
-          )
+          ),
+          contentRevision: AnyHashable([selectedEffort ?? ""] + reasoningEfforts)
         )
       }
 
       Divider()
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
+
+      if AgentPermissionMode.supportsOverrides(for: agentID) {
+        AgentNestedMenuRow(
+          title: "Permissions", value: permissionMode.title(for: agentID), menuWidth: 210,
+          isPresented: $isPermissionSubmenuPresented,
+          menu: AgentPermissionChoicesView(agentID: agentID, selected: permissionMode) { mode in
+            permissionMode = mode
+            DetachSettings.setPermissionMode(mode, for: agentID)
+            isPermissionSubmenuPresented = false
+          },
+          contentRevision: permissionMode.rawValue
+        )
+      }
+
+      AgentNestedMenuRow(
+        title: "Context", value: "Last message", menuWidth: 292,
+        isPresented: $isContextPresented,
+        menu: AgentContextDetailView(summary: contextSummary),
+        contentRevision: contextSummary?.runId
+      )
 
       Button(action: onReset) {
         HStack(spacing: 8) {
@@ -179,35 +224,27 @@ private struct AgentModelMenuPanel: View {
         .padding(.vertical, 7)
         .contentShape(Rectangle())
       }
-      .buttonStyle(.plain)
+      .buttonStyle(ComposerButtonStyle())
       .disabled(selectedEffort == nil)
     }
     .padding(6)
     .frame(width: 236, alignment: .leading)
-    .background(menuBackground)
+    .themedSurface(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 16, style: .continuous)
-        .stroke(theme.textColor.opacity(0.1), lineWidth: 0.5)
+        .stroke(theme.textColor.opacity(theme.mode == .liquidGlass ? 0 : 0.1), lineWidth: 0.5)
+        .allowsHitTesting(false)
     }
     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-  }
-
-  @ViewBuilder
-  private var menuBackground: some View {
-    if theme.usesGlassEffect {
-      ZStack {
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
-          .fill(.ultraThinMaterial)
-        if let overlay = theme.glassOverlay {
-          RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .fill(overlay)
-        }
-      }
-    } else {
-      RoundedRectangle(cornerRadius: 16, style: .continuous)
-        .fill(theme.solidBackground)
+    .onAppear { permissionMode = DetachSettings.permissionMode(for: agentID) }
+    .onChange(of: agentID) { permissionMode = DetachSettings.permissionMode(for: agentID) }
+    .onReceive(NotificationCenter.default.publisher(for: DetachSettings.permissionModeDidChange)) { notification in
+      guard notification.userInfo?["agent"] as? String == agentID else { return }
+      let current = DetachSettings.permissionMode(for: agentID)
+      if permissionMode != current { permissionMode = current }
     }
   }
+
 }
 
 private struct AgentNestedMenuRow<MenuContent: View>: View {
@@ -217,11 +254,12 @@ private struct AgentNestedMenuRow<MenuContent: View>: View {
   @Binding var isPresented: Bool
   var opensOnHover: Bool = false
   let menu: MenuContent
+  var contentRevision: AnyHashable? = nil
 
   @ObservedObject private var theme = ThemeManager.shared
 
   var body: some View {
-    Button(action: { isPresented.toggle() }) {
+    Button(action: { isPresented = opensOnHover ? true : !isPresented }) {
       HStack(spacing: 8) {
         Text(title)
           .font(.appFont(size: 12))
@@ -239,9 +277,9 @@ private struct AgentNestedMenuRow<MenuContent: View>: View {
       .padding(.vertical, 8)
       .contentShape(Rectangle())
     }
-    .buttonStyle(.plain)
+    .buttonStyle(ComposerButtonStyle())
     .onHover { hovering in
-      if opensOnHover && hovering {
+      if opensOnHover && hovering && !isPresented {
         isPresented = true
       }
     }
@@ -251,7 +289,8 @@ private struct AgentNestedMenuRow<MenuContent: View>: View {
         menuWidth: menuWidth,
         menu: menu,
         placement: .trailing,
-        opensOnHover: opensOnHover
+        opensOnHover: opensOnHover,
+        contentRevision: contentRevision
       )
     }
   }
@@ -297,30 +336,15 @@ private struct AgentModelChoicesMenu: View {
     }
     .frame(width: 220)
     .frame(maxHeight: 260)
-    .background(menuBackground)
+    .themedSurface(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 16, style: .continuous)
-        .stroke(theme.textColor.opacity(0.1), lineWidth: 0.5)
+        .stroke(theme.textColor.opacity(theme.mode == .liquidGlass ? 0 : 0.1), lineWidth: 0.5)
+        .allowsHitTesting(false)
     }
     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
   }
 
-  @ViewBuilder
-  private var menuBackground: some View {
-    if theme.usesGlassEffect {
-      ZStack {
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
-          .fill(.ultraThinMaterial)
-        if let overlay = theme.glassOverlay {
-          RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .fill(overlay)
-        }
-      }
-    } else {
-      RoundedRectangle(cornerRadius: 16, style: .continuous)
-        .fill(theme.solidBackground)
-    }
-  }
 }
 
 private struct AgentReasoningChoicesMenu: View {
@@ -350,30 +374,15 @@ private struct AgentReasoningChoicesMenu: View {
     }
     .padding(6)
     .frame(width: 220, alignment: .leading)
-    .background(menuBackground)
+    .themedSurface(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 16, style: .continuous)
-        .stroke(theme.textColor.opacity(0.1), lineWidth: 0.5)
+        .stroke(theme.textColor.opacity(theme.mode == .liquidGlass ? 0 : 0.1), lineWidth: 0.5)
+        .allowsHitTesting(false)
     }
     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
   }
 
-  @ViewBuilder
-  private var menuBackground: some View {
-    if theme.usesGlassEffect {
-      ZStack {
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
-          .fill(.ultraThinMaterial)
-        if let overlay = theme.glassOverlay {
-          RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .fill(overlay)
-        }
-      }
-    } else {
-      RoundedRectangle(cornerRadius: 16, style: .continuous)
-        .fill(theme.solidBackground)
-    }
-  }
 }
 
 private struct AgentNestedChoiceRow: View {
@@ -396,7 +405,7 @@ private struct AgentNestedChoiceRow: View {
         if isSelected && isAvailable {
           Image(systemName: "checkmark")
             .font(.appFont(size: 10, weight: .bold))
-            .foregroundColor(.white)
+            .foregroundColor(textColor)
         }
       }
       .padding(.horizontal, 10)
@@ -406,19 +415,19 @@ private struct AgentNestedChoiceRow: View {
           .fill(backgroundFill)
       )
     }
-    .buttonStyle(.plain)
+    .buttonStyle(ComposerButtonStyle())
     .disabled(!isAvailable)
     .onHover { isHovered = $0 }
   }
 
   private var textColor: Color {
-    if isSelected && isAvailable { return .white }
+    if isSelected && isAvailable { return theme.backgroundColor }
     if !isAvailable { return theme.textColor.opacity(0.4) }
     return theme.textColor
   }
 
   private var backgroundFill: Color {
-    if isSelected && isAvailable { return theme.accentColor }
+    if isSelected && isAvailable { return theme.textColor }
     if isHovered && isAvailable { return theme.textColor.opacity(0.06) }
     return .clear
   }

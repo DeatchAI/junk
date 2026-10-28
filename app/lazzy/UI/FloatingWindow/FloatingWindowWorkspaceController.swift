@@ -120,7 +120,8 @@ final class FloatingWindowWorkspaceController: ObservableObject {
   func openNewTask(
     at location: NSPoint,
     with content: DetectedContent? = nil,
-    conversationId: String? = nil
+    conversationId: String? = nil,
+    centered: Bool = false
   ) -> Task {
     let wsManager = WebSocketManager()
     // Set the identity before connecting or constructing the chat view. This
@@ -153,10 +154,11 @@ final class FloatingWindowWorkspaceController: ObservableObject {
     // A small repeating offset makes a burst of shortcut presses read as a
     // stack of distinct tasks instead of apparently opening the same panel.
     let stackIndex = (tasks.count - 1) % 5
-    let offset = CGFloat(stackIndex) * 26
+    let offset = centered ? 0 : CGFloat(stackIndex) * 26
     controller.show(
       at: NSPoint(x: location.x + offset, y: location.y - offset),
-      with: content
+      with: content,
+      centered: centered
     )
     markTaskActive(task)
     return task
@@ -164,7 +166,7 @@ final class FloatingWindowWorkspaceController: ObservableObject {
 
   @discardableResult
   func openConversation(_ conversationId: String, at location: NSPoint) -> Task {
-    openNewTask(at: location, conversationId: conversationId)
+    openNewTask(at: location, conversationId: conversationId, centered: true)
   }
 
   /// Prefer the task that already owns this stream. Its SwiftUI state contains
@@ -190,6 +192,12 @@ final class FloatingWindowWorkspaceController: ObservableObject {
     task.controller.bringToFront()
     markTaskActive(task)
     return true
+  }
+
+  func dismissFrontmostTask() {
+    let task = tasks.last(where: { $0.controller.isFrontmost && $0.controller.isVisible })
+      ?? tasks.last(where: { $0.controller.isVisible })
+    task?.controller.dismiss()
   }
 
   /// Voice input follows the user's active task instead of leaking text into a

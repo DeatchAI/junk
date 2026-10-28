@@ -98,6 +98,8 @@ extension FloatingChatInputView {
         .joined(separator: "\u{1F}")
       let selection = selectedBrowserTabs.map(\.id).sorted().map(String.init).joined(separator: "\u{1F}")
       return AnyHashable("\(browserTabStore.isLoading)|\(browserTabStore.errorMessage ?? "")|\(tabs)|\(selection)")
+    case .conversations:
+      return AnyHashable(conversationStore.contentRevision + fileAttachments.compactMap(\.conversationID).joined())
     case .skills:
       return AnyHashable(availableSkills.map(\.id).joined(separator: "\u{1F}"))
     case .discoverSkills, .remoteSkillDetail:
@@ -121,12 +123,10 @@ extension FloatingChatInputView {
     return String(inputText[afterTrigger...].prefix { !$0.isWhitespace && !$0.isNewline })
   }
 
-  func updateAttachmentMenuTrigger(for value: String) {
-    if value.last == "@" {
-      let beforeMention = value.dropLast().last
-      guard beforeMention == nil || beforeMention?.isWhitespace == true else { return }
-
-      mentionTriggerOffset = value.count - 1
+  func updateAttachmentMenuTrigger(for value: String, previousValue: String) {
+    if let triggerOffset = insertedComposerTriggerOffset(
+      from: previousValue, to: value, character: "@") {
+      mentionTriggerOffset = triggerOffset
       attachmentMenuPage = .root
       isAttachmentMenuPresented = true
       dismissSlashCommandMenu()
@@ -141,6 +141,9 @@ extension FloatingChatInputView {
       dismissAttachmentMenu()
     } else if attachmentMenuPage == .discoverSkills {
       skillsDirectory.search(query: skillsSearchQuery)
+    } else if attachmentMenuPage == .conversations {
+      conversationStore.cancelAttachment()
+      conversationStore.search(skillsSearchQuery)
     } else if attachmentMenuPage == .files {
       if workingDirectoryStore.url == nil {
         chooseFilesFromMac()
@@ -157,12 +160,10 @@ extension FloatingChatInputView {
     }
   }
 
-  func updateSlashCommandTrigger(for value: String) {
-    if value.last == "/" {
-      let beforeSlash = value.dropLast().last
-      guard beforeSlash == nil || beforeSlash?.isWhitespace == true else { return }
-
-      slashTriggerOffset = value.count - 1
+  func updateSlashCommandTrigger(for value: String, previousValue: String) {
+    if let triggerOffset = insertedComposerTriggerOffset(
+      from: previousValue, to: value, character: "/") {
+      slashTriggerOffset = triggerOffset
       isSlashCommandMenuPresented = true
       dismissAttachmentMenu()
       return
@@ -180,8 +181,34 @@ extension FloatingChatInputView {
     }
   }
 
+  private func insertedComposerTriggerOffset(
+    from previousValue: String,
+    to value: String,
+    character: Character
+  ) -> Int? {
+    let previous = Array(previousValue)
+    let current = Array(value)
+    var prefixLength = 0
+    while prefixLength < previous.count, prefixLength < current.count,
+      previous[prefixLength] == current[prefixLength] {
+      prefixLength += 1
+    }
+
+    var suffixLength = 0
+    while suffixLength < previous.count - prefixLength,
+      suffixLength < current.count - prefixLength,
+      previous[previous.count - suffixLength - 1] == current[current.count - suffixLength - 1] {
+      suffixLength += 1
+    }
+
+    guard current.count - prefixLength - suffixLength == 1,
+      current[prefixLength] == character else { return nil }
+    guard prefixLength == 0 || current[prefixLength - 1].isWhitespace else { return nil }
+    return prefixLength
+  }
+
   func completeFileAttachment(_ url: URL) {
-    replaceMentionToken(with: inlineFileToken(for: url))
+    consumeMentionTrigger()
     onAttachFile(url)
   }
 
@@ -230,7 +257,6 @@ extension FloatingChatInputView {
   func attachDroppedFiles(_ urls: [URL]) {
     var attachedPaths = Set(fileAttachments.map(\.fileRequest.path))
     for url in urls where url.isFileURL && attachedPaths.insert(url.path).inserted {
-      appendInlineToken(inlineFileToken(for: url))
       onAttachFile(url)
     }
     isInputFocused.wrappedValue = true
@@ -239,7 +265,6 @@ extension FloatingChatInputView {
   func attachDroppedImage(_ image: NSImage) {
     guard let attachment = AttachmentHelper.createAttachment(from: image) else { return }
     onAttachFile(URL(fileURLWithPath: attachment.fileRequest.path))
-    appendInlineToken(inlineFileToken(for: URL(fileURLWithPath: attachment.fileRequest.path)))
     isInputFocused.wrappedValue = true
   }
 
@@ -249,7 +274,6 @@ extension FloatingChatInputView {
       await MainActor.run {
         let fileURL = URL(fileURLWithPath: attachment.fileRequest.path)
         onAttachFile(fileURL)
-        appendInlineToken(inlineFileToken(for: fileURL))
         isInputFocused.wrappedValue = true
       }
     }
@@ -285,7 +309,7 @@ extension FloatingChatInputView {
     isInputFocused.wrappedValue = true
   }
 
-  func completeSlashAction(_ action: QuickAction) {
+  func completeSlashAction(_ action: SavedWorkflow) {
     consumeSlashCommandToken()
     onRunCommandAction(action)
   }
@@ -364,6 +388,8 @@ extension FloatingChatInputView {
     attachmentMenuPage = .root
     mentionTriggerOffset = nil
     fileCatalog.cancel()
+    conversationStore.cancelSearch()
+    conversationStore.cancelAttachment()
   }
 
   func dismissSlashCommandMenu() {
@@ -392,7 +418,6 @@ extension FloatingChatInputView {
       // Use the same attachment callback as the visible file picker. The
       // scripted URL is a real file or folder, so it travels with the request.
       onAttachFile(url)
-      appendInlineToken(inlineFileToken(for: url))
       isInputFocused.wrappedValue = true
     case .dismissAttachmentMenu:
       dismissAttachmentMenu()
@@ -453,10 +478,6 @@ extension FloatingChatInputView {
     "@\(skill.name.replacingOccurrences(of: " ", with: "-"))"
   }
 
-  func inlineFileToken(for url: URL) -> String {
-    "@\(url.lastPathComponent.replacingOccurrences(of: " ", with: "-"))"
-  }
-
   func inlineBrowserTabToken(for tab: BrowserTab) -> String {
     inlineBrowserTabToken(title: tab.title, id: tab.id)
   }
@@ -494,12 +515,6 @@ extension FloatingChatInputView {
     for skill in selectedSkills where !containsInlineToken(inlineSkillToken(for: skill), in: text) {
       onRemoveSkill(skill)
     }
-    for file in fileAttachments {
-      let token = "@\(file.fileName.replacingOccurrences(of: " ", with: "-"))"
-      if !containsInlineToken(token, in: text) {
-        onRemoveFile(file)
-      }
-    }
     for tab in selectedBrowserTabs where !containsInlineToken(inlineBrowserTabToken(for: tab), in: text) {
       onRemoveBrowserTab(tab)
     }
@@ -516,10 +531,6 @@ extension FloatingChatInputView {
     }
     for skill in selectedSkills where inlineSkillToken(for: skill) == token {
       onRemoveSkill(skill)
-      return
-    }
-    for file in fileAttachments where "@\(file.fileName.replacingOccurrences(of: " ", with: "-"))" == token {
-      onRemoveFile(file)
       return
     }
     for tab in selectedBrowserTabs where inlineBrowserTabToken(for: tab) == token {

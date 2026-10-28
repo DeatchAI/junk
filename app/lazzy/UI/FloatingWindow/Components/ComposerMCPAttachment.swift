@@ -1,6 +1,6 @@
 import Foundation
 
-struct ComposerMCPAttachment: Identifiable, Hashable {
+struct ComposerMCPAttachment: Identifiable, Hashable, Codable {
   let id: String
   let serverId: String
   let name: String

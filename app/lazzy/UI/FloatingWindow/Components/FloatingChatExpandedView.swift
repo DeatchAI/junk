@@ -7,6 +7,8 @@ struct FloatingChatExpandedView: View {
   let streamingResponse: String
   let currentActivity: String
   let responseEvents: [AgentResponseEvent]
+  var canRevise = true
+  var onRevise: ((Int) -> Void)? = nil
 
   @ObservedObject private var theme = ThemeManager.shared
 
@@ -24,28 +26,44 @@ struct FloatingChatExpandedView: View {
     ScrollViewReader { proxy in
       ScrollView {
         VStack(alignment: .leading, spacing: 20) {
-          ForEach(messages) { msg in
+          ForEach(Array(messages.enumerated()), id: \.element.id) { index, msg in
             // User Message
             HStack {
-              Spacer()
-              Text(cleanMarkerContent(msg.userPrompt))
+              Spacer(minLength: 0)
+              VStack(alignment: .leading, spacing: 8) {
+                if !msg.attachments.isEmpty {
+                  ComposerAttachmentList(attachments: msg.attachments)
+                }
+                Text(cleanMarkerContent(msg.userPrompt))
+                if let onRevise {
+                  HStack {
+                    Spacer()
+                    Button { onRevise(index) } label: {
+                      Image(systemName: "pencil").font(.system(size: 11))
+                        .frame(width: 22, height: 22)
+                    }
+                    .buttonStyle(.plain).disabled(!canRevise || msg.branchReference?.canBranch != true)
+                    .foregroundStyle(theme.secondaryTextColor)
+                    .help("Edit message in a new branch")
+                    .accessibilityLabel("Edit message \(index + 1)")
+                  }
+                }
+              }
                 .font(.appFont(size: 14))
+                .fixedSize(horizontal: false, vertical: true)
                 .foregroundColor(theme.textColor)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
-                .background(theme.accentColor.opacity(0.15))
+                .background(theme.textColor.opacity(0.06))
                 .cornerRadius(12)
             }
             .padding(.leading, 40)
 
             // AI Response
-            if let mediaJob = msg.mediaJob {
-              GeneratedMediaCard(job: mediaJob)
-                .padding(.trailing, 20)
-            } else if let response = msg.aiResponse {
+            if let response = msg.aiResponse {
               HStack(alignment: .top, spacing: 12) {
                 // AI Icon/Avatar could go here
-                MarkdownMessageView(text: response)
+                ChatTranscriptView(parts: ChatTranscript.parts(text: response, structured: msg.responseParts))
                   .padding(.horizontal, 4)
               }
               .padding(.trailing, 20)
@@ -70,13 +88,16 @@ struct FloatingChatExpandedView: View {
               }
             }
             .padding(.trailing, 20)
-            .id("bottom")
           }
 
-          Spacer().frame(height: 20)
+          Color.clear.frame(height: 1).id("bottom")
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
       }
+      .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+      .clipped()
+      .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
       .onChange(of: streamingResponse) { _, _ in
         if !streamingResponse.isEmpty {
           proxy.scrollTo("bottom", anchor: .bottom)
@@ -94,6 +115,6 @@ struct FloatingChatExpandedView: View {
       displayContent = String(displayContent[range.upperBound...])
     }
     displayContent = displayContent.replacingOccurrences(of: "\"User Context:\"\n", with: "")
-    return displayContent.trimmingCharacters(in: .whitespacesAndNewlines)
+    return ConversationPrompt.readable(displayContent)
   }
 }

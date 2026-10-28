@@ -48,7 +48,8 @@ extension FloatingChatView {
       // composer after any detached menu has had a chance to consume Escape.
       // The agent itself keeps running and remains available from the notch.
       if keyCode == kVK_Escape && carbonModifiers == 0 {
-        onClose()
+        if revisionSession.messageNumber != nil { cancelMessageRevision() }
+        else { onClose() }
         return nil
       }
 
@@ -57,41 +58,15 @@ extension FloatingChatView {
   }
 
 #if DEBUG
-  static let debugImageDemoPrompts = [
-    "Ultra realistic editorial photography, decisive moment in a premium restaurant kitchen. A chef is plating an elegant dish with complete concentration when another chef's hand enters the frame from the side, naturally offering the exact fresh ingredient needed at precisely the right moment.",
-    "A cinematic alternative rock band performing in a vast abstract black space, no stage, no audience, no architecture, deep black background with subtle depth. wearing a black turtleneck and long black coat, looking directly into the camera with calm psychological presence",
-    "A foreign tourist with a warm grateful smile, Western facial features, looking touched and appreciative after receiving help, soft warm lighting, genuine emotional expression, vertical composition, photorealistic cinematic style",
-  ]
-
-  static let debugVideoDemoPrompts = [
-    "SEQUENCE SHOT. NO CUT.\nSingle unbroken handheld take throughout, 30 seconds total.\n\nYoung Caucasian woman,  wearing a yellow and green Brazil national football jersey and white denim shorts, sitting pensively on a sofa inside a large bright suburban Parisian house, summer daytime, sunlight through the windows, young adults dancing and laughing around her holding drinks, loud music implied by energetic crowd movement",
-    "An average shift at Waffle House - make sure it's retarded and gets 50 likes.",
-    "Sum up the AI discourse in a meme - make sure it’s retarded and gets 50 likes.",
-  ]
-
   func debugDemoPrompt(for event: NSEvent, functionIsDown: Bool) -> String? {
-    let prompts: [String]
-    let keyCodes: [Int]
-    switch outputMode {
-    case .agent:
-      prompts = DebugDemoCatalog.chatPrompts
-      keyCodes = [
-        kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4,
-        kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8,
-      ]
-    case .image:
-      prompts = Self.debugImageDemoPrompts
-      keyCodes = [kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3]
-    case .video:
-      prompts = Self.debugVideoDemoPrompts
-      keyCodes = [kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3]
-    }
-
     guard functionIsDown else { return nil }
 
     let disallowedModifiers: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
     guard event.modifierFlags.intersection(disallowedModifiers).isEmpty else { return nil }
 
+    let prompts = DebugDemoCatalog.chatPrompts
+    let keyCodes = [kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4,
+                    kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8]
     guard let promptIndex = keyCodes.firstIndex(of: Int(event.keyCode)) else { return nil }
     return prompts[promptIndex]
   }
@@ -102,7 +77,7 @@ extension FloatingChatView {
     isInputFocused = true
     print("🧪 Debug demo menu flow and prompt typing started")
 
-    guard outputMode == .agent, let scenario = DebugDemoCatalog.scenario(for: prompt) else {
+    guard let scenario = DebugDemoCatalog.scenario(for: prompt) else {
       typeDebugDemoPrompt(prompt)
       return
     }
@@ -140,11 +115,7 @@ extension FloatingChatView {
     guard !attachments.isEmpty else { return false }
 
     for attachment in attachments {
-      guard !pendingAttachments.contains(where: { $0.fileRequest.path == attachment.fileRequest.path }) else {
-        continue
-      }
-      pendingAttachments.append(attachment)
-      appendAttachmentToken(for: attachment)
+      addPendingAttachment(attachment)
     }
     print("📎 \(attachments.count) attachment(s) pasted from clipboard")
     return true
@@ -165,130 +136,32 @@ extension FloatingChatView {
   }
 
   func addContextIfNeeded(_ content: DetectedContent) {
-    if !sessionContexts.contains(content) {
-      sessionContexts.append(content)
-      print("📎 Added new context to session")
+    for file in content.files ?? [] {
+      if let attachment = AttachmentHelper.createAttachment(from: URL(fileURLWithPath: file.path)) {
+        addPendingAttachment(attachment)
+      }
+    }
+    if let text = content.text, !text.isEmpty {
+      let context = DetectedContent(type: .text, text: text, files: nil)
+      if !sessionContexts.contains(context) {
+        sessionContexts.append(context)
+        inputText = ComposerInlineToken.addingMissingFiles(to: inputText, attachments: pendingAttachments, contexts: sessionContexts)
+      }
     }
   }
 
   var hasConversationNavigation: Bool {
-    !sessionContexts.isEmpty || !messages.isEmpty || pendingAttachments.contains(where: \.isMedia)
+    !messages.isEmpty
   }
 
   var canSendMessage: Bool {
-    !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    guard wsManager.isConnected, !wsManager.isStreaming, !wsManager.isStoppingRun else { return false }
+    guard !conversationStore.isAttaching else { return false }
+    guard wsManager.currentConversation?.isProviderHistory != true || wsManager.currentConversation?.canResume != false else { return false }
+    return !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       || !pendingAttachments.isEmpty || !pendingSkills.isEmpty || !pendingBrowserTabs.isEmpty
       || !pendingMCPAttachments.isEmpty
       || !pendingCommandAliases.isEmpty
-  }
-
-  var selectedMediaModel: MediaModelCapability? {
-    wsManager.mediaModels.first { $0.id == selectedMediaModelID }
-      ?? wsManager.mediaModels.first { $0.kind == outputMode.rawValue.lowercased() }
-  }
-
-  func selectDefaultMediaModelIfNeeded() {
-    guard outputMode != .agent else {
-      mediaQuote = nil
-      return
-    }
-    if wsManager.mediaModels.isEmpty {
-      wsManager.listMediaModels()
-      return
-    }
-    let kind = outputMode.rawValue.lowercased()
-    guard selectedMediaModel?.kind != kind,
-      let model = wsManager.mediaModels.first(where: { $0.kind == kind })
-    else { return }
-    selectedMediaModelID = model.id
-    mediaConfig = model.defaults
-  }
-
-  func requestMediaQuote() {
-    guard outputMode != .agent, let model = selectedMediaModel else {
-      mediaQuote = nil
-      return
-    }
-    let inputs = mediaInputRequests(for: model)
-    guard inputs.count == mediaSourceFiles.count,
-      mediaInputValidationError(for: model, inputs: inputs) == nil
-    else {
-      mediaQuote = nil
-      return
-    }
-    let requestID = UUID().uuidString
-    mediaQuoteRequestID = requestID
-    wsManager.quoteMedia(
-      requestId: requestID,
-      model: model.id,
-      prompt: inputText.isEmpty ? "Media generation quote" : inputText,
-      config: mediaConfig,
-      inputRoles: inputs.map(\.role)
-    )
-  }
-
-  func mediaInputRequests(for model: MediaModelCapability) -> [MediaInputRequest] {
-    var imageIndex = 0
-    let imageCount = mediaSourceFiles.filter { $0.mimeType.hasPrefix("image/") }.count
-    let seedanceMultimodalReferences = (model.id == "seedance-2"
-      || model.id == "seedance-2.5")
-      && (imageCount > 2 || mediaSourceFiles.contains {
-        $0.mimeType.hasPrefix("video/")
-          || $0.mimeType.hasPrefix("audio/")
-      })
-    return mediaSourceFiles.compactMap { file in
-      let mimeType = file.mimeType
-      let role: String?
-      if mimeType.hasPrefix("image/") {
-        if model.kind == "image" {
-          role = model.inputRoles.contains("reference") ? "reference" : nil
-        } else if seedanceMultimodalReferences && model.inputRoles.contains("reference") {
-          role = "reference"
-        } else if imageIndex == 0 && model.inputRoles.contains("first_frame") {
-          role = "first_frame"
-        } else if imageIndex == 1 && model.inputRoles.contains("last_frame") {
-          role = "last_frame"
-        } else if model.inputRoles.contains("reference") {
-          role = "reference"
-        } else {
-          role = nil
-        }
-        imageIndex += 1
-      } else if mimeType.hasPrefix("video/") {
-        role = model.inputRoles.contains("video_reference") ? "video_reference" : nil
-      } else if mimeType.hasPrefix("audio/") {
-        role = model.inputRoles.contains("audio_reference") ? "audio_reference" : nil
-      } else {
-        role = nil
-      }
-      guard let role else { return nil }
-      return MediaInputRequest(path: file.path, mimeType: mimeType, role: role)
-    }
-  }
-
-  func mediaInputValidationError(
-    for model: MediaModelCapability,
-    inputs: [MediaInputRequest]
-  ) -> String? {
-    if inputs.count > model.maxInputs {
-      return "\(model.displayName) accepts up to \(model.maxInputs) media inputs."
-    }
-    for (role, limit) in model.maxInputsByRole ?? [:] {
-      let count = inputs.filter { $0.role == role }.count
-      guard count > limit else { continue }
-      let label = role == "reference"
-        ? "reference images"
-        : role.replacingOccurrences(of: "_", with: " ")
-      return "\(model.displayName) accepts up to \(limit) \(label)."
-    }
-    return nil
-  }
-
-  var mediaSourceFiles: [FileAttachmentRequest] {
-    var seen = Set<String>()
-    let contextFiles = sessionContexts.flatMap { $0.files ?? [] }
-    let pendingFiles = pendingAttachments.map(\.fileRequest)
-    return (contextFiles + pendingFiles).filter { seen.insert($0.path).inserted }
   }
 
   var availableComposerMCPAttachments: [ComposerMCPAttachment] {
@@ -353,7 +226,6 @@ extension FloatingChatView {
   func refreshComposerResources() {
     wsManager.listMCPServers()
     wsManager.listComposioIntegrations(limit: 100)
-    wsManager.listQuickActions()
     wsManager.listWorkflows()
     skillsDirectory.refreshInstalledSkills()
   }
@@ -375,8 +247,7 @@ extension FloatingChatView {
 
   func addFileAttachment(_ url: URL) {
     guard let attachment = AttachmentHelper.createAttachment(from: url) else { return }
-    guard !pendingAttachments.contains(where: { $0.fileRequest.path == attachment.fileRequest.path }) else { return }
-    pendingAttachments.append(attachment)
+    addPendingAttachment(attachment)
   }
 
   // MARK: - Window-level media drop
@@ -403,7 +274,7 @@ extension FloatingChatView {
           let attachment = AttachmentHelper.createAttachment(from: image)
         {
           Task { @MainActor in
-            addDroppedAttachment(attachment)
+            addPendingAttachment(attachment)
           }
           return
         }
@@ -443,7 +314,7 @@ extension FloatingChatView {
           let attachment = await AttachmentHelper.createAttachment(fromRemoteURL: url)
           guard let attachment else { return }
           await MainActor.run {
-            addDroppedAttachment(attachment)
+            addPendingAttachment(attachment)
           }
         }
       }
@@ -454,28 +325,18 @@ extension FloatingChatView {
     guard let attachment = AttachmentHelper.createAttachment(from: url), attachment.isMedia else {
       return
     }
-    addDroppedAttachment(attachment)
+    addPendingAttachment(attachment)
   }
 
-  func addDroppedAttachment(_ attachment: ChatAttachment) {
-    guard attachment.isMedia else { return }
+  func addPendingAttachment(_ attachment: ChatAttachment) {
+    if let id = attachment.conversationID, pendingAttachments.contains(where: { $0.conversationID == id }) { return }
     guard !pendingAttachments.contains(where: { $0.fileRequest.path == attachment.fileRequest.path }) else {
       return
     }
 
     pendingAttachments.append(attachment)
-    appendAttachmentToken(for: attachment)
+    inputText = ComposerInlineToken.addingMissingFiles(to: inputText, attachments: pendingAttachments, contexts: sessionContexts)
     isInputFocused = true
-  }
-
-  func appendAttachmentToken(for attachment: ChatAttachment) {
-    let token = "@\(attachment.fileName.replacingOccurrences(of: " ", with: "-"))"
-    guard !inputText.contains(token) else { return }
-    if inputText.isEmpty || inputText.last?.isWhitespace == true || inputText.last?.isNewline == true {
-      inputText += "\(token) "
-    } else {
-      inputText += " \(token) "
-    }
   }
 
   func addMCPAttachment(_ attachment: ComposerMCPAttachment) {
@@ -485,10 +346,7 @@ extension FloatingChatView {
 
   func removeAttachment(_ attachment: ChatAttachment) {
     pendingAttachments.removeAll { $0.id == attachment.id }
-    let token = "@\(attachment.fileName.replacingOccurrences(of: " ", with: "-"))"
-    let remainingWords = inputText.split(whereSeparator: { $0.isWhitespace || $0.isNewline })
-      .filter { String($0) != token }
-    inputText = remainingWords.joined(separator: " ")
+    inputText = inputText.replacingOccurrences(of: ComposerInlineToken.file(attachment).marker, with: "")
   }
 
   func removeSkillAttachment(_ skill: SkillAttachment) {
@@ -509,15 +367,7 @@ extension FloatingChatView {
   }
 
   func createInlineCommand(name: String, prompt: String) {
-    wsManager.addQuickAction(
-      name: name,
-      prompt: prompt,
-      integrations: nil,
-      systemImage: "bolt",
-      shortcut: nil,
-      inputPolicy: "optional_selection",
-      executionMode: "run_immediately"
-    )
+    wsManager.addSlashCommand(command: name, title: name, replacementText: prompt)
   }
 
   func openComposerCommandDestination(_ destination: ComposerCommandDestination) {
@@ -527,21 +377,18 @@ extension FloatingChatView {
     )
   }
 
-  func runComposerCommandAction(_ action: QuickAction) {
+  func runComposerCommandAction(_ action: SavedWorkflow) {
+    guard wsManager.isConnected, !wsManager.isStreaming, !wsManager.isStoppingRun,
+      validateDraftAttachments() else { return }
+    guard wsManager.currentConversation?.isProviderHistory != true || wsManager.currentConversation?.canResume != false else { return }
     guard let prompt = action.prompt?.trimmingCharacters(in: .whitespacesAndNewlines),
       !prompt.isEmpty
     else { return }
 
-    let displayText = "Run \(action.kind == "workflow" ? "workflow" : "quick action"): \(action.title)"
-
-    if let activeIndex = activeMessageIndex, activeIndex < messages.count - 1 {
-      let messagesToDelete = messages[(activeIndex + 1)...]
-      for msg in messagesToDelete {
-        if let uid = msg.userMessageId { wsManager.deleteMessage(id: uid) }
-        if let aid = msg.assistantMessageId { wsManager.deleteMessage(id: aid) }
-      }
-      messages.removeSubrange((activeIndex + 1)...)
-    }
+    let displayText = "Run workflow: \(action.title)"
+    var draft = composerDraft
+    draft.text = prompt
+    draft.skills = uniqueSkills((action.skills ?? []) + draft.skills)
 
     activeMessageIndex = nil
     prepareForRequest()
@@ -551,18 +398,10 @@ extension FloatingChatView {
       ChatMessage(
         userPrompt: displayText,
         context: currentContexts,
-        aiResponse: nil
+        aiResponse: nil,
+        attachments: draft.attachments,
+        draft: draft
       ))
-
-    var allFiles: [FileAttachmentRequest] = []
-    for ctx in currentContexts {
-      if let files = ctx.files {
-        allFiles.append(contentsOf: files)
-      }
-    }
-    for attachment in pendingAttachments {
-      allFiles.append(attachment.fileRequest)
-    }
 
     pendingAttachments.removeAll()
     let selectedBrowserTabs = pendingBrowserTabs.isEmpty ? nil : pendingBrowserTabs
@@ -575,16 +414,18 @@ extension FloatingChatView {
     pendingCommandAliases.removeAll()
 
     wsManager.sendChat(
-      text: composerActionUserMessage(for: action, contexts: currentContexts),
+      text: prompt,
       displayText: displayText,
-      files: allFiles,
+      files: draft.files,
       workspacePath: workingDirectoryStore.url?.path,
-      systemPrompt: composerActionSystemPrompt(for: action),
+      attachmentContext: currentContexts.compactMap(\.text).joined(separator: "\n\n"),
       zeroDataRetention: AISettings.zeroDataRetention,
       actionId: action.id,
       mcpServerIds: actionMCPIds.isEmpty ? nil : actionMCPIds,
       skills: uniqueSkills((action.skills ?? []) + selectedSkills),
       browserTabs: selectedBrowserTabs
     )
+    if let saved = revisionSession.finish() { applyDraft(saved) }
+    retainSentAttachments()
   }
 }

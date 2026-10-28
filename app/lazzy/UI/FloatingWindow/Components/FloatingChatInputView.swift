@@ -7,10 +7,15 @@ struct FloatingChatInputView: View {
   @Binding var inputText: String
   @Binding var debugMenuStep: DebugComposerMenuStep?
   var isInputFocused: FocusState<Bool>.Binding
+  @ObservedObject var controller: FloatingWindowController
   var onClose: () -> Void
   var onSubmit: () -> Void
   var onPasteAttachment: () -> Bool
   let fileAttachments: [ChatAttachment]
+  var textContexts: [DetectedContent] = []
+  var onRemoveTextContext: (DetectedContent) -> Void = { _ in }
+  var onAttachTextContext: (DetectedContent) -> Void = { _ in }
+  var editorDocumentID: UUID? = nil
   let selectedSkills: [SkillAttachment]
   let selectedBrowserTabs: [BrowserTabAttachment]
   let selectedMCPAttachments: [ComposerMCPAttachment]
@@ -18,15 +23,19 @@ struct FloatingChatInputView: View {
   let availableMCPAttachments: [ComposerMCPAttachment]
   let isLoadingMCPAttachments: Bool
   let availableSkills: [SkillAttachment]
-  let workflows: [QuickAction]
-  let quickActions: [QuickAction]
+  let workflows: [SavedWorkflow]
+  let commands: [CustomSlashCommand]
   @Binding var isAttachmentMenuRequested: Bool
   @Binding var isAttachmentMenuActive: Bool
   @Binding var isCommandMenuActive: Bool
   @ObservedObject var skillsDirectory: SkillsDirectoryService
   @ObservedObject var workingDirectoryStore: WorkingDirectoryStore
   @ObservedObject var browserTabStore: BrowserTabStore
+  @ObservedObject var conversationStore: ComposerConversationStore
+  let currentConversationID: String?
   var onAttachFile: (URL) -> Void
+  var onAttachAttachment: (ChatAttachment) -> Void
+  var onRemoveFileAttachment: (ChatAttachment) -> Void
   var onAttachSkill: (SkillAttachment) -> Void
   var onAttachBrowserTab: (BrowserTab) -> Void
   var onRefreshBrowserTabs: () -> Void
@@ -34,14 +43,13 @@ struct FloatingChatInputView: View {
   var onOpenMCPServers: () -> Void
   var onAttachCommand: (SlashCommandAlias) -> Void
   var onCreateCommand: (String, String) -> Void
-  var onRunCommandAction: (QuickAction) -> Void
+  var onRunCommandAction: (SavedWorkflow) -> Void
   var onOpenCommandDestination: (ComposerCommandDestination) -> Void
-  var onRemoveFile: (ChatAttachment) -> Void
   var onRemoveSkill: (SkillAttachment) -> Void
   var onRemoveBrowserTab: (BrowserTabAttachment) -> Void
   var onRemoveMCP: (ComposerMCPAttachment) -> Void
   var onRemoveCommand: (SlashCommandAlias) -> Void
-  var selectedAction: String = "Anything .."
+  var selectedAction: String = "Ask your agent… @ context · / commands"
   let voiceDictationState: VoiceDictationState
   let voicePartialTranscript: String
 
@@ -53,6 +61,8 @@ struct FloatingChatInputView: View {
   @State var slashTriggerOffset: Int?
   @State var editorHeight: CGFloat = 24
   @StateObject var fileCatalog = InlineWorkspaceCatalog()
+  @State var knownInlineSelections: [String: ComposerInlineSelection] = [:]
+  @State var menuCaretRect: NSRect?
 
   var body: some View {
     VStack(spacing: 8) {
@@ -61,7 +71,83 @@ struct FloatingChatInputView: View {
         }
 
         HStack(alignment: .top, spacing: 8) {
-          ZStack(alignment: .topLeading) {
+          VStack(alignment: .leading, spacing: 10) {
+            if fileAttachments.contains(where: \.canPreviewMedia) {
+              ComposerAttachmentList(attachments: fileAttachments.filter(\.canPreviewMedia), onRemove: onRemoveFileAttachment)
+            }
+            editor
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+
+          ComposerWindowControls(controller: controller, onClose: onClose)
+        }
+    }
+    .background {
+      attachmentPanel
+    }
+    .background {
+      commandPanel
+    }
+    .padding(.horizontal, 18)
+    .padding(.top, 18)
+    .padding(.bottom, 10)
+    .onChange(of: inputText) { oldValue, newValue in
+      updateAttachmentMenuTrigger(for: newValue, previousValue: oldValue)
+      updateSlashCommandTrigger(for: newValue, previousValue: oldValue)
+      reconcileInlineSelections(in: newValue)
+    }
+    .onChange(of: inlineTokens) { _, _ in prepareInlineSelections() }
+    .onChange(of: editorDocumentID) { _, _ in
+      knownInlineSelections = [:]
+      prepareInlineSelections()
+    }
+    .onChange(of: isAttachmentMenuRequested) { _, isRequested in
+      guard isRequested else { return }
+      mentionTriggerOffset = nil
+      attachmentMenuPage = .root
+      isAttachmentMenuPresented = true
+      dismissSlashCommandMenu()
+      isAttachmentMenuRequested = false
+    }
+    .onChange(of: isAttachmentMenuPresented) { _, isPresented in
+      isAttachmentMenuActive = isPresented
+      if !isPresented {
+        conversationStore.cancelSearch()
+        conversationStore.cancelAttachment()
+      }
+    }
+    .onChange(of: currentConversationID) { _, _ in dismissAttachmentMenu() }
+    .onChange(of: controller.isVisible) { _, visible in
+      if !visible { dismissAttachmentMenu() }
+    }
+    .onChange(of: isSlashCommandMenuPresented) { _, isPresented in
+      isCommandMenuActive = isPresented
+    }
+    .onChange(of: debugMenuStep) { _, step in
+      performDebugMenuStep(step)
+    }
+    .onDisappear {
+      isAttachmentMenuActive = false
+      isCommandMenuActive = false
+      conversationStore.cancelSearch()
+      conversationStore.cancelAttachment()
+    }
+    .onAppear {
+      prepareInlineSelections()
+      fileCatalog.setWorkingDirectory(workingDirectoryStore.url)
+    }
+    .onChange(of: workingDirectoryStore.url) { _, directory in
+      fileCatalog.setWorkingDirectory(directory)
+      if directory == nil && attachmentMenuPage == .files {
+        attachmentMenuPage = .root
+      } else if attachmentMenuPage == .files {
+        fileCatalog.search(query: mentionSearchQuery)
+      }
+    }
+  }
+
+  private var editor: some View {
+    ZStack(alignment: .topLeading) {
             if inputText.isEmpty {
               Text(selectedAction)
                 .foregroundColor(theme.secondaryTextColor)
@@ -75,6 +161,10 @@ struct FloatingChatInputView: View {
               textColor: NSColor(theme.textColor),
               tokenColor: NSColor(theme.accentColor),
               font: AppFont.nsFont(size: 14),
+              tokens: inlineTokens,
+              documentID: editorDocumentID,
+              menuAnchorOffset: menuAnchorOffset,
+              onCaretRectChange: { menuCaretRect = $0 },
               onSubmit: onSubmit,
               onPasteAttachment: onPasteAttachment,
               onBackspaceWhenEmpty: removeLastInlineToken,
@@ -82,26 +172,20 @@ struct FloatingChatInputView: View {
               onImageDrop: attachDroppedImage,
               onRemoteURLDrop: attachDroppedRemoteURL
             )
-              .frame(height: editorHeight)
+              .frame(height: max(editorHeight, 40))
           }
-          .frame(maxWidth: .infinity, alignment: .leading)
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
 
-          Button(action: onClose) {
-            Image(systemName: "xmark")
-              .font(.appFont(size: 14, weight: .bold))
-              .foregroundColor(theme.textColor.opacity(0.5))
-          }
-          .buttonStyle(.plain)
-          .padding(.top, 4)
-        }
-    }
-    .background {
+  private var attachmentPanel: some View {
       ComposerAttachmentPanelAnchor(
         isPresented: $isAttachmentMenuPresented,
         preferredWidth: attachmentMenuPage == .files
           || attachmentMenuPage == .browserTabs
+          || attachmentMenuPage == .conversations
           || attachmentMenuPage == .discoverSkills
-          || attachmentMenuPage == .remoteSkillDetail ? 320 : 280,
+          || attachmentMenuPage == .remoteSkillDetail ? ComposerMenuStyle.detailWidth : ComposerMenuStyle.rootWidth,
+        caretRect: menuCaretRect,
         contentRefreshID: attachmentMenuContentRefreshID,
         menu: ComposerAttachmentMenu(
           page: $attachmentMenuPage,
@@ -112,11 +196,15 @@ struct FloatingChatInputView: View {
           fileCatalog: fileCatalog,
           workingDirectoryStore: workingDirectoryStore,
           browserTabStore: browserTabStore,
+          conversationStore: conversationStore,
+          selectedConversationIDs: Set(fileAttachments.compactMap(\.conversationID)),
+          currentConversationID: currentConversationID,
           selectedMCPIds: Set(selectedMCPAttachments.map(\.id)),
           selectedSkillIds: Set(selectedSkills.map(\.id)),
           selectedBrowserTabIds: Set(selectedBrowserTabs.map(\.id)),
           skillsSearchQuery: skillsSearchQuery,
           onAttachBrowserTab: completeBrowserTabAttachment,
+          onAttachConversation: completeConversationAttachment,
           onRefreshBrowserTabs: onRefreshBrowserTabs,
           onAttachFile: completeFileAttachment,
           onUpdateFileQuery: replaceMentionQuery,
@@ -128,16 +216,18 @@ struct FloatingChatInputView: View {
           onDismiss: dismissAttachmentMenu
         )
       )
-    }
-    .background {
+  }
+
+  private var commandPanel: some View {
       ComposerAttachmentPanelAnchor(
         isPresented: $isSlashCommandMenuPresented,
-        preferredWidth: 320,
+        preferredWidth: ComposerMenuStyle.commandWidth,
+        caretRect: menuCaretRect,
         contentRefreshID: AnyHashable(slashCommandQuery),
         menu: ComposerSlashCommandMenu(
           query: slashCommandQuery,
           workflows: workflows,
-          quickActions: quickActions,
+          commands: commands,
           onSelectAlias: completeSlashAlias,
           onSelectAction: completeSlashAction,
           onCreateCommand: completeCreateCommand,
@@ -145,47 +235,5 @@ struct FloatingChatInputView: View {
           onDismiss: dismissSlashCommandMenu
         )
       )
-    }
-    .padding(.horizontal, 14)
-    .padding(.top, 14)
-    .padding(.bottom, 8)
-    .onChange(of: inputText) { _, newValue in
-      updateAttachmentMenuTrigger(for: newValue)
-      updateSlashCommandTrigger(for: newValue)
-      removeDetachedSelectionsMissingFromText(newValue)
-    }
-    .onChange(of: isAttachmentMenuRequested) { _, isRequested in
-      guard isRequested else { return }
-      mentionTriggerOffset = nil
-      attachmentMenuPage = .root
-      isAttachmentMenuPresented = true
-      dismissSlashCommandMenu()
-      isAttachmentMenuRequested = false
-    }
-    .onChange(of: isAttachmentMenuPresented) { _, isPresented in
-      isAttachmentMenuActive = isPresented
-    }
-    .onChange(of: isSlashCommandMenuPresented) { _, isPresented in
-      isCommandMenuActive = isPresented
-    }
-    .onChange(of: debugMenuStep) { _, step in
-      performDebugMenuStep(step)
-    }
-    .onDisappear {
-      isAttachmentMenuActive = false
-      isCommandMenuActive = false
-    }
-    .onAppear {
-      fileCatalog.setWorkingDirectory(workingDirectoryStore.url)
-    }
-    .onChange(of: workingDirectoryStore.url) { _, directory in
-      fileCatalog.setWorkingDirectory(directory)
-      if directory == nil && attachmentMenuPage == .files {
-        attachmentMenuPage = .root
-      } else if attachmentMenuPage == .files {
-        fileCatalog.search(query: mentionSearchQuery)
-      }
-    }
   }
-
 }

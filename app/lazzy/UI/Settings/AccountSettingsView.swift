@@ -4,7 +4,6 @@ import SwiftUI
 
 struct AccountSettingsView: View {
   @StateObject private var auth = AuthManager.shared
-  @StateObject private var hostedSubscription = HostedSubscriptionManager.shared
   @State private var email = ""
   @State private var magicLinkSent = false
 
@@ -21,9 +20,6 @@ struct AccountSettingsView: View {
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.top, 10)
-    }
-    .task(id: auth.isAuthenticated) {
-      await hostedSubscription.refresh()
     }
   }
 
@@ -80,201 +76,9 @@ struct AccountSettingsView: View {
         .buttonStyle(.plain)
       }
 
-      hostedSubscriptionSection
     }
   }
 
-  private var hostedSubscriptionSection: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      Text("Detach Cloud credits")
-        .font(.appFont(size: 13, weight: .semibold))
-        .foregroundColor(theme.textColor)
-
-      VStack(alignment: .leading, spacing: 12) {
-        if hostedSubscription.isLoading && hostedSubscription.credits == nil {
-          ProgressView()
-            .controlSize(.small)
-            .frame(maxWidth: .infinity, alignment: .center)
-        } else if hostedSubscription.credits != nil {
-          HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 8) {
-              Text("Available")
-                .font(.appFont(size: 11))
-                .foregroundColor(theme.textColor.opacity(0.6))
-
-              if let progress = hostedSubscription.availableCreditProgress,
-                let percentage = hostedSubscription.availableCreditPercentage
-              {
-                HostedCreditsProgressView(progress: progress, percentage: percentage)
-              }
-
-              if let percentage = hostedSubscription.availableCreditPercentage {
-                Text("\(percentage)% of allowance remaining")
-                  .font(.appFont(size: 20, weight: .bold))
-                  .foregroundColor(theme.textColor)
-              }
-            }
-            Spacer()
-            if let subscription = hostedSubscription.subscription {
-              VStack(alignment: .trailing, spacing: 3) {
-                Text(subscription.displayName)
-                  .font(.appFont(size: 12, weight: .semibold))
-                Text(subscription.cancelAtPeriodEnd ? "Ends this period" : "Active")
-                  .font(.appFont(size: 10))
-                  .foregroundColor(theme.textColor.opacity(0.55))
-              }
-            }
-          }
-
-          if hostedSubscription.hasReservedCredits {
-            Text("Some credits are reserved for active Detach Cloud tasks.")
-              .font(.appFont(size: 10))
-              .foregroundColor(theme.textColor.opacity(0.5))
-          }
-
-          if hostedSubscription.hasAmountDue {
-            Text("Some allowance is pending reconciliation.")
-              .font(.appFont(size: 10))
-              .foregroundColor(.orange)
-          }
-        }
-
-        if hostedSubscription.subscription != nil {
-          Button {
-            Task { await hostedSubscription.openCustomerPortal() }
-          } label: {
-            Text(hostedSubscription.isLoading ? "Opening…" : "Manage subscription")
-              .font(.appFont(size: 12, weight: .medium))
-          }
-          .buttonStyle(.plain)
-          .padding(.horizontal, 12)
-          .padding(.vertical, 7)
-          .background(theme.accentColor.opacity(0.2))
-          .foregroundColor(theme.accentColor)
-          .cornerRadius(theme.borderRadius / 1.5)
-          .disabled(hostedSubscription.isLoading)
-        } else if hostedSubscription.hasHostedCredits {
-          Text("Detach Cloud access is active. Subscription details are still syncing.")
-            .font(.appFont(size: 10))
-            .foregroundColor(theme.textColor.opacity(0.55))
-        } else if !hostedSubscription.plans.isEmpty {
-          VStack(alignment: .leading, spacing: 8) {
-            Text("Choose a monthly allowance")
-              .font(.appFont(size: 11))
-              .foregroundColor(theme.textColor.opacity(0.6))
-            ForEach(hostedSubscription.plans) { plan in
-              Button {
-                Task { await hostedSubscription.startCheckout(planId: plan.id) }
-              } label: {
-                HStack {
-                  VStack(alignment: .leading, spacing: 2) {
-                    Text(plan.displayName)
-                      .font(.appFont(size: 12, weight: .semibold))
-                    Text("Agent, Image & Video on Detach Cloud / month")
-                      .font(.appFont(size: 10))
-                      .foregroundColor(theme.textColor.opacity(0.55))
-                  }
-                  Spacer()
-                  Text("$\(plan.monthlyPriceCents / 100)/mo")
-                    .font(.appFont(size: 12, weight: .medium))
-                }
-                .padding(.vertical, 4)
-              }
-              .buttonStyle(.plain)
-              .disabled(hostedSubscription.isLoading)
-            }
-          }
-        }
-
-        if let error = hostedSubscription.errorMessage {
-          Text(error)
-            .font(.appFont(size: 10))
-            .foregroundColor(.red)
-        }
-      }
-      .padding(16)
-      .background(theme.textColor.opacity(0.03))
-      .cornerRadius(theme.borderRadius / 1.5)
-      .overlay(
-        RoundedRectangle(cornerRadius: theme.borderRadius / 1.5)
-          .stroke(theme.textColor.opacity(0.05), lineWidth: 1)
-      )
-    }
-  }
-
-  private var legacyPlanAndUsageSection: some View {
-    VStack(alignment: .leading, spacing: 16) {
-        Text("Plan & Usage")
-          .font(.appFont(size: 13, weight: .semibold))
-          .foregroundColor(theme.textColor)
-
-        VStack(alignment: .leading, spacing: 12) {
-          HStack {
-            Text("Current Plan:")
-              .font(.appFont(size: 12))
-              .foregroundColor(theme.textColor.opacity(0.6))
-            Text(auth.userProfile?.planType.displayName ?? "Free")
-              .font(.appFont(size: 12, weight: .bold))
-              .foregroundColor(theme.accentColor)
-
-            Spacer()
-
-            if auth.userProfile?.planType == .free {
-              Link(destination: URL(string: "https://getlazzy.app/pricing")!) {
-                Text("Upgrade")
-                  .font(.appFont(size: 11, weight: .medium))
-                  .padding(.horizontal, 8)
-                  .padding(.vertical, 4)
-                  .background(theme.accentColor)
-                  .foregroundColor(.white)
-                  .cornerRadius(4)
-              }
-              .buttonStyle(.plain)
-            }
-          }
-
-          if let usage = auth.usage {
-            VStack(alignment: .leading, spacing: 6) {
-              HStack {
-                Text("AI Usage:")
-                  .font(.appFont(size: 11))
-                Spacer()
-                Text("\(Int(((1 - usage.usageProgress) * 100).rounded()))% remaining")
-                  .font(.appFont(size: 11))
-              }
-              .foregroundColor(theme.textColor.opacity(0.6))
-
-              // Usage Progress Bar
-              ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 2)
-                  .fill(theme.textColor.opacity(0.1))
-                  .frame(height: 6)
-
-                RoundedRectangle(cornerRadius: 2)
-                  .fill(usage.usageProgress > 0.9 ? Color.red : theme.accentColor)
-                  .frame(width: 240 * CGFloat(usage.usageProgress), height: 6)
-              }
-
-              Text("Allowance resets on \(usage.formattedResetDate)")
-                .font(.appFont(size: 10))
-                .foregroundColor(theme.textColor.opacity(0.4))
-                .padding(.top, 2)
-            }
-          } else {
-            ProgressView()
-              .controlSize(.small)
-              .frame(maxWidth: .infinity, alignment: .center)
-          }
-        }
-        .padding(16)
-        .background(theme.textColor.opacity(0.03))
-        .cornerRadius(theme.borderRadius / 1.5)
-        .overlay(
-          RoundedRectangle(cornerRadius: theme.borderRadius / 1.5)
-            .stroke(theme.textColor.opacity(0.05), lineWidth: 1)
-        )
-      }
-    }
   private var loginView: some View {
     VStack(alignment: .leading, spacing: 20) {
       VStack(alignment: .leading, spacing: 8) {
@@ -283,7 +87,7 @@ struct AccountSettingsView: View {
           .foregroundColor(theme.textColor)
 
         Text(
-          "Use Detach Cloud and manage your monthly credits. Existing AI accounts remain available without a Detach account."
+          "Sign in only to connect optional integrations. Chat uses your own agent account."
         )
           .font(.appFont(size: 13))
           .foregroundColor(theme.textColor.opacity(0.6))
@@ -366,34 +170,6 @@ struct AccountSettingsView: View {
           .foregroundColor(.red)
           .padding(.top, 10)
       }
-    }
-  }
-}
-
-struct HostedCreditsProgressView: View {
-  let progress: Double
-  let percentage: Int
-
-  @ObservedObject private var theme = ThemeManager.shared
-
-  var body: some View {
-    HStack(spacing: 12) {
-      GeometryReader { geometry in
-        ZStack(alignment: .leading) {
-          Capsule()
-            .fill(theme.textColor.opacity(0.1))
-
-          Capsule()
-            .fill(theme.textColor.opacity(0.9))
-            .frame(width: geometry.size.width * progress)
-        }
-      }
-      .frame(height: 8)
-
-      Text("\(percentage)% / 100%")
-        .font(.appFont(size: 12, weight: .medium))
-        .foregroundColor(theme.textColor.opacity(0.65))
-        .fixedSize()
     }
   }
 }

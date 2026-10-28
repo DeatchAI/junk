@@ -3,10 +3,10 @@ import SwiftUI
 
 struct ComposerSlashCommandMenu: View {
   let query: String
-  let workflows: [QuickAction]
-  let quickActions: [QuickAction]
+  let workflows: [SavedWorkflow]
+  let commands: [CustomSlashCommand]
   let onSelectAlias: (SlashCommandAlias) -> Void
-  let onSelectAction: (QuickAction) -> Void
+  let onSelectAction: (SavedWorkflow) -> Void
   let onCreateCommand: (String, String) -> Void
   let onOpenDestination: (ComposerCommandDestination) -> Void
   let onDismiss: () -> Void
@@ -31,22 +31,21 @@ struct ComposerSlashCommandMenu: View {
   private var visibleItems: [SlashCommandMenuItem] {
     var items: [SlashCommandMenuItem] = []
     items.append(contentsOf: visibleWorkflows.map(SlashCommandMenuItem.workflow))
-    items.append(contentsOf: visibleQuickActions.map(SlashCommandMenuItem.quickAction))
     items.append(contentsOf: visibleAliases.map(SlashCommandMenuItem.alias))
     items.append(contentsOf: visibleCreateItems)
     return items
   }
 
-  private var visibleWorkflows: [QuickAction] {
+  private var visibleWorkflows: [SavedWorkflow] {
     filtered(workflows.filter(\.enabled))
   }
 
-  private var visibleQuickActions: [QuickAction] {
-    filtered(quickActions.filter(\.enabled))
-  }
-
   private var visibleAliases: [SlashCommandAlias] {
-    SlashCommandAlias.defaults.filter { matches($0.command) || matches($0.title) || matches($0.subtitle) }
+    (SlashCommandAlias.defaults + commands.filter(\.enabled).map {
+      SlashCommandAlias(id: $0.id, command: $0.command, title: $0.title,
+        subtitle: $0.subtitle ?? "", systemImage: $0.systemImage ?? "text.badge.plus",
+        replacementText: $0.replacementText ?? $0.promptInstruction ?? "")
+    }).filter { matches($0.command) || matches($0.title) || matches($0.subtitle) }
   }
 
   private var visibleDestinations: [SlashCommandDestinationItem] {
@@ -63,21 +62,18 @@ struct ComposerSlashCommandMenu: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 7) {
+    VStack(alignment: .leading, spacing: 4) {
       if isCreatingCommand {
         createCommandForm
       } else if visibleItems.isEmpty {
         ComposerAttachmentMenuEmptyState(text: "No matching commands")
       } else {
-        ScrollView {
-          VStack(alignment: .leading, spacing: 8) {
+        ScrollViewReader { proxy in
+          ScrollView {
+          VStack(alignment: .leading, spacing: 4) {
             commandSection(
               title: "Workflows",
               items: visibleWorkflows.map(SlashCommandMenuItem.workflow)
-            )
-            commandSection(
-              title: "Quick Actions",
-              items: visibleQuickActions.map(SlashCommandMenuItem.quickAction)
             )
             commandSection(
               title: "Commands",
@@ -88,23 +84,19 @@ struct ComposerSlashCommandMenu: View {
               items: visibleCreateItems
             )
           }
+          }
+          .frame(height: min(CGFloat(visibleItems.count) * (ComposerMenuStyle.rowHeight + 1) + 66, 280))
+          .onChange(of: selectedIndex) { _, index in
+            if visibleItems.indices.contains(index) { proxy.scrollTo(visibleItems[index].id) }
+          }
         }
-        .frame(maxHeight: 338)
       }
     }
-    .padding(6)
-    .frame(width: 320, alignment: .leading)
-    .background(menuBackground)
-    .overlay {
-      RoundedRectangle(cornerRadius: 16, style: .continuous)
-        .stroke(theme.textColor.opacity(0.1), lineWidth: 0.5)
-    }
-    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    .composerMenuSurface(width: ComposerMenuStyle.commandWidth)
     .onAppear(perform: setupKeyMonitor)
     .onDisappear(perform: removeKeyMonitor)
     .onChange(of: query) { _, _ in clampSelection() }
     .onChange(of: workflows.count) { _, _ in clampSelection() }
-    .onChange(of: quickActions.count) { _, _ in clampSelection() }
     .onChange(of: isCreatingCommand) { _, isCreating in
       clampSelection()
       if isCreating {
@@ -212,12 +204,12 @@ struct ComposerSlashCommandMenu: View {
     items: [SlashCommandMenuItem]
   ) -> some View {
     if !items.isEmpty {
-      VStack(alignment: .leading, spacing: 2) {
+      VStack(alignment: .leading, spacing: 1) {
         Text(title)
-          .font(.appFont(size: 12, weight: .medium))
+          .font(.appFont(size: 11))
           .foregroundColor(theme.secondaryTextColor)
-          .padding(.horizontal, 10)
-          .padding(.top, 2)
+          .padding(.horizontal, 7)
+          .padding(.vertical, 3)
 
         ForEach(items) { item in
           ComposerAttachmentMenuRow(
@@ -231,30 +223,15 @@ struct ComposerSlashCommandMenu: View {
           ) {
             activate(item)
           }
+          .id(item.id)
         }
 
       }
     }
   }
 
-  @ViewBuilder
-  private var menuBackground: some View {
-    if theme.usesGlassEffect {
-      ZStack {
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
-          .fill(.ultraThinMaterial)
-        if let overlay = theme.glassOverlay {
-          RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .fill(overlay)
-        }
-      }
-    } else {
-      RoundedRectangle(cornerRadius: 16, style: .continuous)
-        .fill(theme.solidBackground)
-    }
-  }
 
-  private func filtered(_ actions: [QuickAction]) -> [QuickAction] {
+  private func filtered(_ actions: [SavedWorkflow]) -> [SavedWorkflow] {
     actions.filter { action in
       matches(action.title) || matches(action.prompt ?? "") || matches(action.shortcut ?? "")
     }
@@ -323,7 +300,7 @@ struct ComposerSlashCommandMenu: View {
     switch item {
     case .inlineCreateCommand:
       isCreatingCommand = true
-    case .workflow(let action), .quickAction(let action):
+    case .workflow(let action):
       onSelectAction(action)
     case .alias(let alias):
       onSelectAlias(alias)
@@ -353,8 +330,7 @@ struct ComposerSlashCommandMenu: View {
 
 private enum SlashCommandMenuItem: Identifiable {
   case inlineCreateCommand
-  case workflow(QuickAction)
-  case quickAction(QuickAction)
+  case workflow(SavedWorkflow)
   case alias(SlashCommandAlias)
   case destination(SlashCommandDestinationItem)
 
@@ -364,8 +340,6 @@ private enum SlashCommandMenuItem: Identifiable {
       return "inline-create-command"
     case .workflow(let action):
       return "workflow:\(action.id)"
-    case .quickAction(let action):
-      return "quick-action:\(action.id)"
     case .alias(let alias):
       return "alias:\(alias.id)"
     case .destination(let destination):
@@ -377,7 +351,7 @@ private enum SlashCommandMenuItem: Identifiable {
     switch self {
     case .inlineCreateCommand:
       return "New Command"
-    case .workflow(let action), .quickAction(let action):
+    case .workflow(let action):
       return action.title
     case .alias(let alias):
       return alias.title
@@ -390,7 +364,7 @@ private enum SlashCommandMenuItem: Identifiable {
     switch self {
     case .inlineCreateCommand:
       return "Create a reusable command here"
-    case .workflow(let action), .quickAction(let action):
+    case .workflow(let action):
       return action.prompt
     case .alias(let alias):
       return "/\(alias.command) - \(alias.subtitle)"
@@ -403,7 +377,7 @@ private enum SlashCommandMenuItem: Identifiable {
     switch self {
     case .inlineCreateCommand:
       return "plus.circle"
-    case .workflow(let action), .quickAction(let action):
+    case .workflow(let action):
       return action.systemImage ?? (action.kind == "workflow" ? "play.square.stack" : "bolt")
     case .alias(let alias):
       return alias.systemImage
@@ -429,14 +403,6 @@ private struct SlashCommandDestinationItem: Identifiable {
       subtitle: "Open the workflow builder",
       systemImage: "plus.square.on.square",
       destination: .createWorkflow
-    ),
-    SlashCommandDestinationItem(
-      id: "create-quick-action",
-      command: "create-quick-action",
-      title: "Create Quick Action",
-      subtitle: "Open the quick action builder",
-      systemImage: "bolt.badge.plus",
-      destination: .createQuickAction
     ),
     SlashCommandDestinationItem(
       id: "connect-mcp",

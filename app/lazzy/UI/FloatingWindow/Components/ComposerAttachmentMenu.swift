@@ -10,11 +10,15 @@ struct ComposerAttachmentMenu: View {
   @ObservedObject var fileCatalog: InlineWorkspaceCatalog
   @ObservedObject var workingDirectoryStore: WorkingDirectoryStore
   @ObservedObject var browserTabStore: BrowserTabStore
+  @ObservedObject var conversationStore: ComposerConversationStore
+  let selectedConversationIDs: Set<String>
+  let currentConversationID: String?
   let selectedMCPIds: Set<String>
   let selectedSkillIds: Set<String>
   let selectedBrowserTabIds: Set<Int>
   let skillsSearchQuery: String
   let onAttachBrowserTab: (BrowserTab) -> Void
+  let onAttachConversation: (Conversation) -> Void
   let onRefreshBrowserTabs: () -> Void
   let onAttachFile: (URL) -> Void
   let onUpdateFileQuery: (String) -> Void
@@ -26,23 +30,33 @@ struct ComposerAttachmentMenu: View {
   let onDismiss: () -> Void
 
   @ObservedObject private var theme = ThemeManager.shared
-  @State private var selectedRootIndex = 0
-  @State private var selectedBrowserTabIndex = 0
-  @State private var selectedSkillIndex = 0
-  @State private var selectedMCPIndex = 0
-  @State private var selectedRemoteSkillIndex = 0
-  @State private var selectedRemoteSkill: RemoteSkill?
-  @State private var keyMonitor: Any?
+  @State var selectedRootIndex = 0
+  @State var selectedBrowserTabIndex = 0
+  @State var selectedConversationIndex = 0
+  @State var selectedSkillIndex = 0
+  @State var selectedMCPIndex = 0
+  @State var selectedRemoteSkillIndex = 0
+  @State var selectedRemoteSkill: RemoteSkill?
+  @State var keyMonitor: Any?
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 2) {
+    VStack(alignment: .leading, spacing: 1) {
       switch page {
       case .root:
-        rootMenu
+        ScrollViewReader { proxy in
+          ScrollView {
+            VStack(spacing: 1) { rootMenu }
+          }.frame(height: 9 * ComposerMenuStyle.rowHeight + 8)
+            .onChange(of: selectedRootIndex) { _, index in proxy.scrollTo(index) }
+        }
       case .files:
         fileMenu
       case .browserTabs:
         browserTabsMenu
+      case .conversations:
+        ComposerConversationsMenu(page: $page, store: conversationStore,
+          conversations: visibleConversations, selectedIDs: selectedConversationIDs,
+          selectedIndex: $selectedConversationIndex, onAttach: onAttachConversation)
       case .skills:
         skillMenu
       case .discoverSkills:
@@ -53,17 +67,8 @@ struct ComposerAttachmentMenu: View {
         mcpMenu
       }
     }
-    .padding(6)
-    .frame(
-      width: page == .files || page == .browserTabs || page == .discoverSkills || page == .remoteSkillDetail ? 320 : 280,
-      alignment: .leading
-    )
-    .background(menuBackground)
-    .overlay {
-      RoundedRectangle(cornerRadius: 16, style: .continuous)
-        .stroke(theme.textColor.opacity(0.1), lineWidth: 0.5)
-    }
-    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    .composerMenuSurface(width: page == .files || page == .browserTabs || page == .conversations
+      || page == .discoverSkills || page == .remoteSkillDetail ? ComposerMenuStyle.detailWidth : ComposerMenuStyle.rootWidth)
     .onAppear(perform: setupKeyMonitor)
     .onDisappear(perform: removeKeyMonitor)
     .onChange(of: page) { _, newPage in
@@ -73,14 +78,22 @@ struct ComposerAttachmentMenu: View {
       if newPage == .browserTabs {
         onRefreshBrowserTabs()
       }
+      if newPage == .conversations {
+        conversationStore.search(skillsSearchQuery, immediately: true)
+      } else {
+        conversationStore.cancelSearch()
+        conversationStore.cancelAttachment()
+      }
       clampSelectionForCurrentPage()
     }
     .onChange(of: availableSkills.count) { _, _ in clampSelectionForCurrentPage() }
     .onChange(of: availableMCPAttachments.count) { _, _ in clampSelectionForCurrentPage() }
     .onChange(of: browserTabStore.tabs) { _, _ in clampSelectionForCurrentPage() }
+    .onChange(of: conversationStore.contentRevision) { _, _ in clampSelectionForCurrentPage() }
     .onChange(of: skillsDirectory.searchResults) { _, _ in clampSelectionForCurrentPage() }
     .onChange(of: skillsSearchQuery) { _, _ in
       selectedRemoteSkillIndex = 0
+      selectedConversationIndex = 0
       clampSelectionForCurrentPage()
     }
   }
@@ -93,6 +106,7 @@ struct ComposerAttachmentMenu: View {
           ? "Choose a file or folder from Finder"
           : "Search files in \(workingDirectoryStore.displayName)",
         systemImage: "doc.on.doc",
+        showsSubmenu: workingDirectoryStore.url != nil,
         isHighlighted: selectedRootIndex == 0,
         onHover: { selectedRootIndex = 0 }
       ) {
@@ -102,73 +116,100 @@ struct ComposerAttachmentMenu: View {
           page = .files
         }
       }
+      .id(0)
       ComposerAttachmentMenuRow(
         title: "Tabs",
         subtitle: "Attach open tabs from Chrome",
         systemImage: "rectangle.on.rectangle",
+        showsSubmenu: true,
         isHighlighted: selectedRootIndex == 1,
         onHover: { selectedRootIndex = 1 }
       ) {
         page = .browserTabs
       }
+      .id(1)
+      ComposerAttachmentMenuRow(
+        title: "Past conversations",
+        subtitle: "Attach context from a previous chat",
+        systemImage: "bubble.left.and.bubble.right",
+        showsSubmenu: true,
+        isHighlighted: selectedRootIndex == 2,
+        onHover: { selectedRootIndex = 2 }
+      ) {
+        page = .conversations
+      }
+      .id(2)
       ComposerAttachmentMenuRow(
         title: "Installed Skills",
         subtitle: "Run custom AI workflows and skills",
         systemImage: "wand.and.stars",
-        isHighlighted: selectedRootIndex == 2,
-        onHover: { selectedRootIndex = 2 }
+        showsSubmenu: true,
+        isHighlighted: selectedRootIndex == 3,
+        onHover: { selectedRootIndex = 3 }
       ) {
         page = .skills
       }
+      .id(3)
       ComposerAttachmentMenuRow(
         title: "Discover Skills",
         subtitle: "Browse popular skills or search with @",
         systemImage: "magnifyingglass",
-        isHighlighted: selectedRootIndex == 3,
-        onHover: { selectedRootIndex = 3 }
+        showsSubmenu: true,
+        isHighlighted: selectedRootIndex == 4,
+        onHover: { selectedRootIndex = 4 }
       ) {
         openSkillsDirectory()
       }
+      .id(4)
       ComposerAttachmentMenuRow(
         title: "Connected MCP Servers",
         subtitle: "Interact with model context servers",
         systemImage: "server.rack",
-        isHighlighted: selectedRootIndex == 4,
-        onHover: { selectedRootIndex = 4 }
+        showsSubmenu: true,
+        isHighlighted: selectedRootIndex == 5,
+        onHover: { selectedRootIndex = 5 }
       ) {
         page = .mcpServers
       }
+      .id(5)
       ComposerAttachmentMenuRow(
         title: "Browser",
         subtitle: "Enable browser tools",
         systemImage: "globe",
         isSelected: selectedMCPIds.contains(ComposerMCPAttachment.browser.id),
-        isHighlighted: selectedRootIndex == 5,
-        onHover: { selectedRootIndex = 5 }
+        isHighlighted: selectedRootIndex == 6,
+        onHover: { selectedRootIndex = 6 }
       ) {
         onAttachMCP(.browser)
       }
+      .id(6)
       ComposerAttachmentMenuRow(
         title: "macOS",
         subtitle: "Control native macOS apps",
         systemImage: "macwindow",
         isSelected: selectedMCPIds.contains(ComposerMCPAttachment.macOS.id),
-        isHighlighted: selectedRootIndex == 6,
-        onHover: { selectedRootIndex = 6 }
+        isHighlighted: selectedRootIndex == 7,
+        onHover: { selectedRootIndex = 7 }
       ) {
         onAttachMCP(.macOS)
       }
+      .id(7)
       ComposerAttachmentMenuRow(
         title: "Secrets",
         subtitle: "Use saved credentials with Touch ID",
         systemImage: "lock.fill",
         isSelected: selectedMCPIds.contains(ComposerMCPAttachment.secrets.id),
-        isHighlighted: selectedRootIndex == 7,
-        onHover: { selectedRootIndex = 7 }
+        isHighlighted: selectedRootIndex == 8,
+        onHover: { selectedRootIndex = 8 }
       ) {
         onAttachMCP(.secrets)
       }
+      .id(8)
     }
+  }
+
+  var visibleConversations: [Conversation] {
+    conversationStore.conversations.filter { $0.id != currentConversationID }
   }
 
   private var fileMenu: some View {
@@ -340,7 +381,7 @@ struct ComposerAttachmentMenu: View {
     }
   }
 
-  private var visibleRemoteSkills: [RemoteSkill] {
+  var visibleRemoteSkills: [RemoteSkill] {
     let normalizedQuery = skillsSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
     return normalizedQuery.count < 2
       ? SkillsDirectoryService.featuredSkills
@@ -459,133 +500,5 @@ struct ComposerAttachmentMenu: View {
     }
   }
 
-  @ViewBuilder
-  private var menuBackground: some View {
-    if theme.usesGlassEffect {
-      ZStack {
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
-          .fill(.ultraThinMaterial)
-        if let overlay = theme.glassOverlay {
-          RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .fill(overlay)
-        }
-      }
-    } else {
-      RoundedRectangle(cornerRadius: 16, style: .continuous)
-        .fill(theme.solidBackground)
-    }
-  }
 
-  private func setupKeyMonitor() {
-    guard keyMonitor == nil else { return }
-    keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-      // Typing still belongs to the composer; only navigation keys below are
-      // consumed for the skills list.
-      guard page != .files else { return event }
-      let modifiers = event.modifierFlags.intersection([.command, .option, .control])
-      guard modifiers.isEmpty else { return event }
-
-      switch Int(event.keyCode) {
-      case 125:
-        moveSelection(by: 1)
-        return nil
-      case 126:
-        moveSelection(by: -1)
-        return nil
-      case 36, 49, 76, 124:
-        activateSelection()
-        return nil
-      case 53, 123:
-        if page == .root {
-          onDismiss()
-          return nil
-        }
-        page = .root
-        return nil
-      default:
-        return event
-      }
-    }
-  }
-
-  private func removeKeyMonitor() {
-    if let keyMonitor {
-      NSEvent.removeMonitor(keyMonitor)
-      self.keyMonitor = nil
-    }
-  }
-
-  private func moveSelection(by delta: Int) {
-    switch page {
-    case .root:
-      selectedRootIndex = clamped(selectedRootIndex + delta, count: 8)
-    case .browserTabs:
-      selectedBrowserTabIndex = clamped(selectedBrowserTabIndex + delta, count: browserTabStore.tabs.count)
-    case .skills:
-      selectedSkillIndex = clamped(selectedSkillIndex + delta, count: availableSkills.count)
-    case .mcpServers:
-      selectedMCPIndex = clamped(selectedMCPIndex + delta, count: availableMCPAttachments.count)
-    case .discoverSkills:
-      selectedRemoteSkillIndex = clamped(selectedRemoteSkillIndex + delta, count: visibleRemoteSkills.count)
-    case .files, .remoteSkillDetail:
-      break
-    }
-  }
-
-  private func activateSelection() {
-    switch page {
-    case .root:
-      switch selectedRootIndex {
-      case 0: page = .files
-      case 1: page = .browserTabs
-      case 2: page = .skills
-      case 3:
-        openSkillsDirectory()
-      case 4: page = .mcpServers
-      case 5: onAttachMCP(.browser)
-      case 6: onAttachMCP(.macOS)
-      case 7: onAttachMCP(.secrets)
-      default: break
-      }
-    case .browserTabs:
-      guard browserTabStore.tabs.indices.contains(selectedBrowserTabIndex) else { return }
-      onAttachBrowserTab(browserTabStore.tabs[selectedBrowserTabIndex])
-    case .skills:
-      guard availableSkills.indices.contains(selectedSkillIndex) else { return }
-      onAttachSkill(availableSkills[selectedSkillIndex])
-    case .mcpServers:
-      guard availableMCPAttachments.indices.contains(selectedMCPIndex) else { return }
-      onAttachMCP(availableMCPAttachments[selectedMCPIndex])
-    case .discoverSkills:
-      guard visibleRemoteSkills.indices.contains(selectedRemoteSkillIndex) else { return }
-      openRemoteSkill(visibleRemoteSkills[selectedRemoteSkillIndex])
-    case .files, .remoteSkillDetail:
-      break
-    }
-  }
-
-  private func clampSelectionForCurrentPage() {
-    selectedRootIndex = clamped(selectedRootIndex, count: 8)
-    selectedBrowserTabIndex = clamped(selectedBrowserTabIndex, count: browserTabStore.tabs.count)
-    selectedSkillIndex = clamped(selectedSkillIndex, count: availableSkills.count)
-    selectedMCPIndex = clamped(selectedMCPIndex, count: availableMCPAttachments.count)
-    selectedRemoteSkillIndex = clamped(selectedRemoteSkillIndex, count: visibleRemoteSkills.count)
-  }
-
-  private func openSkillsDirectory() {
-    skillsDirectory.clearError()
-    skillsDirectory.search(query: skillsSearchQuery)
-    page = .discoverSkills
-  }
-
-  private func openRemoteSkill(_ skill: RemoteSkill) {
-    selectedRemoteSkill = skill
-    skillsDirectory.clearError()
-    page = .remoteSkillDetail
-  }
-
-  private func clamped(_ value: Int, count: Int) -> Int {
-    guard count > 0 else { return 0 }
-    return min(max(value, 0), count - 1)
-  }
 }

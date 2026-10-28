@@ -55,8 +55,9 @@ struct FeedbackButton: View {
     .buttonStyle(.plain)
     .onHover { isHovered = $0 }
     .help("Provide your feedback")
-    .popover(isPresented: $isPopoverShown, arrowEdge: .trailing) {
-      feedbackForm
+    .background {
+      DropdownPanelAnchor(isPresented: $isPopoverShown, menuWidth: 320,
+                          menu: feedbackForm, placement: .trailing)
     }
   }
 
@@ -148,7 +149,7 @@ struct FeedbackButton: View {
     }
     .padding(16)
     .frame(width: 320)
-    .background(theme.backgroundColor)
+    .themedSurface(in: RoundedRectangle(cornerRadius: theme.borderRadius))
   }
 
   private func submitFeedback() {

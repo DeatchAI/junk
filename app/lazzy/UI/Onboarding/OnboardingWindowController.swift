@@ -32,8 +32,11 @@ class OnboardingWindowController: NSObject, ObservableObject, NSWindowDelegate {
   }
 
   private func createWindow() {
+    let visibleFrame = NSScreen.main?.visibleFrame
+    let width = min(1040, max(700, visibleFrame?.width ?? 1040))
+    let height = min(748, max(520, visibleFrame?.height ?? 748))
     let window = KeyableWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 900, height: 640),
+      contentRect: NSRect(x: 0, y: 0, width: width, height: height),
       styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
       backing: .buffered,
       defer: false
@@ -42,10 +45,11 @@ class OnboardingWindowController: NSObject, ObservableObject, NSWindowDelegate {
     window.titleVisibility = .hidden
     window.titlebarAppearsTransparent = true
     window.isMovableByWindowBackground = true
-    window.backgroundColor = .white
-    window.isOpaque = true
+    window.backgroundColor = .clear
+    window.isOpaque = false
     window.hasShadow = true
     window.isReleasedWhenClosed = false
+    window.contentMinSize = NSSize(width: 700, height: 520)
     window.delegate = self
 
     let onboardingView = OnboardingView(

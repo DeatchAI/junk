@@ -38,6 +38,17 @@ struct CustomCircularPicker: View {
 // MARK: - Main Appearance View
 struct AppearanceSettingsView: View {
   @ObservedObject private var theme = ThemeManager.shared
+  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+  private var interfaceStyleDescription: String {
+    if theme.mode == .liquidGlass {
+      if #available(macOS 26.0, *) {
+        return "Native glass for the composer, menus, and panels. Follows Reduce Transparency."
+      }
+      return "Translucent panels on this Mac. Native Liquid Glass requires macOS 26."
+    }
+    return "Choose solid, translucent, or Liquid Glass surfaces"
+  }
 
   @State private var backgroundColor: Color = .black
   @State private var foregroundColor: Color = .white
@@ -73,7 +84,7 @@ struct AppearanceSettingsView: View {
           SettingsCard {
             SettingsRow(
               title: "Interface style",
-              subtitle: "Use a filled or translucent window treatment"
+              subtitle: interfaceStyleDescription
             ) {
               HStack(spacing: 3) {
                 ForEach(AppearanceMode.allCases, id: \.self) { mode in
@@ -97,6 +108,33 @@ struct AppearanceSettingsView: View {
             }
 
             SettingsCardDivider()
+
+            if theme.mode == .liquidGlass {
+              SettingsRow(
+                title: "Translucency",
+                subtitle: reduceTransparency
+                  ? "Turn off Reduce Transparency in macOS Accessibility settings to adjust this."
+                  : "Lower values look more solid. Higher values show more of your desktop."
+              ) {
+                HStack(spacing: 10) {
+                  Slider(value: Binding(
+                    get: { theme.glassTranslucency },
+                    set: { theme.updateGlassTranslucency($0) }
+                  ), in: 0...1, step: 0.01)
+                  .tint(theme.textColor)
+                  .frame(width: 150)
+                  .accessibilityLabel("Liquid Glass translucency")
+                  .accessibilityValue("\(Int((theme.glassTranslucency * 100).rounded())) percent")
+                  .disabled(reduceTransparency)
+
+                  Text("\(Int((theme.glassTranslucency * 100).rounded()))%")
+                    .font(.appFont(size: 10.5, design: .monospaced))
+                    .foregroundColor(theme.secondaryTextColor)
+                    .frame(width: 38, alignment: .trailing)
+                }
+              }
+              SettingsCardDivider()
+            }
 
             SettingsRow(
               title: "Corner radius",

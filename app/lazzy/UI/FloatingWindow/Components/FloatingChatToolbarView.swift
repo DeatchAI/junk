@@ -5,9 +5,6 @@ struct FloatingChatToolbarView: View {
   @Binding var fastMode: Bool
   @Binding var inputText: String
   @Binding var selectedMode: String
-  @Binding var outputMode: ComposerOutputMode
-  @Binding var selectedMediaModelID: String
-  @Binding var mediaConfig: MediaGenerationConfig
   let canSend: Bool
 
   @ObservedObject var wsManager: WebSocketManager
@@ -19,11 +16,12 @@ struct FloatingChatToolbarView: View {
   var onStartIndexing: () -> Void
   var onVoiceInput: () -> Void
   var onSend: () -> Void
+  var isRevising = false
+  var branches: [ConversationBranch] = []
+  var onSelectBranch: (String) -> Void = { _ in }
 
   @ObservedObject private var theme = ThemeManager.shared
   @State private var selectedModelName = "Default"
-  @State private var isConfigurationPresented = false
-  @StateObject private var hostedSubscription = HostedSubscriptionManager.shared
 
   private var agentOptions: [(model: String, isAvailable: Bool)] {
     let capabilities = wsManager.agentCapabilities
@@ -31,9 +29,9 @@ struct FloatingChatToolbarView: View {
       // An empty list means capability discovery is still in flight. Do not
       // present the local providers as locked while the runtime is probing
       // their CLIs; the authoritative availability arrives in the response.
-      return [("Codex", true), ("Claude", true), ("Grok", true), ("fx", true), ("OpenCode", true), ("Detach Cloud", true)]
+      return AgentProvider.loadingOptions
     }
-    return capabilities.map { ($0.displayName, $0.id == "hosted" || $0.installed) }
+    return capabilities.map { ($0.displayName, $0.installed) }
   }
 
   private var selectedCapability: AgentCapability? {
@@ -53,45 +51,12 @@ struct FloatingChatToolbarView: View {
     return capability.models.first
   }
 
-  private var mediaModel: MediaModelCapability? {
-    wsManager.mediaModels.first { $0.id == selectedMediaModelID }
-      ?? wsManager.mediaModels.first { $0.kind == outputMode.rawValue.lowercased() }
-  }
-
   var body: some View {
     HStack(spacing: 8) {
-      // Mode, agent, and model selection stay visible. These are the choices
-      // people make most often; only media-specific controls belong in the tray.
-      ModelMenu(
-        modelsWithAvailability: ComposerOutputMode.allCases.map { ($0.rawValue, true) },
-        selectedOption: outputModeSelection,
-        fontSize: 10,
-        horizontalPadding: 6,
-        verticalPadding: 6,
-        iconSize: 8,
-        backgroundColor: .clear,
-        borderRadius: theme.borderRadius,
-        showBorder: false,
-        opensOnHover: true
-      )
-
-      if outputMode == .agent {
-        ModelMenu(
-          modelsWithAvailability: agentOptions,
-          selectedOption: $selectedMode,
-          onSelect: selectAgent,
-          fontSize: 10,
-          horizontalPadding: 6,
-          verticalPadding: 6,
-          iconSize: 8,
-          backgroundColor: .clear,
-          borderRadius: theme.borderRadius,
-          showBorder: false,
-          unavailableHelp: "This provider is not available on this Mac.",
-          opensOnHover: true
-        )
-
         AgentModelMenu(
+          agents: agentOptions,
+          selectedAgentName: selectedMode,
+          onSelectAgent: selectAgent,
           models: selectedCapability?.models ?? [],
           selectedModelID: controller.selectedModel,
           selectedModelName: $selectedModelName,
@@ -102,59 +67,15 @@ struct FloatingChatToolbarView: View {
           onSelectModel: selectAgentModel,
           onSelectReasoningEffort: selectReasoningEffort,
           onReset: { selectReasoningEffort(nil) },
-          fontSize: 10,
-          horizontalPadding: 6,
-          verticalPadding: 6,
-          iconSize: 8,
-          backgroundColor: .clear,
-          borderRadius: theme.borderRadius,
-          showBorder: false,
-          opensOnHover: true
+          contextSummary: wsManager.lastContextSummary,
+          isNewConversation: wsManager.currentConversationId == nil && !isRevising && !wsManager.isStreaming
         )
-      } else {
-        CustomMenu(
-          options: mediaModelsForCurrentMode.map(\.displayName),
-          selectedOption: mediaModelSelection,
-          onSelect: selectMediaModel,
-          fontSize: 10,
-          horizontalPadding: 6,
-          verticalPadding: 6,
-          iconSize: 8,
-          backgroundColor: .clear,
-          borderRadius: theme.borderRadius,
-          showBorder: false,
-          opensOnHover: true
-        )
-
-        configurationButton
+      if branches.count > 1 {
+        ComposerBranchSwitcher(branches: branches, currentID: wsManager.currentConversationId,
+          isBusy: wsManager.isStreaming, onSelect: onSelectBranch)
       }
 
       Spacer()
-
-      // Fast mode toggle
-      // Button(action: {
-      //   fastMode.toggle()
-      // }) {
-      //   Image(systemName: fastMode ? "bolt.fill" : "bolt")
-      //     .font(.appFont(size: 14, weight: .medium))
-      //     .foregroundColor(fastMode ? .orange : theme.accentColor)
-      // }
-      // .buttonStyle(.plain)
-      // .help(
-      //   fastMode
-      //     ? "Fast Mode: ON (⚡ Faster responses, fewer features)"
-      //     : "Fast Mode: OFF (Full features)")
-
-      // Commented out as we already have the attachement menu appear on "@" symbol.
-      // File and folder attachment button
-      // Button(action: onAttach) {
-      //   Image(systemName: "paperclip")
-      //     .font(.appFont(size: 13, weight: .medium))
-      //     .foregroundColor(theme.secondaryTextColor)
-      //     .frame(width: 26, height: 26)
-      // }
-      // .buttonStyle(.plain)
-      // .help("Attach files or folders")
 
       if FeatureFlags.voiceModeEnabled {
         Button(action: onVoiceInput) {
@@ -163,7 +84,7 @@ struct FloatingChatToolbarView: View {
             .foregroundColor(voiceColor)
             .frame(width: 26, height: 26)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ComposerButtonStyle())
         .help(voiceHelpText)
       }
 
@@ -176,8 +97,9 @@ struct FloatingChatToolbarView: View {
           .foregroundColor(theme.secondaryTextColor)
           .frame(width: 26, height: 26)
       }
-      .buttonStyle(.plain)
-      .help("Conversation History")
+      .buttonStyle(ComposerButtonStyle())
+      .help("Conversation history")
+      .accessibilityLabel("Conversation history")
 
       // New Chat button
       Button(action: {
@@ -188,56 +110,40 @@ struct FloatingChatToolbarView: View {
           .foregroundColor(theme.secondaryTextColor)
           .frame(width: 26, height: 26)
       }
-      .buttonStyle(.plain)
-      .help("New Chat")
-
-      // Expand/Shrink button
-      Button(action: {
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-          controller.toggleExpansion()
-        }
-      }) {
-        Image(
-          systemName: controller.isExpanded
-            ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"
-        )
-        .font(.appFont(size: 13, weight: .medium))
-        .foregroundColor(theme.secondaryTextColor)
-        .frame(width: 26, height: 26)
-      }
-      .buttonStyle(.plain)
-      .help(controller.isExpanded ? "Shrink to Float" : "Expand composer")
+      .buttonStyle(ComposerButtonStyle())
+      .help("New chat")
+      .accessibilityLabel("New chat")
 
       if wsManager.isStreaming {
         Button(action: { wsManager.stopStreaming() }) {
           Image(systemName: "stop.circle.fill")
             .font(.appFont(size: 21))
-            .foregroundColor(.red)
+            .foregroundColor(theme.textColor)
             .frame(width: 28, height: 28)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ComposerButtonStyle())
         .help("Stop generating")
+        .accessibilityLabel("Stop generating")
       } else {
         Button(action: onSend) {
           Image(systemName: "arrow.up.circle.fill")
             .font(.appFont(size: 22))
-            .foregroundColor(canSend ? theme.accentColor : theme.textColor.opacity(0.4))
+            .foregroundColor(canSend ? theme.textColor : theme.textColor.opacity(0.3))
             .frame(width: 28, height: 28)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ComposerButtonStyle())
         .disabled(!canSend)
+        .help(isRevising ? "Send edited message in a new branch" : "Send message")
+        .accessibilityLabel(isRevising ? "Send edited message in new branch" : "Send message")
       }
 
     }
-    .padding(.horizontal, 12)
+    .padding(.horizontal, 16)
     .padding(.top, 1)
-    .padding(.bottom, 9)
+    .padding(.bottom, 11)
     .onAppear {
       selectedMode = displayName(for: controller.selectedAgent)
       refreshSelectedModel()
-    }
-    .task {
-      await hostedSubscription.refresh()
     }
     .onChange(of: wsManager.agentCapabilities) {
       selectedMode = displayName(for: controller.selectedAgent)
@@ -288,41 +194,8 @@ struct FloatingChatToolbarView: View {
     }
   }
 
-  private var configurationButton: some View {
-    Button {
-      isConfigurationPresented.toggle()
-    } label: {
-      Image(systemName: "gearshape")
-        .font(.appFont(size: 13, weight: .medium))
-        .foregroundColor(isConfigurationPresented ? theme.accentColor : theme.secondaryTextColor)
-        .frame(width: 26, height: 26)
-        .background {
-          if isConfigurationPresented {
-            Circle().fill(theme.accentColor.opacity(0.12))
-          }
-        }
-    }
-    .buttonStyle(.plain)
-    .help("Image or video configuration")
-    .background {
-      DropdownPanelAnchor(
-        isPresented: $isConfigurationPresented,
-        menuWidth: 296,
-        menu: MediaConfigurationTray(
-          model: mediaModel,
-          config: $mediaConfig
-        )
-      )
-    }
-  }
-
   private func selectAgent(_ newAgent: String) {
     let agentId = agentId(for: newAgent)
-    if agentId == "hosted" && !hostedSubscription.canUseHostedAI {
-      selectedMode = displayName(for: controller.selectedAgent)
-      HostedPricingWindowController.shared.show()
-      return
-    }
     selectedMode = newAgent
     controller.selectedAgent = agentId
     DetachSettings.selectedAgent = agentId
@@ -368,43 +241,6 @@ struct FloatingChatToolbarView: View {
     )
   }
 
-  private var mediaModelsForCurrentMode: [MediaModelCapability] {
-    wsManager.mediaModels.filter { $0.kind == outputMode.rawValue.lowercased() }
-  }
-
-  private var mediaModelSelection: Binding<String> {
-    Binding(
-      get: { mediaModel?.displayName ?? "Choose model" },
-      set: { displayName in
-        guard let model = mediaModelsForCurrentMode.first(where: { $0.displayName == displayName }) else { return }
-        selectedMediaModelID = model.id
-      }
-    )
-  }
-
-  private func selectMediaModel(_ displayName: String) {
-    guard let model = mediaModelsForCurrentMode.first(where: { $0.displayName == displayName }) else { return }
-    selectedMediaModelID = model.id
-    mediaConfig = model.defaults
-  }
-
-  private var outputModeSelection: Binding<String> {
-    Binding(
-      get: { outputMode.rawValue },
-      set: { rawValue in
-        guard let mode = ComposerOutputMode(rawValue: rawValue) else { return }
-        if mode != .agent && !hostedSubscription.canUseHostedAI {
-          HostedPricingWindowController.shared.show()
-          return
-        }
-        outputMode = mode
-        if mode != .agent {
-          wsManager.listMediaModels()
-        }
-      }
-    )
-  }
-
   private var voiceIcon: String {
     switch controller.voiceDictationState {
     case .listening:
@@ -447,17 +283,10 @@ struct FloatingChatToolbarView: View {
 
   private func agentId(for displayName: String) -> String {
     wsManager.agentCapabilities.first(where: { $0.displayName == displayName })?.id
-      ?? displayName.lowercased()
+      ?? AgentProvider.identifier(for: displayName)
   }
 
   private func fallbackAgentDisplayName(for id: String) -> String {
-    switch id {
-    case "claude": return "Claude"
-    case "grok": return "Grok"
-    case "fx": return "fx"
-    case "opencode": return "OpenCode"
-    case "hosted": return "Detach Cloud"
-    default: return "Codex"
-    }
+    AgentProvider.displayName(for: id)
   }
 }
