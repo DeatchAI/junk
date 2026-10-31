@@ -7,13 +7,14 @@ struct ConversationBranch: Codable, Identifiable, Equatable {
   let messageNumber: Int?
   let title: String
 
-  var label: String { messageNumber.map { "Edited message \($0)" } ?? "Original conversation" }
+  var label: String { messageNumber.map { "Branch from message \($0)" } ?? "Original conversation" }
 }
 
 struct ConversationMessageReference: Codable, Equatable {
   let messageId: String
   let promptHash: String
   let canBranch: Bool
+  var canBranchAfter: Bool? = nil
 }
 
 struct ConversationBranchState: Decodable, Equatable {
@@ -26,6 +27,7 @@ struct ConversationBranchState: Decodable, Equatable {
 struct ConversationBranchFrom: Codable, Equatable {
   let messageId: String
   let promptHash: String
+  var afterResponse: Bool? = nil
 }
 
 enum ConversationPrompt {

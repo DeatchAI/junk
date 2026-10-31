@@ -2,14 +2,15 @@ import Foundation
 
 /// Shared native presentation catalog; runtime capabilities remain authoritative.
 enum AgentProvider: String, CaseIterable, Identifiable, Hashable {
-  case codex, claude, grok, fx, opencode, pi, amp, omp
+  case codex, claude, cursor, grok, fx, opencode, pi, amp, omp
   var id: String { rawValue }
-  var executable: String { rawValue }
+  var executable: String { self == .cursor ? "cursor-agent" : rawValue }
 
   var name: String {
     switch self {
     case .codex: "Codex"
     case .claude: "Claude"
+    case .cursor: "Cursor"
     case .grok: "Grok"
     case .fx: "fx"
     case .opencode: "OpenCode"
@@ -27,6 +28,7 @@ enum AgentProvider: String, CaseIterable, Identifiable, Hashable {
     switch self {
     case .codex: "chevron.left.forwardslash.chevron.right"
     case .claude: "brain.head.profile"
+    case .cursor: "cube.transparent"
     case .grok: "bolt.fill"
     case .fx: "bolt.horizontal.circle"
     case .opencode: "shippingbox"
@@ -44,6 +46,7 @@ enum AgentProvider: String, CaseIterable, Identifiable, Hashable {
       case .omp: return "Uses your Oh My Pi login and configured providers"
       case .fx: return "Uses your fx and Vercel AI Gateway account"
       case .opencode: return "Uses your existing OpenCode configuration"
+      case .cursor: return "Uses your Cursor account and model selection"
       default: return "Uses your \(name) account"
       }
     }
@@ -53,6 +56,7 @@ enum AgentProvider: String, CaseIterable, Identifiable, Hashable {
     case .omp: return "Install Oh My Pi from omp.sh and sign in with /login"
     case .fx: return "Install the fx CLI and run fx login"
     case .opencode: return "The bundled OpenCode harness is unavailable"
+    case .cursor: return "Install Cursor CLI and sign in with cursor-agent login"
     default: return "Install the \(name) CLI to connect"
     }
   }

@@ -10,6 +10,7 @@ import Foundation
 struct AppSettings {
   static let notchLiveActivitiesKey = "notch_live_activities_enabled"
   static let activityIslandPlacementKey = "activity_island_placement"
+  static let appPresentationModeKey = "app_presentation_mode"
 
   static var notchLiveActivitiesEnabled: Bool {
     UserDefaults.standard.object(forKey: notchLiveActivitiesKey) as? Bool ?? true

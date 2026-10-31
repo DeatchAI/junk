@@ -7,6 +7,9 @@ import Foundation
 @MainActor
 final class WorkingDirectoryStore: ObservableObject {
   @Published private(set) var url: URL?
+  @Published private(set) var remoteWorkspace: RemoteWorkspaceSelection?
+  @Published private(set) var remoteConnectionStatus: RemoteMachineConnectionStatus = .idle
+  @Published private(set) var selectionLocked = false
 
   private static let bookmarkKey = "composer.working-directory.bookmark.v1"
   private static let pathKey = "composer.working-directory.path.v1"
@@ -26,13 +29,38 @@ final class WorkingDirectoryStore: ObservableObject {
   }
 
   var displayName: String {
+    if let remoteWorkspace { return "\(remoteWorkspace.name) · \(remoteWorkspace.machineName)" }
     guard let url else {
       return "Projects"
     }
     return url.lastPathComponent.isEmpty ? url.path : url.lastPathComponent
   }
 
+  var path: String? { remoteWorkspace?.path ?? url?.path }
+  var isRemote: Bool { remoteWorkspace != nil }
+
+  func isReady(on endpoint: RuntimeEndpoint) -> Bool {
+    guard let remoteWorkspace else { return endpoint.machineID == nil }
+    return remoteConnectionStatus == .connected && endpoint.machineID == remoteWorkspace.machineID
+  }
+
+  func setRemoteConnectionStatus(_ status: RemoteMachineConnectionStatus) {
+    remoteConnectionStatus = status
+  }
+
+  func lockSelection() { selectionLocked = true }
+  func unlockSelectionForNewChat() { selectionLocked = false }
+
+  func setRemoteWorkspace(_ selection: RemoteWorkspaceSelection) {
+    guard !selectionLocked else { return }
+    remoteWorkspace = selection
+    remoteConnectionStatus = .connecting
+  }
+
   func setDirectory(_ candidate: URL?) {
+    guard !selectionLocked else { return }
+    remoteWorkspace = nil
+    remoteConnectionStatus = .idle
     guard let candidate else {
       clear()
       return
@@ -46,9 +74,12 @@ final class WorkingDirectoryStore: ObservableObject {
   }
 
   func clear() {
+    guard !selectionLocked else { return }
     activeSecurityScopedURL?.stopAccessingSecurityScopedResource()
     activeSecurityScopedURL = nil
     url = nil
+    remoteWorkspace = nil
+    remoteConnectionStatus = .idle
     defaults.removeObject(forKey: Self.bookmarkKey)
     defaults.removeObject(forKey: Self.pathKey)
   }

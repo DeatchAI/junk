@@ -85,6 +85,17 @@ struct FileAttachmentRequest: Codable, Equatable {
 }
 
 extension ChatRequest {
+  /// Remote follow-ups retain the task's provider, folder, and permissions.
+  /// Old file/tab attachments remain in native history and are not reattached.
+  func followUp(_ text: String, in conversationId: String) -> ChatRequest {
+    ChatRequest(text: text, runId: UUID().uuidString,
+      conversationId: conversationId, workspacePath: workspacePath,
+      integrations: integrations, systemPrompt: systemPrompt, permissionMode: permissionMode,
+      composerMode: composerMode, fastMode: fastMode ?? false, userId: userId,
+      model: model, agent: agent, modelSettings: modelSettings,
+      zeroDataRetention: zeroDataRetention, mcpServerIds: mcpServerIds, skills: skills)
+  }
+
   func continuation(in conversationId: String) -> ChatRequest {
     ChatRequest(
       text: "Continue the interrupted task in this conversation from where you left off. Check existing work before repeating actions.",

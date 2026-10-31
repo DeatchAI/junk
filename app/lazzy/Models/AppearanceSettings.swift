@@ -26,6 +26,7 @@ struct AppearanceSettings {
     static let accentColor = "appearance_accent_color"
     static let borderRadius = "appearance_border_radius"
     static let glassTranslucency = "appearance_glass_translucency"
+    static let fontName = "appearance_font_name"
   }
 
   // MARK: - Defaults (Current dark theme)
@@ -58,6 +59,14 @@ struct AppearanceSettings {
   @AppStorage(Keys.glassTranslucency)
   private static var storedGlassTranslucency: Double = defaultGlassTranslucency
 
+  @AppStorage(Keys.fontName)
+  static var fontName: String = AppFontChoice.geist.rawValue
+
+  static var fontChoice: AppFontChoice {
+    get { AppFontChoice(rawValue: fontName) ?? .geist }
+    set { fontName = newValue.rawValue }
+  }
+
   /// The preference controls the background tint, never the opacity of text or controls.
   static var glassTranslucency: Double {
     get { normalizedTranslucency(storedGlassTranslucency) }
@@ -88,6 +97,7 @@ struct AppearanceSettings {
     accentColorHex = defaultAccentColor
     borderRadius = defaultBorderRadius
     glassTranslucency = defaultGlassTranslucency
+    fontChoice = .geist
   }
 }
 

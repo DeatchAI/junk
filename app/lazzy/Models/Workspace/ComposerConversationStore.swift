@@ -14,24 +14,31 @@ import Foundation
   @Published private(set) var attachingID: String?
   var isAttaching: Bool { attachingID != nil }
 
-  private let catalogLoader: CatalogLoader
-  private let transcriptLoader: TranscriptLoader
+  private let catalogLoader: CatalogLoader?
+  private let transcriptLoader: TranscriptLoader?
+  private var endpoint: RuntimeEndpoint
   private var listTask: Task<Void, Never>?
   private var attachmentTask: Task<Void, Never>?
   private var listID: UUID?
   private var attachmentID: UUID?
   private var nextOffset = 0
 
-  init(catalogLoader: CatalogLoader? = nil, transcriptLoader: TranscriptLoader? = nil) {
-    self.catalogLoader = catalogLoader ?? { query, offset in
-      let request = HistoryConversationLoader.catalogRequest(query: query, offset: offset,
-        port: ServerConfig.port, token: ServerConfig.runtimeToken)
-      return try await HistoryConversationLoader.loadCatalog(request, using: .shared)
-    }
-    self.transcriptLoader = transcriptLoader ?? { id in
-      let request = HistoryConversationLoader.request(id: id, port: ServerConfig.port, token: ServerConfig.runtimeToken)
-      return try await HistoryConversationLoader.load(request, id: id, using: .shared)
-    }
+  init(catalogLoader: CatalogLoader? = nil, transcriptLoader: TranscriptLoader? = nil,
+       endpoint: RuntimeEndpoint? = nil) {
+    self.catalogLoader = catalogLoader
+    self.transcriptLoader = transcriptLoader
+    self.endpoint = endpoint ?? .local
+  }
+
+  func updateEndpoint(_ endpoint: RuntimeEndpoint) {
+    guard self.endpoint != endpoint else { return }
+    cancelSearch()
+    cancelAttachment()
+    self.endpoint = endpoint
+    conversations = []
+    hasMore = false
+    nextOffset = 0
+    error = nil
   }
 
   var contentRevision: String {
@@ -67,7 +74,13 @@ import Foundation
     attachmentTask = Task { [weak self] in
       guard let self else { return }
       do {
-        let entry = try await transcriptLoader(conversation.id)
+        let entry: HistoryConversationResponse
+        if let transcriptLoader {
+          entry = try await transcriptLoader(conversation.id)
+        } else {
+          let request = HistoryConversationLoader.request(id: conversation.id, endpoint: endpoint)
+          entry = try await HistoryConversationLoader.load(request, id: conversation.id, using: .shared)
+        }
         try Task.checkCancellation()
         guard attachmentID == id else { return }
         guard entry.conversation.id == conversation.id else { throw HistoryConversationLoader.LoadError.invalidResponse }
@@ -90,7 +103,13 @@ import Foundation
       guard let self else { return }
       do {
         if debounce { try await Task.sleep(for: .milliseconds(200)) }
-        let page = try await catalogLoader(value, offset)
+        let page: HistoryConversationCatalog
+        if let catalogLoader {
+          page = try await catalogLoader(value, offset)
+        } else {
+          let request = HistoryConversationLoader.catalogRequest(query: value, offset: offset, endpoint: endpoint)
+          page = try await HistoryConversationLoader.loadCatalog(request, using: .shared)
+        }
         try Task.checkCancellation()
         guard listID == id else { return }
         guard page.offset == offset else { throw HistoryConversationLoader.LoadError.invalidResponse }
