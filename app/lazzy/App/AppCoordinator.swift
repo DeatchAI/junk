@@ -35,8 +35,10 @@ class AppCoordinator: ObservableObject {
 
   var cancellables = Set<AnyCancellable>()
   var approvalManagers: [String: WebSocketManager] = [:]
+  var remoteHistoryWindows: [ObjectIdentifier: HistoryWindowController] = [:]
   private var hasStartedCoreServices = false
   private var isObservingShortcutChanges = false
+  private var isObservingLicenseAccess = false
   weak var voiceTargetController: FloatingWindowController?
 
   static var shared: AppCoordinator?
@@ -50,6 +52,10 @@ class AppCoordinator: ObservableObject {
     setupVoiceDictation()
     setupActivityIslandCallbacks()
     AgentQuestionCenter.shared.configure(runStore: detachedRunStore, island: activityIsland)
+    MessagesRemoteController.shared.configure(store: detachedRunStore, controls: detachedRunControls,
+      approvalResponse: { [weak self] id, approved in
+        self?.respondToApproval(requestId: id, approved: approved) ?? false
+      })
     _ = keepAwake
 
     setupHistoryCallbacks()
@@ -93,6 +99,7 @@ class AppCoordinator: ObservableObject {
   }
 
   func handleFinderFiles(_ urls: [URL]) {
+    guard requireAppAccess() else { return }
     var seen = Set<String>()
     let attachments = urls.map(\.standardizedFileURL)
       .filter { seen.insert($0.path).inserted }
@@ -103,6 +110,7 @@ class AppCoordinator: ObservableObject {
   }
 
   func runWorkflow(_ workflow: SavedWorkflow) {
+    guard requireAppAccess() else { return }
     guard let prompt = workflow.prompt, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     else { return }
 
@@ -150,10 +158,48 @@ class AppCoordinator: ObservableObject {
 
   /// Start coordinating (call on app launch)
   func start() {
-    if !hasCompletedOnboarding {
+    let license = LicenseManager.shared
+    if !isObservingLicenseAccess {
+      isObservingLicenseAccess = true
+      license.onAccessRequired = { [weak self] in self?.presentLicensePaywall() }
+      license.$hasAccess.removeDuplicates()
+        .receive(on: RunLoop.main)
+        .sink { [weak self] granted in self?.licenseAccessChanged(granted) }
+        .store(in: &cancellables)
+    }
+    license.beginMonitoring()
+  }
+
+  func presentLicensePaywall() {
+    onboardingWindow.show(licenseOnly: hasCompletedOnboarding)
+  }
+
+  @discardableResult
+  func requireAppAccess() -> Bool {
+    guard LicenseManager.shared.requireAccess() else { return false }
+    guard hasCompletedOnboarding else {
       onboardingWindow.show()
+      return false
+    }
+    return true
+  }
+
+  private func licenseAccessChanged(_ granted: Bool) {
+    if granted {
+      if hasCompletedOnboarding {
+        onboardingWindow.close()
+        performCoreStart()
+        if serverLauncher.isRunning {
+          wsManager.connect()
+          MessagesRemoteController.shared.resumeIfPaired()
+        }
+      } else {
+        onboardingWindow.show()
+      }
     } else {
-      performCoreStart()
+      // Let an existing agent finish; block new work and new remote requests.
+      MessagesRemoteController.shared.stop()
+      presentLicensePaywall()
     }
   }
 
@@ -172,7 +218,7 @@ class AppCoordinator: ObservableObject {
 
   /// The original core start logic (permissions, monitoring, server connection)
   private func performCoreStart() {
-    guard hasCompletedOnboarding else { return }
+    guard hasCompletedOnboarding, LicenseManager.shared.requireAccess() else { return }
     guard !hasStartedCoreServices else { return }
     hasStartedCoreServices = true
     keepAwake.resume()
@@ -181,7 +227,9 @@ class AppCoordinator: ObservableObject {
     permissionsManager.checkPermissions()
 
     serverLauncher.onServerReady = { [weak self] in
+      guard LicenseManager.shared.requireAccess() else { return }
       self?.wsManager.connect()
+      MessagesRemoteController.shared.resumeIfPaired()
     }
     serverLauncher.start()
 
@@ -197,6 +245,7 @@ class AppCoordinator: ObservableObject {
   }
 
   private func completeOnboarding() {
+    guard LicenseManager.shared.requireAccess() else { return }
     UserDefaults.standard.set(OnboardingState.currentVersion, forKey: OnboardingState.completionVersionKey)
     hasCompletedOnboarding = true
     onboardingWindow.close()
@@ -208,6 +257,7 @@ class AppCoordinator: ObservableObject {
   /// Stop monitoring
   func stop() {
     keepAwake.suspend()
+    MessagesRemoteController.shared.stop()
     wsManager.disconnect()
     serverLauncher.stop()
     voiceDictation.stop()
@@ -216,6 +266,7 @@ class AppCoordinator: ObservableObject {
 
   /// Opens a new task for the user's configured New Floating Chat shortcut.
   func openNewFloatingTask() {
+    guard requireAppAccess() else { return }
     let location = NSEvent.mouseLocation
     _ = floatingWorkspace.openNewTask(at: location)
   }
@@ -223,6 +274,7 @@ class AppCoordinator: ObservableObject {
   /// Restores the last focused task without replacing its conversation or
   /// current stream. Starting from a clean workspace creates the first task.
   func resumeLastFloatingTask() {
+    guard requireAppAccess() else { return }
     let location = NSEvent.mouseLocation
     if !floatingWorkspace.showLastActiveTask(at: location) {
       _ = floatingWorkspace.openNewTask(at: location)
@@ -230,6 +282,7 @@ class AppCoordinator: ObservableObject {
   }
 
   func openFirstAgentTask(agent: String) {
+    guard requireAppAccess() else { return }
     let task = floatingWorkspace.openNewTask(at: NSEvent.mouseLocation)
     task.controller.selectedAgent = agent
     task.controller.selectedModel = DetachSettings.selectedModel(for: agent)
@@ -242,6 +295,7 @@ class AppCoordinator: ObservableObject {
 
   /// Toggle the history panel
   func toggleHistoryPanel() {
+    guard requireAppAccess() else { return }
     historyWindow.toggle()
   }
 
@@ -250,7 +304,7 @@ class AppCoordinator: ObservableObject {
   private func setupHistoryCallbacks() {
     // When user selects a conversation from history
     historyWindow.onSelectConversation = { [weak self] conversation in
-      guard let self = self else { return }
+      guard let self, self.requireAppAccess() else { return }
 
       // Reopen history in a new task so it cannot replace an active composer.
       let location = NSEvent.mouseLocation
@@ -259,7 +313,7 @@ class AppCoordinator: ObservableObject {
 
     // When user wants to start a new conversation
     historyWindow.onNewConversation = { [weak self] in
-      guard let self = self else { return }
+      guard let self, self.requireAppAccess() else { return }
 
       // History's new-chat action also creates an independent floating task.
       let location = NSEvent.mouseLocation
