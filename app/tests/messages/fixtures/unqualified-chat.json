@@ -1,0 +1,13 @@
+{
+  "guid": "any;-;+14155550123",
+  "service": "iMessage",
+  "identifier": "+14155550123",
+  "account_login": "fixture-agent@example.com",
+  "name": "",
+  "participants": [
+    "+14155550123"
+  ],
+  "last_addressed_handle": "fixture-agent@example.com",
+  "id": 42,
+  "is_group": false
+}

@@ -4,6 +4,7 @@ import Foundation
 struct IslandRunStateTests {
   @MainActor static func main() {
     UnreadResultTests.run()
+    TaskInteractionTests.run()
     let store = DetachedRunStore(), controls = DetachedRunControls()
     let codex = WebSocketManager(), claude = WebSocketManager()
     let request = ChatRequest(text: "Fix the build", runId: "a", workspacePath: "/project",

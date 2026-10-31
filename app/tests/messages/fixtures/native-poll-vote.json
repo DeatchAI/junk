@@ -1,0 +1,68 @@
+{
+  "method": "message",
+  "jsonrpc": "2.0",
+  "params": {
+    "message": {
+      "reactions": [],
+      "sender": "+14155550123",
+      "chat_id": 42,
+      "attachments": [],
+      "text": "",
+      "reply_to_text": "",
+      "is_from_me": false,
+      "id": 12,
+      "chat_identifier": "+14155550123",
+      "participants": [
+        "+14155550123"
+      ],
+      "is_group": false,
+      "chat_guid": "any;-;+14155550123",
+      "reply_to_guid": "NATIVE-FIXTURE-POLL",
+      "guid": "fixture-row-12",
+      "created_at": "2026-05-09T06:13:32.000Z",
+      "poll": {
+        "poll_guid": "NATIVE-FIXTURE-POLL",
+        "votes": [
+          {
+            "option_text": "Approve once",
+            "option_id": "fixture-yes",
+            "participant": "someone-else@example.com",
+            "event_type": "selected"
+          },
+          {
+            "option_text": "Deny",
+            "option_id": "fixture-no",
+            "participant": "+14155550123",
+            "event_type": "selected"
+          }
+        ],
+        "event": "imessage.poll.voted",
+        "participants": [
+          "+14155550123",
+          "someone-else@example.com"
+        ],
+        "vote": {
+          "option_text": "Approve once",
+          "option_id": "fixture-yes",
+          "participant": "someone-else@example.com",
+          "event_type": "selected"
+        },
+        "metadata": {
+          "query_keys": [
+            "response",
+            "source"
+          ],
+          "url_scheme": "messages-polls",
+          "url_host": "poll",
+          "associated_message_type": 4000,
+          "payload_bytes": 326
+        },
+        "kind": "vote",
+        "original_guid": "NATIVE-FIXTURE-POLL"
+      },
+      "reply_to_sender": "fixture-agent@example.com",
+      "chat_name": ""
+    },
+    "subscription": 1
+  }
+}

@@ -1,0 +1,30 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { git } from "../../server-v2/src/git/GitRepository";
+import { GitReviewService } from "../../server-v2/src/git/GitReviewService";
+import { GitStorage } from "../../server-v2/src/git/GitStorage";
+import { gitResponse } from "../../server-v2/src/server/GitRoutes";
+import { isAuthorizedRuntimeRequest } from "../../server-v2/src/runtime/RuntimeAuth";
+
+const directory = Bun.env.DETACH_GIT_PREVIEW_DIR!;
+const workspace = join(directory, "project");
+mkdirSync(join(workspace, "UI"), { recursive: true }); mkdirSync(join(workspace, "docs"), { recursive: true });
+await git(workspace, ["init", "-b", "main"]); await git(workspace, ["config", "user.name", "Fixture"]);
+await git(workspace, ["config", "user.email", "fixture@example.invalid"]);
+writeFileSync(join(workspace, "UI/Composer.swift"), "struct Composer {\n  let title = \"Before\"\n}\n");
+writeFileSync(join(workspace, "docs/review.md"), "# Change review\n");
+await git(workspace, ["add", "."]); await git(workspace, ["commit", "-m", "Fixture"]);
+const remote = join(directory, "remote.git"); mkdirSync(remote);
+await git(remote, ["init", "--bare", "-b", "main"]); await git(workspace, ["remote", "add", "origin", remote]);
+const service = new GitReviewService(new GitStorage(join(directory, "data")));
+await service.begin(workspace, "native-preview", "Add change review");
+writeFileSync(join(workspace, "UI/Composer.swift"), "struct Composer {\n  let title = \"Review changes\"\n  let action = \"View changes\"\n}\n");
+writeFileSync(join(workspace, "docs/review.md"), "# Change review\nReview the diff before discarding files.\n");
+writeFileSync(join(workspace, "UI/Changes.swift"), "struct Changes {\n  let canUndo = true\n}\n");
+await service.finish("native-preview", "preview-chat");
+const token = Bun.env.DETACH_RUNTIME_TOKEN!;
+const server = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
+  if (!isAuthorizedRuntimeRequest(request, new URL(request.url), token)) return new Response("Unauthorized", { status: 401 });
+  return gitResponse(request, service);
+} });
+console.log(JSON.stringify({ port: server.port, workspace }));

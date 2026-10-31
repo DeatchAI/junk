@@ -1,0 +1,56 @@
+{
+  "method": "message",
+  "jsonrpc": "2.0",
+  "params": {
+    "message": {
+      "text": "",
+      "chat_id": 42,
+      "participants": [
+        "+14155550123"
+      ],
+      "is_from_me": true,
+      "sender": "fixture-agent@example.com",
+      "created_at": "2026-05-09T06:13:30.000Z",
+      "guid": "NATIVE-FIXTURE-POLL",
+      "chat_guid": "any;-;+14155550123",
+      "chat_identifier": "+14155550123",
+      "balloon_bundle_id": "com.apple.messages.Polls",
+      "chat_name": "",
+      "attachments": [],
+      "is_group": false,
+      "poll": {
+        "poll_guid": "NATIVE-FIXTURE-POLL",
+        "event": "imessage.poll.created",
+        "question": "Detach synthetic approval [fixture]",
+        "participants": [
+          "fixture-agent@example.com"
+        ],
+        "kind": "created",
+        "creator": "fixture-agent@example.com",
+        "options": [
+          {
+            "id": "fixture-yes",
+            "text": "Approve once"
+          },
+          {
+            "id": "fixture-no",
+            "text": "Deny"
+          }
+        ],
+        "metadata": {
+          "payload_bytes": 333,
+          "bundle_id": "com.apple.messages.Polls",
+          "url_scheme": "messages-polls",
+          "url_host": "poll",
+          "query_keys": [
+            "definition",
+            "source"
+          ]
+        }
+      },
+      "id": 10,
+      "reactions": []
+    },
+    "subscription": 1
+  }
+}

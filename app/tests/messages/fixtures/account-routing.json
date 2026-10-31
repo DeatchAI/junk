@@ -1,0 +1,18 @@
+{
+  "chats": [
+    {
+      "guid": "any;-;+14155550123",
+      "display_name": "",
+      "account_login": "fixture-agent@example.com",
+      "last_addressed_handle": "fixture-agent@example.com",
+      "identifier": "+14155550123",
+      "participants": [
+        "+14155550123"
+      ],
+      "id": 42,
+      "is_group": false,
+      "service": "iMessage",
+      "last_message_at": "2026-05-09T06:13:20.000Z"
+    }
+  ]
+}

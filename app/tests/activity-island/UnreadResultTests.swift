@@ -10,6 +10,9 @@ enum UnreadResultTests {
     assert(store.unreadRuns.count == 7 && store.presentationRuns.count == 7,
       "Unreviewed results must survive the old three-result presentation limit")
     assert(store.unreadRuns.first?.projectLabel == "App6")
+    let later = Date.now.addingTimeInterval(DetachedRunStore.completedVisibilityDuration + 1)
+    assert(store.presentationRuns(at: later).isEmpty && store.unreadRuns.count == 7,
+      "Completed tasks leave live activity after a short hold while unread history remains intact")
     store.markReviewed(conversationId: "chat6")
     assert(store.unreadRuns.count == 6 && !store.presentationRuns.contains { $0.conversationId == "chat6" })
     store.complete(runId: "r6", conversationId: "chat6")

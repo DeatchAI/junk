@@ -16,8 +16,8 @@ struct ProviderCatalogTests {
     defaults.set("opencode", forKey: selectionKey)
     assert(DetachSettings.selectedAgent == "opencode", "User-owned OpenCode must remain selected")
     let assets = URL(fileURLWithPath: CommandLine.arguments[1])
-    assert(AgentProvider.allCases.count == 8)
-    assert(Set(AgentProvider.allCases.map(\.id)).count == 8)
+    assert(AgentProvider.allCases.count == 9)
+    assert(Set(AgentProvider.allCases.map(\.id)).count == 9)
     assert(AgentProvider(rawValue: "hosted") == nil)
     for provider in [AgentProvider.pi, .amp, .omp] {
       assert(LocalAgentDetector.agents.contains(provider))
