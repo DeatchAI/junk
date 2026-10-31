@@ -34,7 +34,7 @@ export class TitleGenerator {
   }
 
   private async complete(request: TitleRequest, signal: AbortSignal) {
-    if (request.agent === "fx") return;
+    if (request.agent === "fx" || request.agent === "cursor") return;
     // Keep a custom Codex backend from silently switching to the default provider.
     if (request.agent === "codex" && !await (this.options.standardCodex ?? standardCodexConnection)()) return;
     const executable = await (this.options.find ?? findExecutable)(request.agent);

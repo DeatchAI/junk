@@ -90,7 +90,7 @@ export type ClientMessage =
 /**
  * `fx` and `opencode` use the customer's own CLI configuration and credentials.
  */
-export type AgentKind = "codex" | "claude" | "grok" | "fx" | "opencode" | "pi" | "amp" | "omp";
+export type AgentKind = "codex" | "claude" | "grok" | "cursor" | "fx" | "opencode" | "pi" | "amp" | "omp";
 
 export type ComposerMode = "explain_only" | "plan_only" | "review_only" | "debug_only";
 

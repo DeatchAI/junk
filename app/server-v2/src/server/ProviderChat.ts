@@ -1,4 +1,4 @@
-import { type ServerWebSocket, history, nativeHistory, agents, savedWorkflows, slashCommands, composio, browserAutomation, desktopBridge, capabilityBroker, agentQuestions, activeRuns } from "./RuntimeContext";
+import { type ServerWebSocket, history, nativeHistory, agents, savedWorkflows, slashCommands, composio, browserAutomation, desktopBridge, capabilityBroker, agentQuestions, activeRuns, gitReview } from "./RuntimeContext";
 import { type ChatRequest } from "../protocol/messages";
 import { matchDemoScenario, createDemoRun } from "../demo/DemoScenarios";
 import { learnedActionSkillAttachment } from "../actions/ActionSkillManager";
@@ -10,7 +10,7 @@ import { composerModeSystemInstruction } from "../composer/composerModes";
 import { resolveSelectedSkillInstructions } from "../skills/SkillResolver";
 import { isWaitingForAnswer } from "../questions/QuestionWait";
 import { normalizeAgentActivity } from "../activity/ActivityNormalizer";
-import { requestAgentPermission } from "./RuntimeApprovals";
+import { requestAgentPermission, resolvePermissionsForRun } from "./RuntimeApprovals";
 import { NativeRunContext } from "../history/native/NativeRunContext";
 import { ResponseTranscript } from "../activity/ResponseTranscript";
 import { chatContextSummary } from "./ChatContextSummary";
@@ -58,7 +58,11 @@ async function runChat(ws: ServerWebSocket, message: ChatRequest, frame: NativeR
       title: `${agent.displayName} is working`, subtitle, userFacing: true } });
   activity("Preparing your task");
 
+  let preparationCancelled = false;
   try {
+    activeRuns.set(ws, { cancel() { preparationCancelled = true; }, finished: Promise.resolve({ text: "" }) });
+    if (!demo) await gitReview.begin(frame.workspacePath, runId, frame.prompt);
+    if (preparationCancelled) throw new Error("Task stopped before the agent started.");
     if (browserActive) {
       await browserAutomation.beginTask(runId, [frame.workspacePath, ...(message.files?.map((file) => file.path) ?? [])],
         (event) => sendBrowserActivity(ws, runId, publicID(), agent.id, event));
@@ -105,6 +109,7 @@ async function runChat(ws: ServerWebSocket, message: ChatRequest, frame: NativeR
       onPermission(permission) { return requestAgentPermission(ws, permission, runId, conversation.id); },
       onQuestion(question) { return agentQuestions.ask(runId, question); },
     } satisfies Parameters<typeof agent.run>[1];
+    if (preparationCancelled) throw new Error("Task stopped before the agent started.");
     desktopBridge.registerRun(runId);
     const run = demo ? createDemoRun(demo, agent.id, callbacks) : agent.run(request, callbacks);
     const desktopAwareRun = { ...run, cancel() { desktopBridge.endRun(runId); run.cancel(); } };
@@ -118,8 +123,10 @@ async function runChat(ws: ServerWebSocket, message: ChatRequest, frame: NativeR
     if (brokerActive) await capabilityBroker.endRun(runId);
     if (browserActive) { await browserAutomation.endTask(runId); browserActive = false; }
     if (action) savedWorkflows.update(action.id, { lastSuccessfulRunAt: Date.now() });
+    if (!demo) await gitReview.finish(runId, publicID(), frame.messageOrdinal).catch(() => undefined);
     send(ws, { type: "done", runId, conversationId: conversation.id, tokenCount: estimateTokenCount(fullText), durationMs: Date.now() - startTime });
   } catch (error) {
+    if (!demo) await gitReview.finish(runId, publicID(), frame.messageOrdinal).catch(() => undefined);
     transcript.finish();
     frame.cacheResponse(fullText, transcript.parts);
     send(ws, { type: "error", error: error instanceof Error ? error.message : String(error), runId });
@@ -127,6 +134,7 @@ async function runChat(ws: ServerWebSocket, message: ChatRequest, frame: NativeR
       tokenCount: estimateTokenCount(fullText), durationMs: Date.now() - startTime });
   } finally {
     desktopBridge.endRun(runId);
+    resolvePermissionsForRun(runId);
     agentQuestions.endRun(runId);
     if (brokerActive) await capabilityBroker.endRun(runId).catch(() => undefined);
     if (browserActive) await browserAutomation.endTask(runId).catch(() => undefined);

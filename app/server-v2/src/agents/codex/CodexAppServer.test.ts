@@ -4,13 +4,13 @@ import { withFixture } from "./fixtures/CodexFixtureHarness";
 import type { AgentPermissionRequest, AgentStreamCallbacks } from "../AgentAdapter";
 
 describe("Codex interactive permissions", () => {
-  test("an expired approval fails with its reason instead of pretending the user declined", async () => {
+  test("a disconnected approval fails with its reason instead of pretending the user declined", async () => {
     await withFixture("command", async ({ adapter, workspace, marker }) => {
       const run = adapter.run({ type: "chat", text: "Check the app", workspacePath: workspace }, {
         onActivity() {}, onChunk() {},
-        async onPermission() { throw new Error("The approval request timed out without an answer."); },
+        async onPermission() { throw new Error("The approval connection was lost."); },
       });
-      await expect(run.finished).rejects.toThrow("timed out without an answer");
+      await expect(run.finished).rejects.toThrow("approval connection was lost");
       expect(await Bun.file(marker).exists()).toBe(false);
     });
   });

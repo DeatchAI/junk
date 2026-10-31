@@ -61,9 +61,10 @@ export class CodexAdapter implements AgentAdapter {
       }
       heartbeat = setInterval(() => {
         if (!cancelled && server && !server.isAwaitingInput && Date.now() - server.lastActivityAt >= 15_000) {
-          callbacks.onActivity("Working…", undefined, {
+          const title = server.isStartingTurn ? "Waiting for Codex to start replying" : "Working…";
+          callbacks.onActivity(title, undefined, {
             agent: "codex", kind: "status", action: "generic", phase: "updated",
-            title: "Working…", userFacing: true,
+            title, userFacing: true,
           });
         }
       }, 15_000);

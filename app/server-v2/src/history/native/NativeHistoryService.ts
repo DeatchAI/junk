@@ -16,6 +16,7 @@ export class NativeHistoryService {
   private queue = new Map<string, ExternalChat>();
   private workers = 0;
   private active = new Set<string>();
+  private awaitingDiscovery = new Map<string, AgentKind>();
   private stopped = false;
   private cacheEpoch = 0;
   private backgroundCachePaused = false;
@@ -41,11 +42,15 @@ export class NativeHistoryService {
           const result = await source.discover(); this.notices.set(source.provider, result.notices ?? []);
           for (const chat of result.chats) {
             const id = nativeConversationID(chat.sourceKey);
+            this.awaitingDiscovery.delete(id);
             if (!this.active.has(id)) this.index.upsert(chat);
             if (this.index.searchCacheEnabled && !this.backgroundCachePaused && !chat.active && this.index.needsMessages(chat)) this.queue.set(chat.sourceKey, chat);
           }
           if (result.complete === true) this.index.reconcile(source.provider, new Set([
             ...result.chats.map((chat) => chat.sourceKey),
+            ...[...this.awaitingDiscovery].flatMap(([id, provider]) => {
+              const chat = this.index.source(id); return provider === source.provider && chat ? [chat.sourceKey] : [];
+            }),
             ...[...this.active].flatMap((id) => { const chat = this.index.source(id); return chat?.provider === source.provider ? [chat.sourceKey] : []; }),
           ]));
         } catch {
@@ -116,7 +121,7 @@ export class NativeHistoryService {
     if (existing) Object.assign(chat, { ...existing, title: options.title || existing.title,
       locator: options.locator ?? existing.locator, model: options.model ?? existing.model, canResume: options.canResume ?? existing.canResume });
     chat.updatedAt = Date.now();
-    const id = this.index.upsert(chat); this.queue.delete(chat.sourceKey); this.active.add(id); this.changed(); return id;
+    const id = this.index.upsert(chat); this.queue.delete(chat.sourceKey); this.active.add(id); this.awaitingDiscovery.set(id, provider); this.changed(); return id;
   }
   updateTitle(id: string, value: string) {
     const chat = this.index.source(id); if (!chat) return;

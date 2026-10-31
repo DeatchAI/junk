@@ -53,6 +53,7 @@ export function normalizeMessages(messages: ImportedMessage[]) {
     if (size > MAX_TRANSCRIPT_BYTES || result.length >= 10_000) throw new Error("This conversation is too large to import safely.");
     const last = result.at(-1);
     if (last?.role === message.role) {
+      if (message.role === "assistant" && message.branchPoint) last.branchPoint = message.branchPoint;
       if (last.parts || message.parts) {
         last.parts = mergeParts([...(last.parts ?? [{ type: "text", text: last.content }]),
           ...(message.parts ?? [{ type: "text", text: message.content }])]);

@@ -3,11 +3,18 @@ import type { AgentKind } from "../protocol/messages";
 import { executableSearchDirs } from "./ExecutablePaths";
 import { runProcess } from "./ProcessRunner";
 import { discoverAdditionalAgents } from "./providers/AdditionalAgents";
+import { cursorProviderCredentials } from "./providers/CursorProviderCredentials";
 
 export async function findExecutable(name: string): Promise<string | undefined> {
-  if (["fx", "opencode", "pi", "amp", "omp"].includes(name)) {
+  if (["fx", "opencode", "pi", "amp", "omp", "cursor"].includes(name)) {
     const configured = Bun.env[`DETACH_${name.toUpperCase()}_PATH`]?.trim();
     if (configured && await Bun.file(configured).exists()) return configured;
+  }
+
+  if (name === "cursor") {
+    // `agent` is also used by Grok CLI. Cursor ships the unambiguous
+    // `cursor-agent` alias specifically for environments with both CLIs.
+    return await findExecutable("cursor-agent");
   }
 
   const fromPath = await which(name);
@@ -42,7 +49,7 @@ export async function getCapabilities(
     openCodePath
       ? discoverOpenCodeModels(openCodePath)
       : Promise.resolve({ models: [], error: undefined }),
-    discoverAdditionalAgents(findExecutable),
+    discoverAdditionalAgents(findExecutable, undefined, cursorProviderCredentials.apiKey),
   ]);
 
   return [

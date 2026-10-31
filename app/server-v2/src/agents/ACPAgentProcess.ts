@@ -1,5 +1,7 @@
+import { assertACPCompletion } from "./ACPCompletion";
 import { acpModelCatalog } from "./ACPModelCatalog";
 import { processEnv } from "../runtime/ProcessRunner";
+import { handleCursorACPMethod } from "./CursorACPRequests";
 import type { AgentPermissionRequest, AgentStreamCallbacks } from "./AgentAdapter";
 import {
   autoApprovedMCPToolIdentities,
@@ -23,6 +25,7 @@ export interface ACPAgentProcessOptions {
   model?: string;
   modelSettings?: AgentModelSettings;
   resumeSessionId?: string;
+  authenticateMethodID?: string;
   activityAgent: AgentKind;
   callbacks: AgentStreamCallbacks;
 }
@@ -42,6 +45,7 @@ export class ACPAgentProcess {
   private stdoutBuffer = "";
   private stderrBuffer = "";
   private fullText = "";
+  private textAfterLastTool = false;
   private sessionId?: string;
   private disposed = false;
   private loadingHistory = false;
@@ -92,18 +96,12 @@ export class ACPAgentProcess {
         }
       }
 
-      await this.request("session/prompt", {
+      const completion = await this.request("session/prompt", {
         sessionId: this.sessionId,
         prompt: [{ type: "text", text: prompt }],
       });
 
-      if (!this.fullText.trim()) {
-        throw new Error(
-          this.toolCalls.size > 0
-            ? "The agent completed its tool call but returned no final response."
-            : "The agent completed without returning a response.",
-        );
-      }
+      assertACPCompletion(completion, this.fullText.trim().length > 0, this.toolCalls.size > 0, this.textAfterLastTool);
 
       return { text: this.fullText };
     } finally {
@@ -129,6 +127,10 @@ export class ACPAgentProcess {
         version: "0.1.0",
       },
     }));
+
+    if (this.options.authenticateMethodID) {
+      await this.request("authenticate", { methodId: this.options.authenticateMethodID });
+    }
 
     const resume = this.options.resumeSessionId;
     if (resume && asRecord(initialized?.agentCapabilities)?.loadSession !== true) {
@@ -260,6 +262,14 @@ export class ACPAgentProcess {
       return;
     }
 
+    if (message.method?.startsWith("cursor/")) {
+      const respond = (id: number, response: { result?: unknown; error?: { code: number; message: string } }) =>
+        this.write({ jsonrpc: "2.0", id, ...response });
+      void handleCursorACPMethod(message, this.callbacks, respond)
+        .catch(() => { if (typeof message.id === "number") respond(message.id, { result: { outcome: { outcome: "cancelled" } } }); });
+      return;
+    }
+
     if (message.method === "session/update" || message.method === "x.ai/session/update") {
       this.handleSessionUpdate(message.params);
     }
@@ -281,11 +291,13 @@ export class ACPAgentProcess {
       const text = contentText(update?.content);
       if (!text) return;
       this.fullText += text;
+      this.textAfterLastTool = true;
       this.callbacks.onChunk(text);
       return;
     }
 
     if (kind === "tool_call") {
+      this.textAfterLastTool = false;
       const toolCallId = getString(update?.toolCallId);
       if (toolCallId) this.toolCalls.set(toolCallId, update as ACPToolCall);
       const title = getString(update?.title) || "Using a tool";

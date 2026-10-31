@@ -25,7 +25,7 @@ export function consumeJsonLines<T>(
   return { remainder };
 }
 
-export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, onTimeout: () => void, runId?: string) {
+export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, onTimeout: () => void, runId?: string, timeoutMessage?: string) {
   let timeoutId: Timer | undefined;
   const startedAt = Date.now();
   const initialWait = questionWaitMs(runId);
@@ -38,7 +38,7 @@ export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, onT
           const remaining = timeoutMs - (now - startedAt) + questionWaitMs(runId) - initialWait;
           if (remaining <= 0 && !isWaitingForAnswer(runId)) {
             onTimeout();
-            reject(new Error(`Agent did not finish within ${Math.round(timeoutMs / 1000)}s`));
+            reject(new Error(timeoutMessage ?? `Agent did not finish within ${Math.round(timeoutMs / 1000)}s`));
           } else {
             timeoutId = setTimeout(tick, isWaitingForAnswer(runId) ? 250 : Math.min(250, Math.max(1, remaining)));
           }

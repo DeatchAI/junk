@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { CodexAdapter } from "../../CodexAdapter";
 
 export async function withFixture(mode: string, body: (fixture: {
-  adapter: CodexAdapter; workspace: string; marker: string; log: string;
+  adapter: CodexAdapter; executable: string; workspace: string; marker: string; log: string;
 }) => Promise<void>) {
   const dir = await mkdtemp(join(tmpdir(), "detach-codex-approvals-"));
   try {
@@ -13,6 +13,6 @@ export async function withFixture(mode: string, body: (fixture: {
     await mkdir(workspace);
     await writeFile(executable, `#!${process.execPath}\nimport {runCodexFixture} from ${JSON.stringify(join(import.meta.dir, "CodexServerFixture.ts"))};\nawait runCodexFixture(${JSON.stringify({ mode, marker, log })});\n`);
     await chmod(executable, 0o755);
-    await body({ adapter: new CodexAdapter(async () => executable), workspace, marker, log });
+    await body({ adapter: new CodexAdapter(async () => executable), executable, workspace, marker, log });
   } finally { await rm(dir, { recursive: true, force: true }); }
 }

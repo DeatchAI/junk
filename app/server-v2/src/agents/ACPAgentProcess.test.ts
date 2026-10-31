@@ -135,6 +135,8 @@ for await (const chunk of Bun.stdin.stream()) {
     } else if (message.method === "session/new") {
       send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "empty-session" } });
     } else if (message.method === "session/prompt") {
+      send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "empty-session",
+        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Waiting for the app update" } } } });
       send({
         jsonrpc: "2.0",
         method: "session/update",

@@ -14,6 +14,7 @@ import { DesktopBridge } from "../desktop/DesktopBridge";
 import { SecretBridge } from "../secrets/SecretBridge";
 import { CapabilityBroker } from "../capabilities/CapabilityBroker";
 import { AgentQuestionBroker } from "../questions/AgentQuestionBroker";
+import { GitReviewService } from "../git/GitReviewService";
 
 
 export const PORT = Number(Bun.env.PORT || 3847);
@@ -33,6 +34,7 @@ export const BROWSER_EXTENSION_ORIGIN = "chrome-extension://gdobcabflbojkedmocah
 export const agents = new AgentRegistry();
 
 export const history = new SqliteHistory();
+export const gitReview = new GitReviewService();
 
 export const appClients = new Set<ServerWebSocket>();
 
@@ -79,7 +81,7 @@ export const pendingAgentPermissions = new Map<string, {
   reject: (error: Error) => void;
   runId: string;
   conversationId: string;
-  timeout: Timer;
+  finishWaiting(): void;
 }>();
 
 

@@ -1,6 +1,7 @@
 import type { AgentKind } from "../protocol/messages";
 import type { AgentAdapter } from "./AgentAdapter";
 import { ClaudeAdapter } from "./ClaudeAdapter";
+import { CursorAdapter } from "./CursorAdapter";
 import { CodexAdapter } from "./CodexAdapter";
 import { FxAdapter } from "./FxAdapter";
 import { GrokAdapter } from "./GrokAdapter";
@@ -16,6 +17,7 @@ export class AgentRegistry {
   constructor() {
     this.register(new CodexAdapter());
     this.register(new ClaudeAdapter());
+    this.register(new CursorAdapter());
     this.register(new GrokAdapter());
     this.register(new FxAdapter());
     this.register(new OpenCodeAdapter());

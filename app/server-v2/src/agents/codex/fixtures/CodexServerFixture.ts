@@ -5,6 +5,7 @@ export async function runCodexFixture(options: { mode: string; marker: string; l
   const approvalReplies: string[] = [];
   const send = (message: unknown) => process.stdout.write(`${JSON.stringify(message)}\n`);
   let threadId = "thread-test";
+  let deferredTurnStartID: number | undefined;
   const notify = (method: string, params: Record<string, unknown>) => send({ method, params: { threadId, ...params } });
   const finish = (text: string) => {
     notify("item/agentMessage/delta", { itemId: "reply", delta: text.slice(0, 4) });
@@ -21,14 +22,14 @@ export async function runCodexFixture(options: { mode: string; marker: string; l
       if (options.mode.startsWith("question") && !message.params.capabilities?.experimentalApi) throw new Error("Question protocol was not enabled");
       send({ id: message.id, result: { userAgent: "test-server" } });
     } else if (message.method === "thread/fork") {
-      if (message.params.threadId !== "imported-thread" || message.params.beforeTurnId !== "turn-replaced") {
+      if (message.params.threadId !== "imported-thread" || (options.mode === "fork-after" ? message.params.beforeTurnId !== undefined : message.params.beforeTurnId !== "turn-replaced")) {
         throw new Error("Missing exact native branch boundary");
       }
       threadId = "fork-test";
       send({ id: message.id, result: { thread: { id: threadId, forkedFromId: message.params.threadId } } });
     } else if (message.method === "thread/turns/list") {
       send({ id: message.id, result: { data: options.mode === "fork-empty" ? [] :
-        [{ id: options.mode === "fork-invalid" ? "turn-replaced" : "turn-ancestor" }] } });
+        [{ id: options.mode === "fork-invalid" ? "turn-replaced" : options.mode === "fork-after" ? "turn-selected" : "turn-ancestor" }] } });
     } else if (message.method === "thread/archive") {
       writeFileSync(options.marker, "archived");
       send({ id: message.id, result: {} });
@@ -48,8 +49,15 @@ export async function runCodexFixture(options: { mode: string; marker: string; l
         throw new Error("Unexpected broad permissions");
       }
       if (options.mode === "crash") process.exit(2);
-      send({ id: message.id, result: { turn: { id: "turn-test" } } });
+      if (options.mode === "approval-before-start") deferredTurnStartID = message.id;
+      else send({ id: message.id, result: { turn: { id: "turn-test" } } });
       notify("turn/started", { turn: { id: "turn-test" } });
+      if (options.mode === "fork-stalled" || options.mode === "startup-stalled") continue;
+      if (options.mode === "fork-thinking") {
+        notify("item/started", { turnId: "turn-test", item: { id: "thinking", type: "reasoning" } });
+        setTimeout(() => finish("Independent branch reply"), 140);
+        continue;
+      }
       if (options.mode.startsWith("fork")) { finish("Independent branch reply"); continue; }
       if (options.mode.startsWith("question")) {
         if (!process.argv.includes("features.default_mode_request_user_input=true")) throw new Error("Default-mode questions were not enabled");
@@ -109,6 +117,10 @@ export async function runCodexFixture(options: { mode: string; marker: string; l
       }
       if (approvalReplies.length === 3) finish("Approvals completed");
     } else if (message.id === "approval-1") {
+      if (deferredTurnStartID !== undefined) {
+        send({ id: deferredTurnStartID, result: { turn: { id: "turn-test" } } });
+        deferredTurnStartID = undefined;
+      }
       const allowed = message.result?.decision === "accept" || message.result?.permissions?.network?.enabled === true;
       if (allowed) writeFileSync(options.marker, "approved");
       notify("item/completed", { item: {

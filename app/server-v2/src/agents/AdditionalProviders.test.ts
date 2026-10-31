@@ -125,7 +125,7 @@ describe("additional CLI providers", () => {
   test("Omp rejects an unapproved command", async () => {
     await fixture("omp", async () => {
       await expect(new OmpAdapter().run({ ...request, agent: "omp" },
-        { ...callbacks, onPermission: async () => false }).finished).rejects.toThrow("without returning a response");
+        { ...callbacks, onPermission: async () => false }).finished).rejects.toThrow("declined to continue");
     });
   });
   test("Omp queues concurrent approvals until the previous decision is resolved", async () => {
@@ -144,14 +144,16 @@ describe("additional CLI providers", () => {
       decide(true); await run.finished; expect(count).toBe(2);
     });
   });
-  test("all three advertise install guidance when missing, not fake models", async () => {
+  test("all four advertise install guidance when missing, not fake models", async () => {
     const capabilities = await discoverAdditionalAgents(async () => undefined);
-    expect(capabilities.map((item) => item.id)).toEqual(["pi", "amp", "omp"]);
+    expect(capabilities.map((item) => item.id)).toEqual(["cursor", "pi", "amp", "omp"]);
     expect(capabilities.every((item) => !item.installed && item.models.length === 0 && item.authHint)).toBe(true);
   });
   test("installed catalogs use native Pi/Omp model discovery and Amp mode identities", async () => {
     await fixture("pi", async (path) => {
-      const capabilities = await discoverAdditionalAgents(async () => path);
+      const [pi, amp, omp] = await Promise.all(["pi", "amp", "omp"].map(async (provider) =>
+        (await discoverAdditionalAgents(async () => path, provider))[0]!));
+      const capabilities = [pi, amp, omp];
       expect(capabilities.every((item) => item.installed)).toBe(true);
       expect(capabilities.map((item) => item.models.length)).toEqual([1, 4, 2]);
       expect(capabilities[0]?.defaultModel).toBe("provider/default");

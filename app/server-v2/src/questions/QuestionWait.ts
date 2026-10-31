@@ -1,3 +1,4 @@
+/** Shared human-wait accounting for both questions and permission approvals. */
 const waitingRuns = new Map<string, { count: number; startedAt: number; elapsed: number }>();
 
 export function beginQuestionWait(runId: string) {

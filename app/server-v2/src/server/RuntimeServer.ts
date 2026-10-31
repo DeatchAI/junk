@@ -1,4 +1,4 @@
-import { PORT, RUNTIME_TOKEN, agentQuestions, capabilityBroker, browserAutomation, desktopBridge, composio, BROWSER_EXTENSION_ORIGIN, browserBridge, appClients, secretBridge, activeRuns, nativeHistory } from "./RuntimeContext";
+import { PORT, RUNTIME_TOKEN, agentQuestions, capabilityBroker, browserAutomation, desktopBridge, composio, BROWSER_EXTENSION_ORIGIN, browserBridge, appClients, secretBridge, activeRuns, nativeHistory, gitReview } from "./RuntimeContext";
 import { isAuthorizedRuntimeRequest, isAllowedRuntimeSocketOrigin } from "../runtime/RuntimeAuth";
 import { jsonResponse, capabilities, isBrowserNativeSocket, log } from "./RuntimeHelpers";
 import { resolvePermissionsForSocket } from "./RuntimeApprovals";
@@ -7,6 +7,8 @@ import { closeHistoryProcesses } from "../imports/ReadOnlyProcess";
 import { historyCatalogResponse, historyConversationResponse } from "./HistoryHTTPRoute";
 import { historyCacheResponse } from "./HistoryCacheRoute";
 import { ProviderUsageService, providerUsageResponse } from "../routing/ProviderUsage";
+import { gitResponse } from "./GitRoutes";
+import { cursorProviderCredentialResponse, cursorProviderLoginResponse } from "./CursorProviderRoutes";
 
 const providerUsage = new ProviderUsageService();
 
@@ -21,8 +23,20 @@ export const server = Bun.serve<{ kind: "app" | "browser-native" }>({
       return jsonResponse({ error: "Unauthorized local runtime request" }, 401);
     }
 
+    if (url.pathname === "/api/providers/cursor/api-key") {
+      return cursorProviderCredentialResponse(req);
+    }
+    if (url.pathname === "/api/providers/cursor/login") {
+      return cursorProviderLoginResponse(req);
+    }
+
     if (url.pathname === "/api/agent-usage") {
       return providerUsageResponse(req, providerUsage);
+    }
+
+    if (url.pathname.startsWith("/api/git/")) {
+      server.timeout(req, 120);
+      return gitResponse(req, gitReview);
     }
 
     if (url.pathname === "/api/history/cache") {

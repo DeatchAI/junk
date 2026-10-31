@@ -59,7 +59,7 @@ describe("read-only migration sources", () => {
         { info: { role: "user", time: { created: 1_780_000_000_000 } }, parts: [{ type: "text", text: "Refactor" }] },
         { info: { role: "assistant" }, parts: [{ type: "reasoning", text: "hidden" }, { type: "tool", tool: "read", state: { output: "Old code" } }, { type: "text", text: "Done" }] },
       ] };
-    }, async () => true);
+    }, async () => true, () => undefined);
     const { chats } = await source.discover(); expect(chats[0]?.canResume).toBe(true);
     expect(chats[0]?.createdAt).toBe(1_780_000_000_000);
     const messages = await source.read(chats[0]!);

@@ -6,7 +6,7 @@ import type { AgentKind, Conversation, Message, SearchResult } from "../../proto
 import type { ExternalChat, ImportedMessage } from "../../imports/ImportTypes";
 import { nativeConversationID } from "./NativeIdentity";
 import { NativeBranches } from "../../branches/NativeBranches";
-import { promptFingerprint, type ConversationBranchState } from "../../branches/BranchTypes";
+import { promptFingerprint, responseBranchPoint, type ConversationBranchState } from "../../branches/BranchTypes";
 
 interface SessionRow { id: string; source_key: string; provider: AgentKind; json: string; indexed_version: number | null; unavailable: number }
 const matchQuery = (query: string) => query.trim().split(/\s+/).filter(Boolean).map((word) => `"${word.replaceAll('"', '""')}"*`).join(" AND ");
@@ -127,10 +127,12 @@ export class NativeHistoryIndex {
   }
   branchState(id: string): ConversationBranchState {
     const available = this.get(id)?.conversation.canResume === true;
+    const messages = this.messages(id);
     return { type: "conversation_branch_state", conversationId: id, branches: this.branches.family(id),
-      messages: this.messages(id).filter((message) => message.role === "user").map((message) => ({
+      messages: messages.flatMap((message, target) => message.role !== "user" ? [] : [{
         messageId: message.id, promptHash: promptFingerprint(message.content), canBranch: available && Boolean(message.branchPoint),
-      })) };
+        canBranchAfter: available && Boolean(responseBranchPoint(messages, target)),
+      }]) };
   }
   markUnavailable(provider: AgentKind) { this.db.run("UPDATE provider_sessions SET unavailable = 1 WHERE provider = ?", [provider]); }
   reconcile(provider: AgentKind, present: Set<string>) {

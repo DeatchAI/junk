@@ -92,7 +92,8 @@ export function claudeMessages(value: string, fallbackDate: number): ImportedMes
     const toolOnly = blocks.length > 0 && blocks.every((block: any) => block.type === "tool_result");
     const role = row.type === "assistant" || toolOnly ? "assistant" : "user";
     const branchPoint = role === "user" ? (!seenUser ? { kind: "start" as const }
-      : previousAssistant ? { kind: "claude" as const, resumeSessionAt: previousAssistant } : undefined) : undefined;
+      : previousAssistant ? { kind: "claude" as const, resumeSessionAt: previousAssistant } : undefined) : row.type === "assistant" && typeof row.uuid === "string"
+        ? { kind: "claude" as const, resumeSessionAt: row.uuid } : undefined;
     result.push({ role, content, parts, branchPoint, createdAt: timestamp(row.timestamp, fallbackDate) });
     if (role === "user") seenUser = true;
     if (row.type === "assistant" && typeof row.uuid === "string") previousAssistant = row.uuid;

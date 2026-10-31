@@ -8,6 +8,7 @@ interface PreparedACPAgent {
   executable?: string;
   model?: string;
   env?: Record<string, string | undefined>;
+  skipAuthenticate?: boolean;
 }
 
 export interface ACPAgentRunOptions {
@@ -20,6 +21,7 @@ export interface ACPAgentRunOptions {
   timeoutEnvironmentVariable: string;
   model?: string;
   modelSettings?: ChatRequest["modelSettings"];
+  authenticateMethodID?: string;
   env?: Record<string, string | undefined>;
   prepare: () => Promise<PreparedACPAgent>;
 }
@@ -41,6 +43,7 @@ export function runACPAgent(options: ACPAgentRunOptions): AgentRun {
       mcpServers: options.request.mcpServers,
       model: prepared.model ?? options.model,
       modelSettings: options.modelSettings,
+      authenticateMethodID: prepared.skipAuthenticate ? undefined : options.authenticateMethodID,
       activityAgent: options.activityAgent,
       callbacks: options.callbacks,
       resumeSessionId: options.request.providerSessionId,

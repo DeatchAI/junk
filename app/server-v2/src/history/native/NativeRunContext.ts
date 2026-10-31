@@ -7,9 +7,10 @@ import type { AgentNativeSession } from "../../agents/AgentAdapter";
 import type { SqliteHistory } from "../SqliteHistory";
 import { resolveWorkspace } from "../../agents/AgentPrompt";
 import { existingWorkspace } from "../../imports/Transcript";
+import { isNativeID } from "./NativeIdentity";
 import type { NativeHistoryService } from "./NativeHistoryService";
 import { legacyContext } from "../LegacyContext";
-import { promptFingerprint, type BranchPoint } from "../../branches/BranchTypes";
+import { promptFingerprint, responseBranchPoint, type BranchPoint } from "../../branches/BranchTypes";
 
 const workspaceIdentity = (path: string) => { try { return realpathSync(path); } catch { return resolve(path); } };
 
@@ -24,6 +25,7 @@ export class NativeRunContext {
   private startedAt = Date.now();
   private baseline: ImportedMessage[] = [];
   private previousID?: string;
+  get messageOrdinal() { return this.baseline.filter(message => message.role === "user").length; }
   private cached = false;
   private branch?: { parentId: string; parentSessionId: string; messageId: string; messageNumber: number };
   private constructor(readonly service: NativeHistoryService, readonly provider: AgentKind,
@@ -32,7 +34,12 @@ export class NativeRunContext {
   }
 
   static async prepare(service: NativeHistoryService, legacy: SqliteHistory, request: ChatRequest, provider: AgentKind, runID: string) {
-    const source = request.conversationId ? service.index.source(request.conversationId) : undefined;
+    let source = request.conversationId ? service.index.source(request.conversationId) : undefined;
+    if (!source && request.conversationId && isNativeID(request.conversationId)) {
+      // Recover a provider-owned identity removed by an older/incomplete index refresh.
+      await service.refresh(true);
+      source = service.index.source(request.conversationId);
+    }
     const legacyEntry = request.conversationId && !source ? legacy.get(request.conversationId) : undefined;
     if (request.branchFrom && !source) throw new Error("Open a saved agent conversation before editing a past message.");
     if (request.conversationId && !source && !legacyEntry) throw new Error("Conversation is unavailable. Refresh history or start a new chat.");
@@ -54,12 +61,21 @@ export class NativeRunContext {
         if (!message || promptFingerprint(message.content) !== request.branchFrom.promptHash) {
           throw new Error("This message changed in the agent. Reopen the conversation before editing it.");
         }
-        if (!message.branchPoint || (message.branchPoint.kind !== "start" && message.branchPoint.kind !== provider)) {
+        if (request.branchFrom.afterResponse !== undefined && typeof request.branchFrom.afterResponse !== "boolean") {
+          throw new Error("Invalid conversation branch position.");
+        }
+        const point = request.branchFrom.afterResponse ? responseBranchPoint(entry.messages, target) : message.branchPoint;
+        if (!point || (point.kind !== "start" && point.kind !== provider)) {
           throw new Error("This agent cannot branch at this message. The original conversation was kept intact.");
         }
-        context.forkPoint = message.branchPoint;
-        if (message.branchPoint.kind === "start") context.resumeSessionID = undefined;
-        baseline = entry.messages.slice(0, target);
+        context.forkPoint = point;
+        if (point.kind === "start") context.resumeSessionID = undefined;
+        let end = target;
+        if (request.branchFrom.afterResponse) {
+          end = target + 1;
+          while (entry.messages[end]?.role === "assistant") end++;
+        }
+        baseline = entry.messages.slice(0, end);
         context.branch = { parentId: entry.conversation.id, parentSessionId: source.sourceId,
           messageId: message.id, messageNumber: entry.messages.slice(0, target + 1).filter((row) => row.role === "user").length };
       } else {

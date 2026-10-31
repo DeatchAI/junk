@@ -1,7 +1,7 @@
 import type { ChatRequest } from "../../protocol/messages";
 import { processEnv } from "../../runtime/ProcessRunner";
 import type { AgentStreamCallbacks } from "../AgentAdapter";
-import { asStringRecord as record, consumeJsonLines, getString } from "../CliAdapterUtils";
+import { asStringRecord as record, consumeJsonLines, getString, withTimeout } from "../CliAdapterUtils";
 import { codexApprovalResponse } from "./CodexApprovals";
 import { buildCodexAppServerArgs, buildCodexThreadParams, buildCodexTurnParams } from "./CodexConfiguration";
 import { buildCodexMCPEnv } from "./CodexMCPConfig";
@@ -14,6 +14,7 @@ interface ServerOptions {
   cwd: string;
   request: ChatRequest;
   callbacks: AgentStreamCallbacks;
+  startupTimeoutMs?: number;
 }
 
 interface RPCMessage {
@@ -30,7 +31,6 @@ export class CodexAppServer {
   private readonly pending = new Map<number, {
     resolve(value: unknown): void;
     reject(error: Error): void;
-    timeout: Timer;
   }>();
   private readonly completion = Promise.withResolvers<void>();
   private approvalQueue: Promise<void> = Promise.resolve();
@@ -41,6 +41,8 @@ export class CodexAppServer {
   private settled = false;
   private threadId?: string;
   private turnId?: string;
+  private startupTimer?: Timer;
+  private awaitingFirstProgress = false;
   lastActivityAt = Date.now();
 
   constructor(private readonly options: ServerOptions) {
@@ -75,6 +77,7 @@ export class CodexAppServer {
       const binding = this.options.request.providerSessionId;
       const { ephemeral, serviceName, ...overrides } = buildCodexThreadParams(this.options.request, this.options.cwd);
       const fork = this.options.request.providerFork;
+      if (fork?.kind === "codex") this.options.callbacks.onActivity("Creating a new chat branch");
       const started = record(await this.request(fork?.kind === "codex" ? "thread/fork" : binding ? "thread/resume" : "thread/start", binding
         ? { ...overrides, threadId: binding, excludeTurns: true,
           ...(fork?.kind === "codex" ? { beforeTurnId: fork.beforeTurnId } : {}) }
@@ -98,6 +101,7 @@ export class CodexAppServer {
       this.options.callbacks.onSession?.({ id: this.threadId, workspacePath: this.options.cwd,
         title: getString(record(started?.thread)?.name), canResume: true });
 
+      this.beginStartupDeadline();
       const response = record(await this.request("turn/start", buildCodexTurnParams(
         this.options.request, this.options.cwd, this.threadId, prompt,
       )));
@@ -107,6 +111,26 @@ export class CodexAppServer {
     } finally {
       this.dispose();
     }
+  }
+
+  get isStartingTurn() { return this.awaitingFirstProgress; }
+
+  private beginStartupDeadline() {
+    this.awaitingFirstProgress = true;
+    const timeout = this.options.startupTimeoutMs ?? 60_000;
+    const model = this.options.request.model ? ` (${this.options.request.model})` : "";
+    this.options.callbacks.onActivity(`Waiting for Codex${model} to start replying`);
+    this.startupTimer = setTimeout(() => {
+      const recovery = this.options.request.providerFork?.kind === "codex"
+        ? "Try the original chat's model; the copied conversation may exceed the selected model's context limit."
+        : "Retry the task or choose another model.";
+      this.fail(new Error(`Codex${model} did not start replying within ${Math.round(timeout / 1000)}s. ${recovery}`));
+    }, timeout);
+  }
+
+  private markTurnProgress() {
+    this.awaitingFirstProgress = false;
+    if (this.startupTimer) { clearTimeout(this.startupTimer); this.startupTimer = undefined; }
   }
 
   cancel() {
@@ -122,14 +146,11 @@ export class CodexAppServer {
     if (this.stopped) return Promise.reject(new Error("Codex was stopped."));
     const id = this.nextId++;
     const response = new Promise<unknown>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`Codex timed out while starting ${method}.`));
-      }, 30_000);
-      this.pending.set(id, { resolve, reject, timeout });
+      this.pending.set(id, { resolve, reject });
     });
     this.write({ id, method, params });
-    return response;
+    return withTimeout(response, 30_000, () => this.pending.delete(id), this.options.request.runId,
+      "Codex timed out while starting " + method + ".");
   }
 
   private write(message: unknown) {
@@ -167,7 +188,6 @@ export class CodexAppServer {
       const pending = typeof message.id === "number" ? this.pending.get(message.id) : undefined;
       if (!pending) return;
       this.pending.delete(message.id as number);
-      clearTimeout(pending.timeout);
       if (message.error) pending.reject(new Error(message.error.message || "Codex request failed."));
       else pending.resolve(message.result);
       return;
@@ -179,8 +199,9 @@ export class CodexAppServer {
         this.write({ id: message.id, error: { code: -32602, message: "Request does not belong to the active Codex turn." } });
         return;
       }
-      // The native task surface displays one approval at a time. Queue before
-      // invoking onPermission so a hidden request cannot start its UI timeout.
+      this.markTurnProgress();
+      // The native task surface displays one approval at a time. Keep each
+      // request pending until its own explicit response, without replacing another.
       this.approvalQueue = this.approvalQueue.then(async () => {
         if (this.stopped) return;
         const result = ["item/tool/requestUserInput", "tool/requestUserInput"].includes(message.method!)
@@ -199,9 +220,12 @@ export class CodexAppServer {
       return;
     }
     if (params.threadId !== this.threadId) return;
+    if (this.turnId && (!params.turnId || params.turnId === this.turnId)
+      && (message.method.startsWith("item/") || message.method === "turn/diff/updated")) this.markTurnProgress();
     if (message.method === "turn/started") {
       this.turnId = getString(record(params.turn)?.id);
     } else if (message.method === "turn/completed") {
+      this.markTurnProgress();
       const turn = record(params.turn);
       if (this.turnId && turn?.id !== this.turnId) return;
       if (turn?.status === "completed") {
@@ -239,7 +263,6 @@ export class CodexAppServer {
 
   private rejectPending(error: Error) {
     for (const pending of this.pending.values()) {
-      clearTimeout(pending.timeout);
       pending.reject(error);
     }
     this.pending.clear();
@@ -248,6 +271,7 @@ export class CodexAppServer {
   private dispose() {
     if (this.stopped) return;
     this.stopped = true;
+    this.markTurnProgress();
     const error = new Error("Codex was stopped.");
     this.rejectPending(error);
     if (!this.settled) {

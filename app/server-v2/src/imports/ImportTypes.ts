@@ -45,5 +45,5 @@ export function importProvider(value: unknown): value is ImportProvider {
   return typeof value === "string" && IMPORT_PROVIDERS.includes(value as ImportProvider);
 }
 export function knownProvider(value: unknown): value is AgentKind {
-  return typeof value === "string" && ["codex", "claude", "opencode", "grok", "pi", "omp", "amp", "fx"].includes(value);
+  return typeof value === "string" && ["codex", "claude", "cursor", "opencode", "grok", "pi", "omp", "amp", "fx"].includes(value);
 }

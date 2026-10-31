@@ -1,5 +1,6 @@
-import type { AgentRun, AgentStreamCallbacks } from "../agents/AgentAdapter";
+import type { AgentPermissionRequest, AgentRun, AgentStreamCallbacks } from "../agents/AgentAdapter";
 import type { AgentActivityEvent, AgentActivityKind, AgentKind } from "../protocol/messages";
+import type { AgentQuestionRequest } from "../questions/AgentQuestion";
 
 export const DEMO_TRIGGER_PROMPTS = {
   developer: "Review the attached checkout pull request, test changes, and CI notes for bugs, regressions, and missing tests.",
@@ -10,6 +11,8 @@ export const DEMO_TRIGGER_PROMPTS = {
   coding: "Build a small dashboard from the attached usage CSV and run it locally.",
   paystubs: "Log in to the admin dashboard and export this month's usage report using the attached report specification.",
   xReplies: "Summarize the attached meeting transcript and turn the action items into a checklist.",
+  approval: "Run the iMessage approval demo and wait for my decision.",
+  clarification: "Run the iMessage clarification demo and wait for my answer.",
 } as const;
 
 type DemoScenarioId = keyof typeof DEMO_TRIGGER_PROMPTS;
@@ -30,7 +33,22 @@ interface DemoChunkStep {
   text: string;
 }
 
-type DemoStep = DemoActivityStep | DemoChunkStep;
+interface DemoApprovalStep {
+  type: "approval";
+  delayMs: number;
+  request: AgentPermissionRequest;
+  approvedText: string;
+  declinedText: string;
+}
+
+interface DemoQuestionStep {
+  type: "question";
+  delayMs: number;
+  request: AgentQuestionRequest;
+  cancelledText: string;
+}
+
+type DemoStep = DemoActivityStep | DemoChunkStep | DemoApprovalStep | DemoQuestionStep;
 
 // Demo recordings need enough dwell time for the activity lane and the notch to
 // be readable. Real agents also spend longer between visible state changes than
@@ -47,6 +65,8 @@ const DEMO_CAPABILITIES: Record<DemoScenarioId, string[]> = {
   coding: [],
   paystubs: ["Browser", "Secrets"],
   xReplies: [],
+  approval: [],
+  clarification: [],
 };
 
 export interface DemoScenario {
@@ -188,6 +208,49 @@ const scenarios: Record<DemoScenarioId, DemoScenario> = {
       chunk(200, "I kept unassigned work visible instead of guessing an owner. The transcript file was not changed."),
     ],
   },
+  approval: {
+    id: "approval",
+    prompt: DEMO_TRIGGER_PROMPTS.approval,
+    openingText: "This demo will ask you to approve a simulated report. Reply on your Mac or in iMessage; no command will run.\n\n",
+    progressText: "",
+    steps: [
+      {
+        type: "approval", delayMs: 350,
+        request: {
+          title: "Approve the demo report?",
+          toolName: "demo.prepare_sample_report",
+          description: "Allow this demo to prepare a fictional report? This only resumes the scripted demo; no command runs and no files are changed.",
+          riskLevel: "safe",
+        },
+        approvedText: "You approved the demo report. The approval reached this exact task, and the scripted demo continued.\n\n",
+        declinedText: "You denied the demo report. The task stopped at the approval; nothing was executed or changed.",
+      },
+      chunk(250, "Demo complete. No real agent, command, file change, or report export was involved."),
+    ],
+  },
+  clarification: {
+    id: "clarification",
+    prompt: DEMO_TRIGGER_PROMPTS.clarification,
+    openingText: "This demo needs your choice before it can continue. Answer on your Mac or vote in the iMessage poll.\n\n",
+    progressText: "",
+    steps: [
+      {
+        type: "question", delayMs: 350,
+        request: { questions: [{
+          id: "demo-report-format",
+          header: "Report style",
+          question: "Which version should the demo report use?",
+          options: [
+            { label: "Minimal", description: "A short summary." },
+            { label: "Detailed", description: "A fuller explanation." },
+            { label: "Both", description: "A summary and the details." },
+          ],
+        }] },
+        cancelledText: "You dismissed the demo question. The task did not continue, and no files were changed.",
+      },
+      chunk(250, "\n\nDemo complete. Your answer resumed this exact task; no report or files were created."),
+    ],
+  },
 };
 
 const DEMO_COMPOSER_TOKENS = new Set([
@@ -236,34 +299,70 @@ export function createDemoRun(
   wait: (milliseconds: number) => Promise<void> = sleep
 ): AgentRun {
   let cancelled = false;
-  const steps: DemoStep[] = [
-    activity(1600, "Understanding the request and planning the run", "Planning the task", "Breaking the request into reviewable steps", undefined, "plan"),
-    chunk(850, scenario.openingText),
-    activity(1400, "Checking workspace memory for relevant context", "Checking workspace memory", "Looking for prior instructions and saved context", "workspace.memory", "status"),
-    toolAccessStep(scenario),
-    ...scenario.steps.flatMap((step, index) =>
-      index === 3 ? [chunk(650, scenario.progressText), step] : [step]
-    ),
-  ];
+  let stopWaiting!: () => void;
+  const stopped = new Promise<void>((resolve) => { stopWaiting = resolve; });
+  const untilStopped = async <T>(pending: Promise<T>): Promise<T> => {
+    try {
+      return await Promise.race([
+        pending,
+        stopped.then(() => { throw new Error("Demo stopped"); }),
+      ]);
+    } catch (error) {
+      if (cancelled) throw new Error("Demo stopped");
+      throw error;
+    }
+  };
+  const interactive = scenario.steps.some((step) => step.type === "approval" || step.type === "question");
+  const steps: DemoStep[] = interactive
+    ? [chunk(250, scenario.openingText), ...scenario.steps]
+    : [
+      activity(1600, "Understanding the request and planning the run", "Planning the task", "Breaking the request into reviewable steps", undefined, "plan"),
+      chunk(850, scenario.openingText),
+      activity(1400, "Checking workspace memory for relevant context", "Checking workspace memory", "Looking for prior instructions and saved context", "workspace.memory", "status"),
+      toolAccessStep(scenario),
+      ...scenario.steps.flatMap((step, index) =>
+        index === 3 ? [chunk(650, scenario.progressText), step] : [step]
+      ),
+    ];
 
   return {
     cancel() {
+      if (cancelled) return;
       cancelled = true;
+      stopWaiting();
     },
     finished: (async () => {
       let text = "";
+      const append = (value: string) => { text += value; callbacks.onChunk(value); };
       for (const step of steps) {
-        await wait(step.delayMs);
+        await untilStopped(wait(step.delayMs));
         if (cancelled) throw new Error("Demo stopped");
 
         if (step.type === "chunk") {
-          text += step.text;
-          callbacks.onChunk(step.text);
+          append(step.text);
+          continue;
+        }
+        if (step.type === "approval") {
+          if (!callbacks.onPermission) throw new Error("This demo requires Detach's approval handler.");
+          const approved = await untilStopped(callbacks.onPermission(step.request));
+          if (cancelled) throw new Error("Demo stopped");
+          append(approved ? step.approvedText : step.declinedText);
+          if (!approved) return { text };
+          continue;
+        }
+        if (step.type === "question") {
+          if (!callbacks.onQuestion) throw new Error("This demo requires Detach's clarification handler.");
+          const answers = await untilStopped(callbacks.onQuestion(step.request));
+          if (cancelled) throw new Error("Demo stopped");
+          if (!answers) { append(step.cancelledText); return { text }; }
+          append(step.request.questions.map((question) =>
+            question.header + ": " + (answers[question.id]?.answers.join(", ") ?? "No answer")
+          ).join("\n"));
           continue;
         }
 
         const event: AgentActivityEvent = {
-          id: `demo_${scenario.id}_${crypto.randomUUID()}`,
+          id: "demo_" + scenario.id + "_" + crypto.randomUUID(),
           agent,
           kind: step.kind,
           phase: "started",

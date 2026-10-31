@@ -50,6 +50,8 @@ export function titleCommand(agent: AgentKind, model: string | undefined, effort
         "--execute", "--stream-json", "--no-color", "--no-ide", "--settings-file", files.ampSettings,
         ...(model ? ["--mode", model] : []),
       ], input: prompt, env: { AMP_SKIP_UPDATE_CHECK: "1", AMP_REMOTE_CONTROL_TERMINAL: "0" } };
+    // Cursor's ACP flow does not provide a safe isolated, tool-free title invocation yet.
+    case "cursor": return;
     case "opencode":
       return { args: [
         "run", "--pure", "--format", "json", "--agent", "detach-title",
