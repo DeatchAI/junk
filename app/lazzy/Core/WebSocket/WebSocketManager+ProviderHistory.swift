@@ -12,7 +12,7 @@ extension WebSocketManager {
     guard isConnected, let session else { return }
     let loadID = UUID()
     conversationLoadID = loadID
-    let request = HistoryConversationLoader.request(id: id, port: ServerConfig.port, token: ServerConfig.runtimeToken)
+    let request = HistoryConversationLoader.request(id: id, endpoint: runtimeEndpoint)
     conversationLoadTask = Task { [weak self] in
       defer {
         if self?.conversationLoadID == loadID {
@@ -50,6 +50,7 @@ extension WebSocketManager {
     guard let event = ProviderHistoryEvent.parse(data) else { return false }
     if event.type == "provider_session" {
       guard event.runId == activeChatRequest?.runId, let conversation = event.conversation else { return true }
+      if activeChatRequest?.branchFrom != nil { autoRoutedChoice = nil }
       currentConversationId = conversation.id
       currentConversationTitle = conversation.title
       currentConversation = conversation

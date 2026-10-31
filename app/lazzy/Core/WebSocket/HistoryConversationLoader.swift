@@ -12,6 +12,17 @@ struct HistoryConversationCatalog: Decodable {
 }
 
 enum HistoryConversationLoader {
+  static func request(id: String, endpoint: RuntimeEndpoint) -> URLRequest {
+    request(path: "/api/history/conversation", items: [URLQueryItem(name: "id", value: id)], endpoint: endpoint)
+  }
+
+  static func catalogRequest(query: String, offset: Int = 0, endpoint: RuntimeEndpoint) -> URLRequest {
+    request(path: "/api/history/conversations", items: [
+      URLQueryItem(name: "query", value: query), URLQueryItem(name: "offset", value: String(offset)),
+      URLQueryItem(name: "limit", value: "50"),
+    ], endpoint: endpoint)
+  }
+
   static func request(id: String, port: Int, token: String) -> URLRequest {
     request(path: "/api/history/conversation", items: [URLQueryItem(name: "id", value: id)], port: port, token: token)
   }
@@ -30,6 +41,16 @@ enum HistoryConversationLoader {
     url.queryItems = items
     var request = URLRequest(url: url.url!, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 120)
     request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    return request
+  }
+
+  private static func request(path: String, items: [URLQueryItem], endpoint: RuntimeEndpoint) -> URLRequest {
+    var url = URLComponents()
+    url.scheme = "http"; url.host = endpoint.host; url.port = endpoint.port
+    url.path = path
+    url.queryItems = items
+    var request = URLRequest(url: url.url!, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 120)
+    request.setValue(endpoint.authorizationHeaderValue, forHTTPHeaderField: "Authorization")
     return request
   }
 

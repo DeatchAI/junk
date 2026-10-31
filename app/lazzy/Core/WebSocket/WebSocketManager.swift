@@ -58,6 +58,8 @@ class WebSocketManager: ObservableObject {
 
   var webSocket: URLSessionWebSocketTask?
   var session: URLSession?
+  @Published private(set) var remoteEndpoint: RuntimeEndpoint?
+  var runtimeEndpoint: RuntimeEndpoint { remoteEndpoint ?? .local }
   var conversationLoadTask: Task<Void, Never>?
   var conversationLoadID: UUID?
   var pingTimer: Timer?
@@ -118,7 +120,8 @@ class WebSocketManager: ObservableObject {
 
   // MARK: - Lifecycle
 
-  init() {
+  init(runtimeEndpoint: RuntimeEndpoint? = nil) {
+    remoteEndpoint = runtimeEndpoint?.machineID == nil ? nil : runtimeEndpoint
     session = URLSession(configuration: .default)
     NotificationCenter.default.publisher(for: .detachProfileDidSync)
       .receive(on: RunLoop.main)
@@ -171,8 +174,8 @@ class WebSocketManager: ObservableObject {
     guard !isConnected && !isConnecting else { return }
     isConnecting = true
 
-    let url = ServerConfig.wsURL
-    print("🔌 Connecting to local runtime")
+    let url = remoteEndpoint?.webSocketURL ?? ServerConfig.wsURL
+    print(remoteEndpoint == nil ? "🔌 Connecting to local runtime" : "🔌 Connecting to remote runtime")
 
     webSocket = session?.webSocketTask(with: url)
     webSocket?.resume()
@@ -182,6 +185,30 @@ class WebSocketManager: ObservableObject {
 
     // Send a ping to verify connection
     sendPingAndVerify()
+  }
+
+  func connect(to endpoint: RuntimeEndpoint) {
+    guard runtimeEndpoint != endpoint else {
+      connect()
+      return
+    }
+    if let current = remoteEndpoint,
+      current.machineID == endpoint.machineID, current.token == endpoint.token
+    {
+      disconnect()
+      remoteEndpoint = endpoint
+      connect()
+      return
+    }
+    disconnect()
+    remoteEndpoint = endpoint.machineID == nil ? nil : endpoint
+    currentConversationId = nil
+    currentConversationTitle = nil
+    currentConversation = nil
+    activeChatRequest = nil
+    conversations = []
+    hasMoreConversations = false
+    connect()
   }
 
   func sendPingAndVerify() {
@@ -209,12 +236,16 @@ class WebSocketManager: ObservableObject {
           self.listWorkflows()
           self.listSlashCommands()
           self.listMCPServers()
-          self.requestCapabilities()
+          Task {
+            if self.remoteEndpoint == nil { await CursorProviderClient.syncSavedKey() }
+            guard self.isConnected else { return }
+            self.requestCapabilities(force: true)
+          }
           // Runtime processes can restart independently of SwiftUI's auth
           // lifecycle. Re-send the active loopback-only session on every
           // connection so integrations receive the current profile.
           Task {
-            await AuthManager.shared.syncProfileToServer()
+            if self.remoteEndpoint == nil { await AuthManager.shared.syncProfileToServer() }
           }
           self.listConversations()
           if let conversationId = self.currentConversationId {
@@ -521,32 +552,6 @@ class WebSocketManager: ObservableObject {
   func endDesktopSessions() {
     for id in desktopSessionIDs { desktopAutomation.endSession(id) }
     desktopSessionIDs.removeAll()
-  }
-
-  func handleConnectionError(_ error: Error) {
-    endDesktopSessions()
-    cancelAutoRouting()
-    cancelConversationLoad()
-    providerHistory.connectionLost()
-    dismissAgentQuestions()
-    let hadActiveRun = isStreaming || isStoppingRun
-    isStoppingRun = false
-    if let runId = activeChatRequest?.runId, hadActiveRun {
-      onRunConnectionLost?(runId, error.localizedDescription)
-    }
-    isConnected = false
-    isConnecting = false
-    isLoadingMCPServers = false
-    isStreaming = false
-    lastError = error.localizedDescription
-    onError?(error.localizedDescription)
-
-    // Try to reconnect after delay
-    print("🔄 Will retry in 3 seconds...")
-    Task {
-      try? await Task.sleep(nanoseconds: 3_000_000_000)
-      connect()
-    }
   }
 
   // MARK: - Keep Alive

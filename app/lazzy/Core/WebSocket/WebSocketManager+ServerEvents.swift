@@ -28,6 +28,7 @@ extension WebSocketManager {
       )
 
     case .error(let errorMessage, let runId):
+      isStoppingRun = false
       cancelAutoRouting()
       isLoadingMoreConversations = false
       dismissAgentQuestions()

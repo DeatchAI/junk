@@ -69,12 +69,12 @@ extension WebSocketManager {
     }
 
     let lifecyclePatterns = [
-      #"^Using\s+(Codex|Claude|Grok|fx|OpenCode|Agent)\b"#,
-      #"^Starting\s+(Codex|Claude|Grok|fx|OpenCode)\b"#,
-      #"^(Codex|Claude|Grok|fx|OpenCode)\s+is\s+thinking\b"#,
-      #"^(Codex|Claude|Grok|fx|OpenCode)\s+is\s+still\s+working\b"#,
-      #"^(Codex|Claude|Grok|fx|OpenCode)\s+(thread|session)\s+started\b"#,
-      #"^(Codex|Claude|Grok|fx|OpenCode)\s+will\s+use\s+MCP\s+servers\b"#,
+      #"^Using\s+(Codex|Claude|Cursor|Grok|fx|OpenCode|Agent)\b"#,
+      #"^Starting\s+(Codex|Claude|Cursor|Grok|fx|OpenCode)\b"#,
+      #"^(Codex|Claude|Cursor|Grok|fx|OpenCode)\s+is\s+thinking\b"#,
+      #"^(Codex|Claude|Cursor|Grok|fx|OpenCode)\s+is\s+still\s+working\b"#,
+      #"^(Codex|Claude|Cursor|Grok|fx|OpenCode)\s+(thread|session)\s+started\b"#,
+      #"^(Codex|Claude|Cursor|Grok|fx|OpenCode)\s+will\s+use\s+MCP\s+servers\b"#,
       #"^Loaded\s+\d+\s+MCP\s+server"#,
       #"^Thinking:\s*"#,
     ]

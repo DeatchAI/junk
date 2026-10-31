@@ -21,7 +21,7 @@ extension WebSocketManager {
 
     // Use provided conversationId or current one for follow-ups
     let convId = conversationId ?? currentConversationId
-    let pinnedChoice = convId != nil && convId == currentConversationId ? autoRoutedChoice : nil
+    let pinnedChoice = branchFrom == nil && convId != nil && convId == currentConversationId ? autoRoutedChoice : nil
     let resolvedAgent = pinnedChoice?.agent ?? agent ?? DetachSettings.selectedAgent
     let resolvedModel = pinnedChoice != nil ? pinnedChoice?.model : model ?? DetachSettings.selectedModel(for: resolvedAgent)
     let resolvedModelSettings = pinnedChoice != nil ? pinnedChoice?.effort.map { AgentModelSettings(reasoningEffort: $0) } : modelSettings
@@ -50,12 +50,14 @@ extension WebSocketManager {
 
 
   func submitChatRequest(_ request: ChatRequest) {
+    guard LicenseManager.shared.requireAccess() else { return }
     guard isConnected, !isStreaming, !isStoppingRun else { return }
     if beginAutoRouting(request) { return }
     dispatchChatRequest(request)
   }
 
   func dispatchChatRequest(_ request: ChatRequest) {
+    guard LicenseManager.shared.requireAccess() else { return }
     guard isConnected, !isStreaming, !isStoppingRun else { return }
     var request = request
     if request.permissionMode == nil {

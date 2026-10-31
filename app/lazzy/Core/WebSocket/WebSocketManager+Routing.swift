@@ -13,7 +13,8 @@ extension WebSocketManager {
     routingTask = Task { [weak self] in
       guard let self else { return }
       do {
-        let choice = try await AutoRouter.shared.route(request, capabilities: self.agentCapabilities)
+        let choice = try await AutoRouter.shared.route(request, capabilities: self.agentCapabilities,
+          endpoint: self.runtimeEndpoint)
         try Task.checkCancellation()
         guard self.routingGeneration == generation, self.isConnected else { return }
         self.routingTask = nil

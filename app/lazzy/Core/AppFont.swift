@@ -5,17 +5,33 @@
 //  Centralized font management for the app.
 //
 
+import AppKit
+import CoreText
 import SwiftUI
 
 struct AppFont {
-  static let family = "Geist-Regular"
+  private static var choice: AppFontChoice {
+    AppFontChoice(rawValue: ThemeManager.shared.fontName) ?? .geist
+  }
 
   static func font(size: CGFloat) -> Font {
-    return .custom(family, size: size)
+    choice.font(size: size)
   }
 
   static func nsFont(size: CGFloat) -> NSFont {
-    return NSFont(name: family, size: size) ?? NSFont.systemFont(ofSize: size)
+    choice.nsFont(size: size)
+  }
+
+  static func registerBundledFonts() {
+    for resource in AppFontChoice.allCases.compactMap({ $0.bundledResource }) {
+      let url = Bundle.main.url(
+        forResource: resource.name,
+        withExtension: resource.fileExtension,
+        subdirectory: resource.subdirectory
+      ) ?? Bundle.main.url(forResource: resource.name, withExtension: resource.fileExtension)
+      guard let url else { continue }
+      _ = CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+    }
   }
 }
 
@@ -27,22 +43,20 @@ extension Font {
     if design == .monospaced {
       return .system(size: size, weight: weight, design: .monospaced)
     }
-    return .custom(AppFont.family, size: size)
+    return AppFont.font(size: size)
   }
 }
 
 struct AppFontModifier: ViewModifier {
   var size: CGFloat?
+  @ObservedObject private var theme = ThemeManager.shared
+
+  init(size: CGFloat?) {
+    self.size = size
+  }
 
   func body(content: Content) -> some View {
-    if let size = size {
-      content.font(.custom(AppFont.family, size: size))
-    } else {
-      // Apply a default size if not specified,
-      // but usually we want to allow the view to choose its size.
-      // If we want it "global", we can just set the font family.
-      content.font(.custom(AppFont.family, size: 14))  // Default size
-    }
+    content.font(theme.font(size: size ?? 14))
   }
 }
 

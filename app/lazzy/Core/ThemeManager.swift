@@ -22,7 +22,11 @@ class ThemeManager: ObservableObject {
   @Published var accentColorHex: String = AppearanceSettings.accentColorHex
   @Published var borderRadius: Double = AppearanceSettings.borderRadius
   @Published var glassTranslucency: Double = AppearanceSettings.glassTranslucency
-  @Published var fontName: String = "Geist-Regular"
+  @Published var fontName: String = AppearanceSettings.fontName
+
+  var fontChoice: AppFontChoice {
+    AppFontChoice(rawValue: fontName) ?? .geist
+  }
 
   private var cancellables = Set<AnyCancellable>()
 
@@ -45,6 +49,7 @@ class ThemeManager: ObservableObject {
     accentColorHex = AppearanceSettings.accentColorHex
     borderRadius = AppearanceSettings.borderRadius
     glassTranslucency = AppearanceSettings.glassTranslucency
+    fontName = AppearanceSettings.fontName
   }
 
   // MARK: - Computed Color Properties
@@ -171,7 +176,7 @@ class ThemeManager: ObservableObject {
   // MARK: - Font Methods
 
   func font(size: CGFloat) -> Font {
-    return .custom(fontName, size: size)
+    fontChoice.font(size: size)
   }
 
   func titleFont(size: CGFloat = 18) -> Font {
@@ -240,6 +245,11 @@ class ThemeManager: ObservableObject {
   func updateGlassTranslucency(_ value: Double) {
     AppearanceSettings.glassTranslucency = value
     glassTranslucency = AppearanceSettings.glassTranslucency
+  }
+
+  func updateFontChoice(_ choice: AppFontChoice) {
+    AppearanceSettings.fontChoice = choice
+    fontName = choice.rawValue
   }
 
   func resetToDefaults() {

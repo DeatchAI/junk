@@ -39,22 +39,32 @@ import Foundation
     } catch { keyStatus = error.localizedDescription }
   }
 
-  func refreshUsage() async {
+  func refreshUsage(endpoint: RuntimeEndpoint? = nil) async -> RouterUsageSnapshot {
+    let endpoint = endpoint ?? .local
     // No probing unless the user explicitly enables usage-aware routing.
-    guard configuration.considerUsage else { return }
-    var request = URLRequest(url: URL(string: "http://127.0.0.1:\(ServerConfig.port)/api/agent-usage")!,
+    guard configuration.considerUsage else { return usage }
+    var components = URLComponents()
+    components.scheme = "http"; components.host = endpoint.host; components.port = endpoint.port
+    components.path = "/api/agent-usage"
+    guard let url = components.url else { return .unknown }
+    var request = URLRequest(url: url,
       cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 4)
-    request.setValue(ServerConfig.authorizationHeaderValue, forHTTPHeaderField: "Authorization")
+    request.setValue(endpoint.authorizationHeaderValue, forHTTPHeaderField: "Authorization")
     do {
       let (data, response) = try await client.session.data(for: request)
       try Task.checkCancellation()
-      guard (response as? HTTPURLResponse)?.statusCode == 200, data.count < 100_000 else { return }
-      usage = try JSONDecoder().decode(RouterUsageSnapshot.self, from: data)
-    } catch { /* Unknown usage never becomes an invented quota. */ }
+      guard (response as? HTTPURLResponse)?.statusCode == 200, data.count < 100_000 else { return .unknown }
+      let snapshot = try JSONDecoder().decode(RouterUsageSnapshot.self, from: data)
+      if endpoint.machineID == nil { usage = snapshot }
+      return snapshot
+    } catch { return .unknown }
   }
 
-  func route(_ request: ChatRequest, capabilities: [AgentCapability]) async throws -> RouterSelection {
-    let evaluation = try await evaluate(request, capabilities: capabilities, classifyFixedChoice: false)
+  func route(_ request: ChatRequest, capabilities: [AgentCapability],
+             endpoint: RuntimeEndpoint? = nil) async throws -> RouterSelection {
+    let endpoint = endpoint ?? .local
+    let evaluation = try await evaluate(request, capabilities: capabilities,
+      classifyFixedChoice: false, endpoint: endpoint)
     guard let selection = evaluation.selection else {
       records.insert(RouterDecisionRecord(selection: nil, summary: evaluation.summary), at: 0)
       records = Array(records.prefix(20))
@@ -71,18 +81,20 @@ import Foundation
     let model = DetachSettings.selectedModel(for: agent)
     let request = ChatRequest(text: prompt, model: model, agent: agent,
       modelSettings: DetachSettings.modelSettings(for: agent, model: model))
-    return try await evaluate(request, capabilities: capabilities, classifyFixedChoice: true)
+    return try await evaluate(request, capabilities: capabilities,
+      classifyFixedChoice: true, endpoint: .local)
   }
 
-  private func evaluate(_ request: ChatRequest, capabilities: [AgentCapability], classifyFixedChoice: Bool) async throws -> RouterEvaluation {
+  private func evaluate(_ request: ChatRequest, capabilities: [AgentCapability],
+                        classifyFixedChoice: Bool, endpoint: RuntimeEndpoint) async throws -> RouterEvaluation {
     try Task.checkCancellation()
     let configuration = configuration
     let current = RouterPreset(agent: request.agent ?? DetachSettings.selectedAgent, model: request.model, effort: request.modelSettings?.reasoningEffort)
-    if configuration.considerUsage { await refreshUsage() }
+    let routeUsage = configuration.considerUsage ? await refreshUsage(endpoint: endpoint) : usage
     try Task.checkCancellation()
     let capabilities = capabilities.isEmpty ? self.capabilities : capabilities
-    var candidates = RoutePlanner.catalog(capabilities, configuration: configuration, current: current, usage: usage)
-    if capabilities.isEmpty, let manual = RoutePlanner.manualFallbackCandidate(current, configuration: configuration, usage: usage) {
+    var candidates = RoutePlanner.catalog(capabilities, configuration: configuration, current: current, usage: routeUsage)
+    if capabilities.isEmpty, let manual = RoutePlanner.manualFallbackCandidate(current, configuration: configuration, usage: routeUsage) {
       candidates = [manual]
     }
     var classification: RouterClassification?
@@ -99,7 +111,8 @@ import Foundation
         failure = error.localizedDescription
       }
     }
-    return RoutePlanner.evaluate(classification, candidates: candidates, configuration: configuration, current: current, classificationFailure: failure)
+    return RoutePlanner.evaluate(classification, candidates: candidates, configuration: configuration,
+      current: current, classificationFailure: failure)
   }
 
   func clearRecords() { records = [] }
