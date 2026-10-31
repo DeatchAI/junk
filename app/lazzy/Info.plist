@@ -23,6 +23,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Detach uses Finder to attach selected files and Messages to send agent replies to your paired phone.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Detach uses the microphone only while voice input is active in the composer.</string>
 	<key>SUEnableAutomaticChecks</key>

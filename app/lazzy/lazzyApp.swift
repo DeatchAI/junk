@@ -14,23 +14,27 @@ import SwiftUI
 struct lazzyApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
   @StateObject private var updaterViewModel = UpdaterViewModel()
+  @StateObject private var appPresentation = AppPresentationController.shared
   @State private var isMenuBarExtraInserted = true
 
   init() {
     // Initialize SVGCoder for SVG support
     SDImageCodersManager.shared.addCoder(SDImageSVGCoder.shared)
+    AppFont.registerBundledFonts()
     AnalyticsManager.shared.configure()
   }
 
   var body: some Scene {
-    // Menu bar only - use .menu style to avoid layout cycle crashes
-    MenuBarExtra(isInserted: $isMenuBarExtraInserted) {
+    MenuBarExtra(isInserted: Binding(
+      get: { isMenuBarExtraInserted && appPresentation.mode == .menuBar },
+      set: { isMenuBarExtraInserted = $0 || appPresentation.mode == .dock }
+    )) {
       MenuBarContentView(appDelegate: appDelegate, updaterViewModel: updaterViewModel)
-        .font(.custom("Geist-Regular", size: 13))
+        .useAppFont(size: 13)
     } label: {
       Image("AppIcon")
-        .resizable()
-        .scaledToFit()
+        .renderingMode(.template)
+        .accessibilityLabel("Detach")
     }
     .menuBarExtraStyle(.menu)
 
@@ -50,16 +54,39 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
   @Published var coordinator: AppCoordinator?
   private var cancellables = Set<AnyCancellable>()
 
+  func applicationWillFinishLaunching(_ notification: Notification) {
+    AppPresentationController.shared.applyActivationPolicy()
+  }
+
   func applicationDidFinishLaunching(_ notification: Notification) {
     // Initialize coordinator
     coordinator = AppCoordinator()
 
-    // Hide dock icon - make it menu bar only
-    NSApp.setActivationPolicy(.accessory)
-
     coordinator?.start()
     AnalyticsManager.shared.trackAppLaunch()
     print("✅ AppDelegate started coordinator")
+
+    if AppPresentationController.shared.mode == .dock {
+      DispatchQueue.main.async { [weak self] in self?.showDockModeWindow() }
+    }
+  }
+
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+    guard AppPresentationController.shared.mode == .dock else { return false }
+    showDockModeWindow()
+    return true
+  }
+
+  private func showDockModeWindow() {
+    guard let coordinator, coordinator.requireAppAccess() else { return }
+    if coordinator.hasCompletedOnboarding {
+      MenuBarContentView.showSettings(
+        wsManager: coordinator.wsManager,
+        onRunWorkflow: coordinator.runWorkflow
+      )
+    } else {
+      coordinator.onboardingWindow.show()
+    }
   }
 
   // /// CRITICAL: Prevent activation policy change when app is "opened" via deep link
@@ -105,12 +132,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         continue
       }
 
-      guard coordinator.hasCompletedOnboarding else {
-        DispatchQueue.main.async {
-          coordinator.onboardingWindow.show()
-        }
-        continue
-      }
+      guard coordinator.requireAppAccess() else { continue }
 
       if url.host?.lowercased() == "finder" {
         let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
@@ -120,7 +142,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let fileURLs = paths.map { URL(fileURLWithPath: $0) }
 
         DispatchQueue.main.async {
-          NSApp.setActivationPolicy(.accessory)
           coordinator.handleFinderFiles(fileURLs)
         }
         continue
@@ -338,9 +359,12 @@ private struct PermissionMenuSection: View {
 
 private struct OnboardingMenuSection: View {
   @ObservedObject var coordinator: AppCoordinator
+  @ObservedObject private var license = LicenseManager.shared
 
   var body: some View {
-    if !coordinator.hasCompletedOnboarding {
+    if !license.hasAccess {
+      Button("Unlock Detach") { coordinator.presentLicensePaywall() }
+    } else if !coordinator.hasCompletedOnboarding {
       Button("Continue Setup") {
         coordinator.onboardingWindow.show()
       }
