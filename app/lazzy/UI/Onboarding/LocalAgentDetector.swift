@@ -19,8 +19,10 @@ enum LocalAgentDetector {
     ]
     if let path = ProcessInfo.processInfo.environment["DETACH_\(agent.id.uppercased())_PATH"],
       FileManager.default.isExecutableFile(atPath: path) { return path }
-    if let path = executableDirectories.map({ URL(fileURLWithPath: $0).appendingPathComponent(agent.executable).path })
-      .first(where: { FileManager.default.isExecutableFile(atPath: $0) }) { return path }
+    let executables = [agent.executable]
+    if let path = executables.flatMap({ executable in
+      executableDirectories.map { URL(fileURLWithPath: $0).appendingPathComponent(executable).path }
+    }).first(where: { FileManager.default.isExecutableFile(atPath: $0) }) { return path }
     if agent == .opencode {
       if let bundled = Bundle.main.url(forResource: "opencode", withExtension: nil),
         FileManager.default.isExecutableFile(atPath: bundled.path) { return bundled.path }

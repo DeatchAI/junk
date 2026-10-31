@@ -32,7 +32,7 @@ struct RouterTestView: View {
             .disabled(state.isRunning || !router.hasKey || !router.capabilities.contains(where: \.installed)
               || state.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             if state.isRunning {
-              ProgressView().controlSize(.small)
+              AppSpinner()
               Button("Cancel") { state.cancel() }
             }
             Spacer()

@@ -13,13 +13,13 @@ struct ShortcutsSettingsView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 24) {
+      VStack(alignment: .leading, spacing: 18) {
         SettingsPageHeader(
           title: "Keyboard shortcuts",
           subtitle: "Customize how you open Detach and move through conversations."
         )
 
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: 18) {
           // Global Shortcuts
           ShortcutSection(title: "Global") {
             ShortcutRow(
@@ -124,7 +124,7 @@ struct ShortcutSection<Content: View>: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: 7) {
       SettingsSectionHeader(title: title)
 
       SettingsCard {
@@ -145,23 +145,9 @@ struct ShortcutRow: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack(spacing: 12) {
-        VStack(alignment: .leading, spacing: 4) {
-          Text(title)
-            .font(.appFont(size: 14, weight: .semibold))
-            .foregroundColor(theme.textColor)
-
-          Text(description)
-            .font(.appFont(size: 12))
-            .foregroundColor(theme.secondaryTextColor)
-        }
-
-        Spacer()
-
+      SettingsRow(title: title, subtitle: description) {
         ShortcutRecorderView(shortcut: $shortcut, isRecording: $isRecording)
       }
-      .padding(.horizontal, 16)
-      .padding(.vertical, 14)
 
       if !isLast {
         Divider()
@@ -182,32 +168,12 @@ struct SystemShortcutRow: View {
   @ObservedObject private var theme = ThemeManager.shared
 
   var body: some View {
-    HStack(spacing: 12) {
-      VStack(alignment: .leading, spacing: 4) {
-        Text(title)
-          .font(.appFont(size: 14, weight: .semibold))
-          .foregroundColor(theme.textColor)
-        Text(description)
-          .font(.appFont(size: 12))
-          .foregroundColor(theme.secondaryTextColor)
-      }
-
-      Spacer()
-
-      Text(shortcut)
-        .font(.appFont(size: 12, design: .monospaced))
-        .foregroundColor(theme.textColor)
-        .frame(minWidth: 100)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(theme.textColor.opacity(0.05))
-        .overlay(
-          RoundedRectangle(cornerRadius: theme.borderRadius / 1.5)
-            .stroke(theme.borderColor, lineWidth: 0.5)
-        )
+    SettingsRow(title: title, subtitle: description) {
+      Text(shortcut).font(.appFont(size: 12, design: .monospaced))
+        .foregroundStyle(theme.textColor).frame(width: 120, height: 28)
+        .background(theme.textColor.opacity(0.045), in: RoundedRectangle(cornerRadius: 6))
+        .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(theme.textColor.opacity(0.12), lineWidth: 0.6) }
     }
-    .padding(.horizontal, 16)
-    .padding(.vertical, 14)
   }
 }
 
@@ -222,7 +188,7 @@ struct ShortcutRecorderView: View {
 
   var body: some View {
     let textColor = foregroundColor ?? theme.textColor
-    let activeAccent = accentColor ?? theme.accentColor
+    let activeAccent = accentColor ?? theme.textColor
 
     Button(action: { isRecording = true }) {
       Text(isRecording ? "Type Shortcut..." : shortcut.displayString)

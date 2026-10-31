@@ -108,7 +108,7 @@ struct DetachedAgentRun: Identifiable, Equatable {
     case .stopping: return "Stopping…"
     case .stopped: return "Stopped"
     case .completed: return "Completed"
-    case .failed: return "Needs attention"
+    case .failed: return "Failed"
     }
   }
 
@@ -127,5 +127,9 @@ struct DetachedAgentRun: Identifiable, Equatable {
     if let event, !event.title.isEmpty, event.title != taskTitle { return event.title }
     if !status.isEmpty { return status }
     return "Working…"
+  }
+
+  var progress: DetachedRunProgress? {
+    state == .running ? DetachedRunProgress(event: event) : nil
   }
 }

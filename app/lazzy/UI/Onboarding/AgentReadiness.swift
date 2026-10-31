@@ -22,6 +22,18 @@ struct AgentReadiness: Equatable {
     let signedIn: Bool?
     switch agent {
     case .claude: signedIn = object?["loggedIn"] as? Bool
+    case .cursor:
+      let text = output.lowercased()
+      let status = object?["authenticated"] as? Bool ?? object?["isAuthenticated"] as? Bool
+        ?? object?["loggedIn"] as? Bool
+      let signedOut = [
+        "not logged in", "not signed in", "not authenticated", "unauthenticated",
+        "login required", "invalid api key", "api key required",
+      ]
+        .contains { text.contains($0) }
+      let signedInText = ["logged in", "logged in as", "login successful", "signed in", "authenticated"]
+        .contains { text.contains($0) }
+      signedIn = status ?? (signedOut ? false : exitCode == 0 && signedInText ? true : nil)
     case .fx:
       let auth = object?["auth"] as? String
       signedIn = auth == "missing" ? false : ["authenticated", "configured", "logged_in"].contains(auth ?? "") ? true : nil
@@ -47,6 +59,7 @@ extension AgentProvider {
     switch self {
     case .codex: address = "https://developers.openai.com/codex/cli/"
     case .claude: address = "https://code.claude.com/docs/en/quickstart"
+    case .cursor: address = "https://cursor.com/docs/cli/installation"
     case .grok: address = "https://x.ai"
     case .fx: address = "https://fx.sh/docs"
     case .opencode: address = "https://opencode.ai/docs/"
@@ -61,6 +74,7 @@ extension AgentProvider {
     switch self {
     case .codex: "codex login"
     case .claude: "claude auth login"
+    case .cursor: "cursor-agent login"
     case .fx: "fx login"
     case .amp: "amp login"
     case .opencode: "opencode auth login"

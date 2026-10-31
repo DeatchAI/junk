@@ -2,6 +2,7 @@ import SwiftUI
 
 struct WorkingDirectoryTray: View {
   @ObservedObject var store: WorkingDirectoryStore
+  var onReconnect: () -> Void = {}
   var onMenuPresentationChanged: (Bool) -> Void = { _ in }
   @ObservedObject private var theme = ThemeManager.shared
   @Environment(\.colorScheme) private var colorScheme
@@ -15,6 +16,18 @@ struct WorkingDirectoryTray: View {
     HStack {
       ComposerProjectSelector(store: store, onMenuPresentationChanged: onMenuPresentationChanged)
       Spacer(minLength: 0)
+      if store.isRemote {
+        switch store.remoteConnectionStatus {
+        case .connecting:
+          ProgressView().controlSize(.mini).padding(.trailing, 8).help("Connecting to remote machine")
+        case .failed:
+          Button(action: onReconnect) {
+            Label("Reconnect", systemImage: "arrow.clockwise").font(.appFont(size: 10, weight: .medium))
+          }.buttonStyle(.plain).padding(.trailing, 8).help("Reconnect to the remote machine")
+        case .idle, .connected:
+          EmptyView()
+        }
+      }
     }
     .padding(.horizontal, 6)
     .frame(height: 32)

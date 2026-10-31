@@ -19,13 +19,15 @@ struct ComposerDraft {
 
 struct ComposerRevisionSession {
   private(set) var messageNumber: Int?
+  private(set) var isBranchingAfterResponse = false
   private var savedDraft: ComposerDraft?
   var originalDraft: ComposerDraft? { savedDraft }
 
-  mutating func begin(messageNumber: Int, currentDraft: ComposerDraft, original: ComposerDraft) -> ComposerDraft {
+  mutating func begin(messageNumber: Int, currentDraft: ComposerDraft, original: ComposerDraft, afterResponse: Bool = false) -> ComposerDraft {
     // Choosing another past message must not overwrite the user's first draft.
     if savedDraft == nil { savedDraft = currentDraft }
     self.messageNumber = messageNumber
+    isBranchingAfterResponse = afterResponse
     return original
   }
 

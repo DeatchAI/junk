@@ -3,11 +3,12 @@ import Foundation
 
 /// Only read-only status commands run automatically. No prompts or credentials are retained.
 enum AgentStatusProbe {
-  static func check(_ agent: AgentProvider, executable: String) async -> AgentReadiness {
+  static func check(_ agent: AgentProvider, executable: String, includeCursorAPIKey: Bool = true) async -> AgentReadiness {
     let arguments: [String]
     switch agent {
     case .codex: arguments = ["login", "status"]
     case .claude: arguments = ["auth", "status", "--json"]
+    case .cursor: arguments = ["status"]
     case .fx: arguments = ["status", "--json"]
     default: return .installed
     }
@@ -27,6 +28,9 @@ enum AgentStatusProbe {
       process.standardOutput = output
       process.standardError = output
       var environment = ProcessInfo.processInfo.environment
+      if agent == .cursor, includeCursorAPIKey, let apiKey = try? CursorProviderKeychain.read() {
+        environment["CURSOR_API_KEY"] = apiKey
+      }
       environment["PATH"] = ([URL(fileURLWithPath: executable).deletingLastPathComponent().path,
         "/opt/homebrew/bin", "/usr/local/bin"] + [environment["PATH"] ?? "/usr/bin:/bin"]).joined(separator: ":")
       process.environment = environment

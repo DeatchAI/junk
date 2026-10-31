@@ -19,7 +19,17 @@ struct ComposerProjectMenu: View {
 
   private var projects: [ComposerProject] { library.matching(query) }
 
-  private enum RowIcon { case folder, addProject, clear }
+  @ObservedObject private var remoteMachines = RemoteMachineStore.shared
+
+  private var remoteWorkspaces: [RemoteWorkspaceSelection] {
+    remoteMachines.workspaces.filter { target in
+      query.isEmpty || target.name.localizedCaseInsensitiveContains(query)
+        || target.machineName.localizedCaseInsensitiveContains(query)
+        || target.path.localizedCaseInsensitiveContains(query)
+    }
+  }
+
+  private enum RowIcon { case folder, addProject, clear, remote }
 
   private var menuShape: RoundedRectangle {
     RoundedRectangle(cornerRadius: ComposerProjectMenuLayout.cornerRadius, style: .continuous)
@@ -35,33 +45,48 @@ struct ComposerProjectMenu: View {
       .font(.appFont(size: 12)).padding(.horizontal, 8).padding(.vertical, 6)
 
       Divider().padding(.horizontal, 7)
-      row("New project", icon: .addProject, action: onAdd)
+      row("New project", icon: .addProject, enabled: !store.selectionLocked, action: onAdd)
 
-      if !projects.isEmpty {
+      if !projects.isEmpty || !remoteWorkspaces.isEmpty {
         ScrollView {
-          VStack(spacing: ComposerProjectMenuLayout.rowSpacing) {
-            ForEach(projects) { project in
-              let available = project.isAvailable
-              row(project.name, icon: .folder, selected: store.url?.path == project.path, enabled: available) {
-                store.setDirectory(project.resolvedURL())
-                onSelect()
+          VStack(alignment: .leading, spacing: ComposerProjectMenuLayout.rowSpacing) {
+            if !projects.isEmpty {
+              ForEach(projects) { project in
+                let available = project.isAvailable
+                row(project.name, icon: .folder, selected: store.remoteWorkspace == nil && store.url?.path == project.path,
+                    enabled: available && !store.selectionLocked) {
+                  store.setDirectory(project.resolvedURL())
+                  onSelect()
+                }
+                .help(available ? project.path : "Folder unavailable: \(project.path)")
               }
-              .help(available ? project.path : "Folder unavailable: \(project.path)")
+            }
+            if !remoteWorkspaces.isEmpty {
+              if !projects.isEmpty { Divider().padding(.horizontal, 7).padding(.vertical, 3) }
+              Text("Remote folders").font(.appFont(size: 9, weight: .medium))
+                .foregroundStyle(theme.secondaryTextColor).padding(.horizontal, 8).padding(.top, 3)
+              ForEach(remoteWorkspaces) { target in
+                row("\(target.name) · \(target.machineName)", icon: .remote,
+                    selected: store.remoteWorkspace == target, enabled: !store.selectionLocked) {
+                  store.setRemoteWorkspace(target)
+                  onSelect()
+                }
+                .help("\(target.path) on \(target.host)")
+              }
             }
           }
-        }
-        .frame(height: min(CGFloat(projects.count)
+        }.frame(height: min(CGFloat(projects.count + remoteWorkspaces.count + (remoteWorkspaces.isEmpty ? 0 : 1))
           * (ComposerProjectMenuLayout.rowHeight + ComposerProjectMenuLayout.rowSpacing)
           - ComposerProjectMenuLayout.rowSpacing, ComposerProjectMenuLayout.maximumListHeight))
         .scrollIndicators(.hidden)
       } else {
-        Text(query.isEmpty ? "Add a folder to save your first project." : "No projects found")
+        Text(query.isEmpty ? "Add a local folder or create a remote folder in Settings → Machines." : "No projects found")
           .font(.appFont(size: 11)).foregroundStyle(theme.secondaryTextColor)
           .padding(.horizontal, 8).padding(.vertical, 7)
       }
 
       Divider().padding(.horizontal, 7).padding(.vertical, 3)
-      row("Don’t work in a project", icon: .clear, selected: store.url == nil) {
+      row("Don’t work in a project", icon: .clear, selected: store.path == nil, enabled: !store.selectionLocked) {
         store.clear()
         onSelect()
       }
@@ -104,6 +129,7 @@ struct ComposerProjectMenu: View {
     case .folder: ComposerFolderIcon()
     case .addProject: ComposerFolderIcon(isAdding: true)
     case .clear: Image(systemName: "xmark").font(.appFont(size: 11, weight: .medium))
+    case .remote: Image(systemName: "server.rack").font(.appFont(size: 11, weight: .medium))
     }
   }
 }

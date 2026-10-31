@@ -9,6 +9,10 @@ struct FloatingChatExpandedView: View {
   let responseEvents: [AgentResponseEvent]
   var canRevise = true
   var onRevise: ((Int) -> Void)? = nil
+  var onBranch: ((Int) -> Void)? = nil
+  var gitWorkspace: String? = nil
+  var gitConversationID: String? = nil
+  var gitEndpoint: RuntimeEndpoint = .local
 
   @ObservedObject private var theme = ThemeManager.shared
 
@@ -63,8 +67,13 @@ struct FloatingChatExpandedView: View {
             if let response = msg.aiResponse {
               HStack(alignment: .top, spacing: 12) {
                 // AI Icon/Avatar could go here
-                ChatTranscriptView(parts: ChatTranscript.parts(text: response, structured: msg.responseParts))
-                  .padding(.horizontal, 4)
+                VStack(alignment: .leading, spacing: 10) {
+                  ChatTranscriptView(parts: ChatTranscript.parts(text: response, structured: msg.responseParts))
+                    .padding(.horizontal, 4)
+                  ResponseActionButtons(text: ChatTranscript.readableText(ChatTranscript.parts(text: response, structured: msg.responseParts)),
+                    responseID: msg.id.uuidString, canBranch: canRevise && msg.branchReference?.canBranchAfter == true,
+                    onBranch: onBranch.map { callback in { callback(index) } })
+                }
               }
               .padding(.trailing, 20)
             }
@@ -88,6 +97,12 @@ struct FloatingChatExpandedView: View {
               }
             }
             .padding(.trailing, 20)
+          }
+
+          if !isThinking, streamingResponse.isEmpty, let msg = messages.last {
+            GitTaskChangeCard(workspace: gitWorkspace, runID: msg.gitRunID, conversationID: gitConversationID,
+              prompt: msg.userPrompt, timestamp: msg.gitTimestamp, ordinal: msg.gitMessageOrdinal,
+              revision: msg.gitRevision, endpoint: gitEndpoint)
           }
 
           Color.clear.frame(height: 1).id("bottom")

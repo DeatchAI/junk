@@ -4,6 +4,7 @@ enum OnboardingStep: Int {
   case keyboard = 1
   case router
   case browserExtension
+  case messagesRemote
   case permissions
 }
 
@@ -16,7 +17,7 @@ enum OnboardingPalette {
 struct OnboardingBrand: View {
   var body: some View {
     HStack(spacing: 7) {
-      Image("DetachMarkLight")
+      Image("AppIcon")
         .resizable()
         .renderingMode(.template)
         .scaledToFit()

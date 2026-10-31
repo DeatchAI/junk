@@ -19,7 +19,7 @@ struct WorkflowsSettingsView: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 24) {
+    VStack(alignment: .leading, spacing: 18) {
       HStack(alignment: .bottom, spacing: 20) {
         SettingsPageHeader(
           title: "Workflows",
@@ -35,14 +35,8 @@ struct WorkflowsSettingsView: View {
             }
           }) {
             Label("New workflow", systemImage: "plus")
-              .font(.appFont(size: 11, weight: .semibold))
-              .foregroundColor(theme.backgroundColor)
-              .padding(.horizontal, 12)
-              .padding(.vertical, 7)
-              .background(theme.accentColor)
-              .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
           }
-          .buttonStyle(.plain)
+          .buttonStyle(AppButtonStyle(kind: .primary))
         }
       }
 
@@ -71,7 +65,7 @@ struct WorkflowsSettingsView: View {
               .foregroundColor(theme.secondaryTextColor.opacity(0.7))
           }
           .frame(maxWidth: .infinity)
-          .padding(.vertical, 52)
+          .padding(.vertical, 32)
           .background(theme.textColor.opacity(0.02))
           .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
           .overlay(
@@ -123,19 +117,19 @@ private struct WorkflowRow: View {
     HStack(spacing: 12) {
       ZStack {
         RoundedRectangle(cornerRadius: theme.borderRadius / 1.5)
-          .fill(theme.accentColor.opacity(0.15))
-          .frame(width: 40, height: 40)
+          .fill(theme.textColor.opacity(0.15))
+          .frame(width: 30, height: 30)
         Image(systemName: workflow.systemImage ?? "play.fill")
           .font(.appFont(size: 16))
-          .foregroundColor(theme.accentColor)
+          .foregroundColor(theme.textColor)
       }
 
       VStack(alignment: .leading, spacing: 4) {
         Text(workflow.title)
-          .font(.appFont(size: 14, weight: .semibold))
+          .font(.appFont(size: 12.5, weight: .medium))
           .foregroundColor(theme.textColor)
         Text(workflow.prompt ?? "")
-          .font(.appFont(size: 12))
+          .font(.appFont(size: 11))
           .foregroundColor(theme.secondaryTextColor)
           .lineLimit(1)
         if let mcpServerIds = workflow.mcpServerIds, !mcpServerIds.isEmpty {
@@ -147,38 +141,10 @@ private struct WorkflowRow: View {
 
       Spacer()
 
-      HStack(spacing: 8) {
-        Button(action: onRun) {
-          Image(systemName: "play.fill")
-            .font(.appFont(size: 12))
-            .foregroundColor(theme.backgroundColor)
-            .padding(7)
-            .background(theme.accentColor)
-            .cornerRadius(theme.borderRadius / 2)
-        }
-        .buttonStyle(.plain)
-
-        if isHovered {
-          Button(action: onEdit) {
-            Image(systemName: "pencil")
-              .font(.appFont(size: 12))
-              .foregroundColor(theme.textColor)
-              .padding(7)
-              .background(theme.textColor.opacity(0.1))
-              .cornerRadius(theme.borderRadius / 2)
-          }
-          .buttonStyle(.plain)
-
-          Button(action: { showDeleteConfirm = true }) {
-            Image(systemName: "trash")
-              .font(.appFont(size: 12))
-              .foregroundColor(.red)
-              .padding(7)
-              .background(Color.red.opacity(0.1))
-              .cornerRadius(theme.borderRadius / 2)
-          }
-          .buttonStyle(.plain)
-        }
+      HStack(spacing: 2) {
+        SettingsIconButton(icon: "play.fill", accessibilityLabel: "Run workflow", action: onRun)
+        SettingsIconButton(icon: "pencil", accessibilityLabel: "Edit workflow", action: onEdit)
+        SettingsIconButton(icon: "trash", accessibilityLabel: "Delete workflow") { showDeleteConfirm = true }
       }
     }
     .padding(12)
@@ -244,26 +210,18 @@ private struct WorkflowFormView: View {
 
       ScrollView {
         VStack(alignment: .leading, spacing: 18) {
-          labeledTextField("NAME", placeholder: "e.g., Check unread Gmail", text: $name)
+          labeledTextField("Name", placeholder: "e.g., Check unread Gmail", text: $name)
 
           VStack(alignment: .leading, spacing: 8) {
-            Text("PROMPT")
-              .font(.appFont(size: 11, weight: .bold))
+            Text("Prompt")
+              .font(.appFont(size: 11, weight: .medium))
               .foregroundColor(theme.secondaryTextColor)
-            TextEditor(text: $prompt)
-              .font(.appFont(size: 13))
-              .foregroundColor(theme.textColor)
-              .scrollContentBackground(.hidden)
-              .frame(minHeight: 110, maxHeight: 150)
-              .padding(12)
-              .background(theme.textColor.opacity(0.05))
-              .cornerRadius(8)
-              .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.borderColor, lineWidth: 0.5))
+            AppTextEditor(title: "Workflow prompt", text: $prompt, height: 110)
           }
 
           VStack(alignment: .leading, spacing: 8) {
-            Text("MCP CAPABILITIES")
-              .font(.appFont(size: 11, weight: .bold))
+            Text("MCP capabilities")
+              .font(.appFont(size: 11, weight: .medium))
               .foregroundColor(theme.secondaryTextColor)
 
             VStack(spacing: 6) {
@@ -276,7 +234,7 @@ private struct WorkflowFormView: View {
                     )
                     .foregroundColor(
                       selectedMCPServerIds.contains(option.serverId)
-                        ? theme.accentColor : theme.secondaryTextColor
+                        ? theme.textColor : theme.secondaryTextColor
                     )
 
                     Image(systemName: option.systemImage)
@@ -308,19 +266,10 @@ private struct WorkflowFormView: View {
           HStack {
             Spacer()
             Button(action: saveWorkflow) {
-              Text(isEditing ? "Save Changes" : "Create Workflow")
-                .font(.appFont(size: 14, weight: .semibold))
-                .foregroundColor(theme.backgroundColor)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 12)
-                .background(
-                  RoundedRectangle(cornerRadius: theme.borderRadius / 1.5)
-                    .fill(name.isEmpty || prompt.isEmpty ? theme.accentColor.opacity(0.5) : theme.accentColor)
-                )
+              Text(isEditing ? "Save changes" : "Create workflow")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(AppButtonStyle(kind: .primary))
             .disabled(name.isEmpty || prompt.isEmpty)
-            Spacer()
           }
         }
       }
@@ -342,17 +291,7 @@ private struct WorkflowFormView: View {
       Text(label)
         .font(.appFont(size: 11, weight: .bold))
         .foregroundColor(theme.secondaryTextColor)
-      TextField("", text: text)
-        .placeholder(when: text.wrappedValue.isEmpty) {
-          Text(placeholder).foregroundColor(theme.secondaryTextColor)
-        }
-        .textFieldStyle(.plain)
-        .font(.appFont(size: 14))
-        .foregroundColor(theme.textColor)
-        .padding(12)
-        .background(theme.textColor.opacity(0.05))
-        .cornerRadius(8)
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.borderColor, lineWidth: 0.5))
+      AppTextField(placeholder, text: text)
     }
   }
 

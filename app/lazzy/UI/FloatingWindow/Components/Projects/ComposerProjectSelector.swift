@@ -4,6 +4,7 @@ import SwiftUI
 struct ComposerProjectSelector: View {
   @ObservedObject var store: WorkingDirectoryStore
   @ObservedObject var library: ComposerProjectLibrary
+  @ObservedObject private var remoteMachines = RemoteMachineStore.shared
   var onMenuPresentationChanged: (Bool) -> Void = { _ in }
   @ObservedObject private var theme = ThemeManager.shared
   @State private var isPresented = false
@@ -17,7 +18,8 @@ struct ComposerProjectSelector: View {
   }
 
   private var contentRevision: AnyHashable {
-    AnyHashable([presentationID.uuidString, query, store.url?.path ?? ""] + library.projects.map(\.path))
+    AnyHashable([presentationID.uuidString, query, store.path ?? ""] + library.projects.map(\.path)
+      + remoteMachines.workspaces.map(\.id))
   }
 
   var body: some View {
@@ -40,6 +42,7 @@ struct ComposerProjectSelector: View {
       .contentShape(Rectangle())
     }
     .buttonStyle(ComposerButtonStyle())
+    .disabled(store.selectionLocked)
     .help("Choose a project")
     .accessibilityLabel("Choose project: \(store.displayName)")
     .background {

@@ -17,6 +17,10 @@ struct FloatingChatToolbarView: View {
   var onVoiceInput: () -> Void
   var onSend: () -> Void
   var isRevising = false
+  var isBranchingAfterResponse = false
+  var gitWorkspace: String? = nil
+  var gitConversationID: String? = nil
+  var gitEndpoint: RuntimeEndpoint = .local
   var branches: [ConversationBranch] = []
   var onSelectBranch: (String) -> Void = { _ in }
 
@@ -88,6 +92,9 @@ struct FloatingChatToolbarView: View {
         .help(voiceHelpText)
       }
 
+      GitSessionRevertButton(workspace: gitWorkspace, conversationID: gitConversationID,
+        endpoint: gitEndpoint, isBusy: wsManager.isStreaming || !wsManager.isConnected)
+
       // History button - triggers external window
       Button(action: {
         onHistory()
@@ -133,8 +140,8 @@ struct FloatingChatToolbarView: View {
         }
         .buttonStyle(ComposerButtonStyle())
         .disabled(!canSend)
-        .help(isRevising ? "Send edited message in a new branch" : "Send message")
-        .accessibilityLabel(isRevising ? "Send edited message in new branch" : "Send message")
+        .help(isBranchingAfterResponse ? "Send message in a new chat branch" : isRevising ? "Send edited message in a new branch" : "Send message")
+        .accessibilityLabel(isBranchingAfterResponse ? "Send message in a new chat branch" : isRevising ? "Send edited message in new branch" : "Send message")
       }
 
     }

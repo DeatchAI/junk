@@ -14,7 +14,7 @@ struct SecretsSettingsView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 24) {
+      VStack(alignment: .leading, spacing: 18) {
         HStack(alignment: .bottom, spacing: 20) {
           SettingsPageHeader(
             title: "Secrets",
@@ -29,7 +29,7 @@ struct SecretsSettingsView: View {
               .foregroundColor(theme.backgroundColor)
               .padding(.horizontal, 12)
               .padding(.vertical, 7)
-              .background(theme.accentColor)
+              .background(theme.textColor)
               .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
           }
           .buttonStyle(.plain)
@@ -38,7 +38,7 @@ struct SecretsSettingsView: View {
         if !status.isEmpty {
           HStack(spacing: 8) {
             Image(systemName: "checkmark.circle.fill")
-              .foregroundColor(.green)
+              .foregroundColor(.primary)
             Text(status)
               .font(.appFont(size: 10.5))
               .foregroundColor(theme.secondaryTextColor)
@@ -46,7 +46,7 @@ struct SecretsSettingsView: View {
           }
           .padding(.horizontal, 12)
           .padding(.vertical, 9)
-          .background(Color.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+          .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
 
         VStack(alignment: .leading, spacing: 10) {
@@ -56,30 +56,27 @@ struct SecretsSettingsView: View {
           )
 
           SettingsCard {
-            VStack(spacing: 9) {
-              TextField("Label, e.g. GitHub Work", text: $label)
-                .secretTextField(theme: theme)
-              TextField("Username or email", text: $username)
-                .secretTextField(theme: theme)
-              SecureField("Password", text: $password)
-                .secretTextField(theme: theme)
-              TextField("Exact origin, e.g. https://github.com", text: $origin)
-                .secretTextField(theme: theme)
-
-              HStack {
-                Text("Touch ID is required before every agent use.")
-                  .font(.appFont(size: 10))
-                  .foregroundColor(theme.secondaryTextColor)
-                Spacer()
-                Button("Save securely") { save() }
-                  .font(.appFont(size: 11, weight: .semibold))
-                  .buttonStyle(.borderedProminent)
-                  .tint(theme.accentColor)
-                  .disabled(label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty || origin == "https://")
-              }
-              .padding(.top, 2)
+            SettingsRow(title: "Label", controlWidth: 280) {
+              AppTextField("For example: GitHub Work", text: $label)
             }
-            .padding(14)
+            SettingsCardDivider()
+            SettingsRow(title: "Username", controlWidth: 280) {
+              AppTextField("Username or email", text: $username)
+            }
+            SettingsCardDivider()
+            SettingsRow(title: "Password", controlWidth: 280) {
+              AppTextField("Password", text: $password, secure: true)
+            }
+            SettingsCardDivider()
+            SettingsRow(title: "Website", controlWidth: 280) {
+              AppTextField("https://github.com", text: $origin)
+            }
+            SettingsCardDivider()
+            SettingsRow(title: "Save credential", subtitle: "Touch ID is required before every agent use.") {
+              Button("Save securely") { save() }
+                .buttonStyle(AppButtonStyle(kind: .primary))
+                .disabled(label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty || origin == "https://")
+            }
           }
         }
 
@@ -321,7 +318,7 @@ private struct SecretSiteIcon: View {
   private var fallback: some View {
     Text(hostInitial)
       .font(.appFont(size: size * 0.42, weight: .semibold))
-      .foregroundColor(theme.accentColor)
+      .foregroundColor(theme.textColor)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
@@ -393,12 +390,12 @@ private struct ApplePasswordsImportSheet: View {
 
       Spacer(minLength: 0)
       HStack {
-        Toggle("Move exported CSV to Trash after import", isOn: $moveExportToTrash)
+        AppLabeledToggle(title: "Move exported CSV to Trash after import", isOn: $moveExportToTrash)
           .font(.appFont(size: 11))
         Spacer()
         Button("Cancel") { cancel() }
         Button("Import") { commit() }
-          .buttonStyle(.borderedProminent)
+          .buttonStyle(AppButtonStyle(kind: .primary))
           .disabled(preview == nil || preview?.importableCount == 0)
       }
     }

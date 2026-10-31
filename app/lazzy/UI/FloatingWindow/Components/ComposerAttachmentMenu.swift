@@ -102,12 +102,15 @@ struct ComposerAttachmentMenu: View {
     Group {
       ComposerAttachmentMenuRow(
         title: "Files & Folders",
-        subtitle: workingDirectoryStore.url == nil
+        subtitle: workingDirectoryStore.isRemote
+          ? "The remote agent can read files in its project"
+          : workingDirectoryStore.url == nil
           ? "Choose a file or folder from Finder"
           : "Search files in \(workingDirectoryStore.displayName)",
         systemImage: "doc.on.doc",
-        showsSubmenu: workingDirectoryStore.url != nil,
+        showsSubmenu: !workingDirectoryStore.isRemote && workingDirectoryStore.url != nil,
         isHighlighted: selectedRootIndex == 0,
+        isEnabled: !workingDirectoryStore.isRemote,
         onHover: { selectedRootIndex = 0 }
       ) {
         if workingDirectoryStore.url == nil {
@@ -119,10 +122,13 @@ struct ComposerAttachmentMenu: View {
       .id(0)
       ComposerAttachmentMenuRow(
         title: "Tabs",
-        subtitle: "Attach open tabs from Chrome",
+        subtitle: workingDirectoryStore.isRemote
+          ? "Browser tabs are available for local runs"
+          : "Attach open tabs from Chrome",
         systemImage: "rectangle.on.rectangle",
-        showsSubmenu: true,
+        showsSubmenu: !workingDirectoryStore.isRemote,
         isHighlighted: selectedRootIndex == 1,
+        isEnabled: !workingDirectoryStore.isRemote,
         onHover: { selectedRootIndex = 1 }
       ) {
         page = .browserTabs

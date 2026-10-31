@@ -9,6 +9,7 @@ struct ComposerAttachmentMenuRow: View {
   var showsDetail = false
   var isSelected = false
   var isHighlighted = false
+  var isEnabled = true
   var onHover: (() -> Void)?
   let action: () -> Void
 
@@ -56,6 +57,8 @@ struct ComposerAttachmentMenuRow: View {
       }
     }
     .buttonStyle(.plain)
+    .disabled(!isEnabled)
+    .opacity(isEnabled ? 1 : 0.42)
     .help(subtitle ?? title)
     .onHover {
       isHovered = $0
@@ -219,12 +222,12 @@ struct InlineFileBrowser: View {
 
         HStack(spacing: 8) {
           Button("Choose working directory", action: onChooseWorkingDirectory)
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(AppButtonStyle(kind: .primary))
           Button(action: onChooseFromMac) {
             Image(systemName: "paperclip")
               .frame(width: 28, height: 28)
           }
-          .buttonStyle(.bordered)
+          .buttonStyle(AppButtonStyle())
           .help("Attach a file or folder from Mac")
         }
       }

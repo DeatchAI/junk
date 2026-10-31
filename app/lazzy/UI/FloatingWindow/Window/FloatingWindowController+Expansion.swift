@@ -5,23 +5,24 @@ extension FloatingWindowController {
     guard let window = chatWindow else { return }
     let expanded = !isExpanded
     let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? window.frame
-    let frame = FloatingChatWindowLayout.frame(from: window.frame, visibleFrame: visibleFrame, expanded: expanded)
-    (window as? FloatingComposerPanel)?.expandedScreenBounds = expanded
-      ? visibleFrame.insetBy(dx: FloatingChatWindowLayout.margin, dy: FloatingChatWindowLayout.margin) : nil
-
-    if expanded {
-      window.styleMask.insert(.resizable)
-      window.standardWindowButton(.zoomButton)?.isHidden = true
-      window.standardWindowButton(.closeButton)?.isHidden = true
-      window.standardWindowButton(.miniaturizeButton)?.isHidden = true
-    } else {
-      window.styleMask.remove(.resizable)
-    }
-    let minimumHeight = expanded ? FloatingChatWindowLayout.minimumHeight : FloatingChatWindowLayout.compactMinimumHeight
-    window.minSize = NSSize(width: FloatingChatWindowLayout.width, height: min(minimumHeight, frame.height))
-    window.maxSize = NSSize(width: FloatingChatWindowLayout.width,
-      height: expanded ? frame.height : .greatestFiniteMagnitude)
+    let bounds = visibleFrame.insetBy(
+      dx: FloatingChatWindowLayout.margin, dy: FloatingChatWindowLayout.margin
+    )
+    let frame = FloatingChatWindowLayout.frame(
+      from: window.frame, visibleFrame: visibleFrame, expanded: expanded, windowWidth: windowContentWidth
+    )
+    (window as? FloatingComposerPanel)?.expandedScreenBounds = expanded ? bounds : nil
+    window.minSize = NSSize(
+      width: min(FloatingChatWindowLayout.minimumWidth, frame.width),
+      height: min(
+        expanded ? FloatingChatWindowLayout.minimumHeight : FloatingChatWindowLayout.resizeMinimumHeight,
+        frame.height
+      )
+    )
+    window.maxSize = NSSize(width: bounds.width, height: bounds.height)
     isExpanded = expanded
+    isManuallyResized = false
+    manuallyResizedHeight = nil
     if expanded { updateExpandedContentHeight(to: frame.height) }
     // Match the native viewport immediately. The resize delegate keeps it in sync
     // while the user adjusts the expanded panel's height.
@@ -32,10 +33,15 @@ extension FloatingWindowController {
   }
 
   func windowDidChangeScreen(_ notification: Notification) {
-    guard isExpanded, let window = chatWindow, let screen = window.screen else { return }
+    guard let window = chatWindow, let screen = window.screen else { return }
     let bounds = screen.visibleFrame.insetBy(dx: FloatingChatWindowLayout.margin, dy: FloatingChatWindowLayout.margin)
+    window.minSize = NSSize(
+      width: min(FloatingChatWindowLayout.minimumWidth, bounds.width),
+      height: min(isExpanded ? FloatingChatWindowLayout.minimumHeight : FloatingChatWindowLayout.resizeMinimumHeight, bounds.height)
+    )
+    window.maxSize = NSSize(width: bounds.width, height: bounds.height)
+    guard isExpanded || isManuallyResized else { return }
     (window as? FloatingComposerPanel)?.expandedScreenBounds = bounds
-    window.maxSize.height = bounds.height
     window.setFrame(window.frame, display: true)
     rememberCurrentWindowFrame()
     updateExpandedContentHeight()

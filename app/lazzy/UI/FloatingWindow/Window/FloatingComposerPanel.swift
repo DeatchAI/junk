@@ -1,13 +1,10 @@
 import AppKit
 
-/// AppKit can ask a borderless hosting window to adopt its content's fitting
-/// width even when the panel is not user-resizable. Keep the composer width
-/// stable while allowing the response area to grow vertically.
+/// Keeps AppKit content fitting aligned with the composer’s user-selected width
+/// while bounding its height and position to the current display.
 final class FloatingComposerPanel: KeyablePanel {
   var fixedContentWidth: CGFloat = 0
-  /// AppKit's min/max sizes apply to interactive resizing, not every content
-  /// fitting request. Expanded panels must also enforce the display's bounds
-  /// when the hosting view asks to adopt a long transcript's natural height.
+  /// Bounds applied when the panel uses a fixed viewport or the expanded layout.
   var expandedScreenBounds: NSRect?
 
   override func setFrame(_ frameRect: NSRect, display flag: Bool) {
@@ -39,7 +36,9 @@ final class FloatingComposerPanel: KeyablePanel {
     var frame = proposed
     frame.size.width = fixedContentWidth
     if let bounds = expandedScreenBounds {
+      frame.size.width = min(frame.width, bounds.width)
       frame.size.height = min(frame.height, bounds.height)
+      frame.origin.x = max(bounds.minX, min(frame.minX, bounds.maxX - frame.width))
       frame.origin.y = max(bounds.minY, min(frame.minY, bounds.maxY - frame.height))
     }
     return frame

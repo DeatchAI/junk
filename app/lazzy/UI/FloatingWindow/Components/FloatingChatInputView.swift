@@ -144,6 +144,10 @@ struct FloatingChatInputView: View {
         fileCatalog.search(query: mentionSearchQuery)
       }
     }
+    .onChange(of: workingDirectoryStore.remoteWorkspace) { _, target in
+      fileCatalog.setWorkingDirectory(target == nil ? workingDirectoryStore.url : nil)
+      if target != nil && attachmentMenuPage == .files { attachmentMenuPage = .root }
+    }
   }
 
   private var editor: some View {

@@ -40,6 +40,16 @@ final class DetachedRunControls: ObservableObject {
       && manager.currentConversationId == conversationID
   }
 
+  func reply(to run: DetachedAgentRun, text: String) -> Bool {
+    guard !run.isActive, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+      let target = targets[run.id], let manager = target.manager,
+      let conversationID = run.conversationId,
+      manager.isConnected, !manager.isStreaming, !manager.isStoppingRun,
+      manager.currentConversationId == conversationID else { return false }
+    manager.submitChatRequest(target.request.followUp(text, in: conversationID))
+    return true
+  }
+
   func stop(_ run: DetachedAgentRun) {
     guard canStop(run) else { return }
     targets[run.id]?.manager?.stopStreaming()

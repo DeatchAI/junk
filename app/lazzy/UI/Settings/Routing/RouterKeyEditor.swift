@@ -8,9 +8,8 @@ struct RouterKeyEditor: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       Text("Your Jev API key").font(.appFont(size: 13, weight: .medium))
-      SecureField(router.hasKey ? "A key is saved in Keychain" : "Paste your TypeSafe API key", text: $apiKey)
-        .textFieldStyle(.roundedBorder).accessibilityLabel("Jev API key")
-      HStack(spacing: 16) {
+      AppTextField(router.hasKey ? "A key is saved in Keychain" : "Paste your TypeSafe API key", text: $apiKey, secure: true).accessibilityLabel("Jev API key")
+      HStack(spacing: 6) {
         Button("Save key") {
           router.saveKey(apiKey)
           if router.hasKey { apiKey = "" }
@@ -23,6 +22,7 @@ struct RouterKeyEditor: View {
       }.font(.appFont(size: 11))
       if let status = router.keyStatus { Text(status).font(.appFont(size: 11)).foregroundStyle(theme.secondaryTextColor) }
     }
+    .buttonStyle(AppButtonStyle())
     .onDisappear { apiKey = "" }
   }
 }

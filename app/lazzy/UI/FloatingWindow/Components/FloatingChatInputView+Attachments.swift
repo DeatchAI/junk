@@ -126,6 +126,7 @@ extension FloatingChatInputView {
   func updateAttachmentMenuTrigger(for value: String, previousValue: String) {
     if let triggerOffset = insertedComposerTriggerOffset(
       from: previousValue, to: value, character: "@") {
+      guard !workingDirectoryStore.isRemote else { return }
       mentionTriggerOffset = triggerOffset
       attachmentMenuPage = .root
       isAttachmentMenuPresented = true
@@ -151,6 +152,7 @@ extension FloatingChatInputView {
         fileCatalog.search(query: mentionSearchQuery)
       }
     } else if !mentionSearchQuery.isEmpty {
+      guard !workingDirectoryStore.isRemote else { return }
       if workingDirectoryStore.url == nil {
         chooseFilesFromMac()
       } else {

@@ -3,10 +3,10 @@ import Combine
 import SwiftUI
 
 /// An always-on-top control surface for work that continues after the composer closes.
-/// Its frame changes only when the user opens or closes the island, never for streaming
-/// activity updates, which avoids AppKit/SwiftUI sizing feedback during tool bursts.
+/// Frame changes follow task count and explicit inline selection, never streamed text.
 @MainActor
 final class ActivityIslandWindowController: NSObject, ObservableObject {
+  static let activityRevealDuration: TimeInterval = 4
   private struct PendingFrameRequest {
     let expanded: Bool
     let animated: Bool
@@ -17,21 +17,21 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
     let placement = AppSettings.activityIslandPlacement
   }
 
-  private var islandWindow: NSPanel?
+  private var islandWindow: AgentQuestionPanel?
   private let runStore: DetachedRunStore
   private let controls: DetachedRunControls
+  let interaction = ActivityIslandTaskState()
   private var completionDismissWorkItem: DispatchWorkItem?
   private var hoverCollapseWorkItem: DispatchWorkItem?
-  private var approvalShakeWorkItems: [DispatchWorkItem] = []
-  private var approvalShakeRestingFrame: NSRect?
   private var pendingFrameRequest: PendingFrameRequest?
   private var cancellables = Set<AnyCancellable>()
   private var isPointerHovering = false
   private var isAnimatingFrame = false
-  private var isShakingApproval = false
-  private var shouldShakeForInterrupt = false
+  private var hasKeyboardInteraction = false
+  private var activityVisibleUntil = Date.distantPast
+  private var outsideClickMonitor: Any?
+  private var localClickMonitor: Any?
   private var frameAnimationGeneration = 0
-  private var approvalShakeGeneration = 0
 
   @Published private(set) var isVisible = false
   @Published private(set) var isExpanded = false
@@ -62,24 +62,69 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
     runStore.$runs
       .receive(on: RunLoop.main)
       .sink { [weak self] _ in
-        guard let self, self.isVisible else { return }
-        if !self.runStore.hasActiveRuns && !self.runStore.hasRecoverableRuns && !self.runStore.hasUnreadResults
-          && !self.runStore.presentationRuns.contains(where: \.isDebugPreview) {
-          self.hide()
-        } else if self.isExpanded, let window = self.islandWindow {
-          self.applyFrame(to: window, expanded: true)
-        }
+        self?.refreshTasks()
       }
       .store(in: &cancellables)
+    interaction.$expandedRunID.dropFirst()
+      .receive(on: RunLoop.main)
+      .sink { [weak self] id in
+        guard let self else { return }
+        if id == nil { self.hasKeyboardInteraction = false }
+        if self.isVisible, self.isExpanded, let window = self.islandWindow {
+          self.applyFrame(to: window, expanded: true, animated: true)
+        }
+        if id == nil && !self.isPointerHovering { self.setHovering(false) }
+      }.store(in: &cancellables)
+    interaction.$expandedInteractionHeight.removeDuplicates().dropFirst()
+      .receive(on: RunLoop.main)
+      .sink { [weak self] _ in
+        guard let self, self.isVisible, self.isExpanded, let window = self.islandWindow else { return }
+        self.applyFrame(to: window, expanded: true, animated: true)
+      }.store(in: &cancellables)
+  }
+
+  deinit {
+    if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
+    if let localClickMonitor { NSEvent.removeMonitor(localClickMonitor) }
+  }
+
+  private func refreshTasks() {
+    interaction.reconcile(runStore.presentationRuns)
+    guard isVisible else { return }
+    if hasPendingInterrupt {
+      revealPendingInteraction()
+      setExpanded(true, animated: true)
+    }
+    if runStore.presentationRuns.isEmpty && AgentQuestionCenter.shared.current == nil
+      && !isPointerHovering && !hasKeyboardInteraction {
+      hide()
+      return
+    }
+    if isExpanded, let window = islandWindow { applyFrame(to: window, expanded: true, animated: true) }
+    scheduleCompletionExpiry()
+  }
+
+  private func scheduleCompletionExpiry() {
+    completionDismissWorkItem?.cancel()
+    completionDismissWorkItem = nil
+    guard let expiry = runStore.nextCompletionExpiry else { return }
+    let refresh = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.runStore.objectWillChange.send()
+      self.refreshTasks()
+    }
+    completionDismissWorkItem = refresh
+    DispatchQueue.main.asyncAfter(deadline: .now() + max(0.05, expiry.timeIntervalSinceNow), execute: refresh)
   }
 
   private func updatePreferences(enabled: Bool, placement: ActivityIslandPlacement) {
     if self.placement != placement {
-      stopApprovalShake()
       resetPendingFrameWork()
       hoverCollapseWorkItem?.cancel()
       hoverCollapseWorkItem = nil
       isPointerHovering = false
+      hasKeyboardInteraction = false
+      interaction.collapse()
       self.placement = placement
     }
     guard enabled else {
@@ -88,8 +133,8 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
     }
     if isVisible {
       refreshVisibleFrame()
-      if !hasPendingInterrupt { setHovering(false) }
-    } else if runStore.hasActiveRuns || runStore.hasUnreadResults || hasPendingInterrupt {
+      if interaction.expandedRunID == nil { setHovering(false) }
+    } else if !runStore.presentationRuns.isEmpty || hasPendingInterrupt {
       present()
     }
   }
@@ -100,13 +145,25 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
   }
 
   func show() {
+    activityVisibleUntil = Date.now.addingTimeInterval(Self.activityRevealDuration)
     present()
+    guard isVisible else { return }
+    revealPendingInteraction()
+    setExpanded(true, animated: true)
+    setHovering(false)
+  }
+
+  private func revealPendingInteraction() {
+    interaction.reconcile(runStore.presentationRuns)
+    guard interaction.expandedRunID == nil,
+      let run = runStore.presentationRuns.first(where: \.needsAttention) else { return }
+    interaction.select(run)
   }
 
   /// Debug previews must remain testable from the menu even if a floating chat
   /// happens to be open. This only changes presentation, never run state.
   func showDebugPreview() {
-    present()
+    show()
   }
 
   private func present() {
@@ -120,44 +177,40 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
       hide()
       return
     }
-    if hasPendingInterrupt { isExpanded = true }
     if islandWindow == nil { createWindow() }
     guard let window = islandWindow else { return }
 
-    applyFrame(to: window, expanded: isExpanded)
+    applyFrame(to: window, expanded: isExpanded, animated: isVisible)
     window.alphaValue = 1
     window.orderFrontRegardless()
     isVisible = true
+    scheduleCompletionExpiry()
   }
 
   /// Lets the user register a successful background run, then removes the island
   /// once it is no longer carrying useful live state.
-  func showCompletion(for duration: TimeInterval = 4) {
-    show()
-    guard isVisible else { return }
-
-    let dismissal = DispatchWorkItem { [weak self] in
-      guard let self, !self.runStore.hasActiveRuns, !self.runStore.hasRecoverableRuns,
-        !self.runStore.hasUnreadResults else { return }
-      self.hide()
-    }
-    completionDismissWorkItem = dismissal
-    DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: dismissal)
-  }
+  func showCompletion() { show() }
 
   func showApproval() {
-    // Approval and credential requests are interrupts: they must be visible
-    // even while the originating chat is open, otherwise a waiting agent looks stuck.
-    hoverCollapseWorkItem?.cancel()
-    hoverCollapseWorkItem = nil
-    isExpanded = true
-    shouldShakeForInterrupt = true
-    present()
-    startInterruptShakeIfReady()
+    // Reveal the actual request without making the panel key or replacing another draft.
+    show()
   }
 
   func focusQuestion() {
-    showApproval()
+    show()
+    if let request = AgentQuestionCenter.shared.current,
+      let run = runStore.presentationRuns.first(where: { $0.id == request.runId }) {
+      interaction.select(run)
+    }
+    setExpanded(true, animated: true)
+    focusForInteraction()
+  }
+
+  func focusForInteraction() {
+    hoverCollapseWorkItem?.cancel()
+    hoverCollapseWorkItem = nil
+    hasKeyboardInteraction = true
+    islandWindow?.allowsKeyFocus = true
     islandWindow?.makeKeyAndOrderFront(nil)
   }
 
@@ -167,7 +220,7 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
   func beginComposerHandoff() -> NSRect? {
     guard AppSettings.notchLiveActivitiesEnabled else { return nil }
     guard runStore.hasActiveRuns else { return nil }
-    if hasPendingInterrupt {
+    if hasPendingInterrupt || interaction.expandedRunID != nil || activityVisibleUntil > .now {
       showApproval()
       return islandWindow?.frame
     }
@@ -189,42 +242,50 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
   }
 
   func hide() {
-    stopApprovalShake()
+    activityVisibleUntil = .distantPast
     resetPendingFrameWork()
     hoverCollapseWorkItem?.cancel()
     hoverCollapseWorkItem = nil
     isPointerHovering = false
+    hasKeyboardInteraction = false
+    interaction.collapse()
     completionDismissWorkItem?.cancel()
     completionDismissWorkItem = nil
     isExpanded = false
     isVisible = false
     guard let window = islandWindow else { return }
+    window.allowsKeyFocus = false
     window.orderOut(nil)
   }
 
   func toggleExpanded() {
     setExpanded(true, animated: true)
+    focusForInteraction()
   }
 
   func setExpanded(_ expanded: Bool, animated: Bool) {
-    guard expanded || !hasPendingInterrupt else { return }
     guard isExpanded != expanded else { return }
     isExpanded = expanded
     guard let window = islandWindow else { return }
-    applyFrame(to: window, expanded: isExpanded, animated: animated)
-    if isExpanded {
-      window.makeKeyAndOrderFront(nil)
-    } else {
-      window.orderFrontRegardless()
+    if !expanded {
+      window.allowsKeyFocus = false
+      if window.isKeyWindow { window.resignKey() }
     }
+    applyFrame(to: window, expanded: isExpanded, animated: animated)
+    window.orderFrontRegardless()
   }
 
   func collapse() {
+    hasKeyboardInteraction = false
+    interaction.collapse()
     setExpanded(false, animated: true)
   }
 
   func setHovering(_ isHovering: Bool) {
     guard isVisible else { return }
+    // SwiftUI replaces the compact/expanded subtree during a resize and can emit
+    // synthetic exit/entry pairs. The native panel's screen bounds are authoritative.
+    let isHovering = islandWindow.map { $0.frame.contains(NSEvent.mouseLocation) } ?? isHovering
     isPointerHovering = isHovering
     hoverCollapseWorkItem?.cancel()
     hoverCollapseWorkItem = nil
@@ -233,17 +294,20 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
       setExpanded(true, animated: true)
       return
     }
-    guard !hasPendingInterrupt else { return }
+    guard !hasPendingInterrupt, interaction.expandedRunID == nil && !hasKeyboardInteraction else { return }
 
     // Resizing the panel can briefly move the AppKit hover boundary. Waiting
     // through that handoff prevents a false exit/re-entry loop from making
     // the notch pulse forever.
     let collapse = DispatchWorkItem { [weak self] in
-      guard let self, !self.isPointerHovering else { return }
+      guard let self, !self.isPointerHovering, !self.hasPendingInterrupt,
+        self.activityVisibleUntil <= .now,
+        self.interaction.expandedRunID == nil, !self.hasKeyboardInteraction else { return }
       self.setExpanded(false, animated: true)
     }
     hoverCollapseWorkItem = collapse
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.32, execute: collapse)
+    let delay = max(0.32, activityVisibleUntil.timeIntervalSinceNow)
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: collapse)
   }
 
   private func createWindow() {
@@ -258,6 +322,7 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
     )
 
     panel.isFloatingPanel = true
+    panel.allowsKeyFocus = false
     panel.becomesKeyOnlyIfNeeded = true
     panel.level = .statusBar
     panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
@@ -272,12 +337,13 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
       store: runStore,
       controller: self,
       controls: controls,
+      interaction: interaction,
       onToggle: { [weak self] in self?.toggleExpanded() },
       onOpenConversation: { [weak self] conversationId in
         self?.onOpenConversation?(conversationId)
       },
       onApprovalResponse: { [weak self] requestId, approved in
-        self?.runStore.resolveApproval(id: requestId)
+        // Keep the row and its busy state until the original runtime acknowledges the reply.
         self?.onApprovalResponse?(requestId, approved)
       }
     )
@@ -286,10 +352,35 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
     hostingView.autoresizingMask = [.width, .height]
     panel.contentView = hostingView
     islandWindow = panel
+    installOutsideClickMonitors()
+  }
+
+  private func installOutsideClickMonitors() {
+    outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+      DispatchQueue.main.async { self?.collapseForOutsideClick() }
+    }
+    localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+      guard let self else { return event }
+      if event.window === self.islandWindow {
+        self.focusForInteraction()
+        return event
+      }
+      guard event.window !== self.islandWindow,
+        event.window?.parent !== self.islandWindow,
+        (event.window?.level.rawValue ?? 0) < NSWindow.Level.popUpMenu.rawValue else { return event }
+      self.collapseForOutsideClick()
+      return event
+    }
+  }
+
+  private func collapseForOutsideClick() {
+    guard isVisible, isExpanded, !hasPendingInterrupt, activityVisibleUntil <= .now,
+      let window = islandWindow, !window.frame.contains(NSEvent.mouseLocation) else { return }
+    collapse()
   }
 
   private func applyFrame(to window: NSWindow, expanded: Bool, animated: Bool = false) {
-    if isAnimatingFrame || isShakingApproval {
+    if isAnimatingFrame {
       // The latest semantic state wins. In particular, an approval or Touch ID
       // interrupt must resize after a hover animation instead of being dropped.
       pendingFrameRequest = PendingFrameRequest(expanded: expanded, animated: animated)
@@ -303,7 +394,7 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
       frameUpdateDidSettle(on: window)
       return
     }
-    guard animated else {
+    guard animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
       window.setFrame(frame, display: true)
       frameUpdateDidSettle(on: window)
       return
@@ -313,7 +404,8 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
     frameAnimationGeneration &+= 1
     let generation = frameAnimationGeneration
     NSAnimationContext.runAnimationGroup { context in
-      context.duration = 0.28
+      context.duration = 0.24
+      context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
       context.allowsImplicitAnimation = true
       window.animator().setFrame(frame, display: true)
       context.completionHandler = { [weak self, weak window] in
@@ -334,71 +426,12 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
       )
       return
     }
-    startInterruptShakeIfReady()
   }
 
   private func resetPendingFrameWork() {
     frameAnimationGeneration &+= 1
     pendingFrameRequest = nil
     isAnimatingFrame = false
-    shouldShakeForInterrupt = false
-  }
-
-  private func startInterruptShakeIfReady() {
-    guard shouldShakeForInterrupt,
-      isVisible,
-      !isAnimatingFrame,
-      !isShakingApproval,
-      pendingFrameRequest == nil
-    else { return }
-
-    shouldShakeForInterrupt = false
-    shakeForApproval()
-  }
-
-  /// A brief lateral nudge makes an approval perceptible without turning the
-  /// notch into a notification banner or repeatedly moving it during updates.
-  private func shakeForApproval() {
-    stopApprovalShake()
-    guard let window = islandWindow else { return }
-    let restingFrame = window.frame
-    let offsets: [CGFloat] = [-6, 6, -4, 4, -2, 2, 0]
-    approvalShakeRestingFrame = restingFrame
-    isShakingApproval = true
-    approvalShakeGeneration &+= 1
-    let generation = approvalShakeGeneration
-
-    for (index, offset) in offsets.enumerated() {
-      let workItem = DispatchWorkItem { [weak self, weak window] in
-        guard let self, let window, self.approvalShakeGeneration == generation else { return }
-        var frame = restingFrame
-        if self.placement.isSide {
-          frame.origin.y += offset
-        } else {
-          frame.origin.x += offset
-        }
-        window.setFrame(frame, display: true)
-        if index == offsets.count - 1 {
-          self.isShakingApproval = false
-          self.approvalShakeRestingFrame = nil
-          self.approvalShakeWorkItems.removeAll()
-          self.frameUpdateDidSettle(on: window)
-        }
-      }
-      approvalShakeWorkItems.append(workItem)
-      DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * 0.055, execute: workItem)
-    }
-  }
-
-  private func stopApprovalShake() {
-    approvalShakeGeneration &+= 1
-    approvalShakeWorkItems.forEach { $0.cancel() }
-    approvalShakeWorkItems.removeAll()
-    if let approvalShakeRestingFrame, let window = islandWindow {
-      window.setFrame(approvalShakeRestingFrame, display: true)
-    }
-    approvalShakeRestingFrame = nil
-    isShakingApproval = false
   }
 
   private func panelFrame(for screen: NSScreen?, expanded: Bool) -> NSRect {
@@ -416,11 +449,15 @@ final class ActivityIslandWindowController: NSObject, ObservableObject {
   }
 
   private var sizeForExpandedState: CGSize {
-    ActivityIslandContentLayout.size(
-      taskCount: runStore.presentationRuns.count,
-      hasQuestion: AgentQuestionCenter.shared.current != nil,
-      hasApproval: runStore.hasPendingApproval,
-      hasCredential: hasPendingCredential
+    let runs = runStore.presentationRuns
+    let selected = runs.first { $0.id == interaction.expandedRunID }
+    return ActivityIslandContentLayout.size(
+      taskCount: runs.count,
+      hasQuestion: selected?.state == .awaitingInput,
+      hasApproval: selected?.approval != nil,
+      hasCredential: selected?.credential != nil,
+      sectionCount: Set(runs.map { ActivityIslandTaskState.section(for: $0) }).count,
+      interactionHeight: interaction.expandedInteractionHeight
     )
   }
 

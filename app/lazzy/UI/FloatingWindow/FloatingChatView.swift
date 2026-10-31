@@ -47,6 +47,7 @@ struct FloatingChatView: View {
   @FocusState var isInputFocused: Bool
   @State var shortcutMonitor: Any?
   @State var debugDemoTypingTask: Task<Void, Never>?
+  @State var remoteConnectionTask: Task<Void, Never>?
 
   // Stats tracking
   @State var timeToFirstChunk: Int? = nil  // ms
@@ -60,19 +61,32 @@ struct FloatingChatView: View {
   @ObservedObject var theme = ThemeManager.shared
   @ObservedObject var questions = AgentQuestionCenter.shared
 
+  init(controller: FloatingWindowController, wsManager: WebSocketManager,
+       onClose: @escaping () -> Void, onToggleHistory: (() -> Void)? = nil,
+       onHistoryRefresh: (() -> Void)? = nil, onNewChat: (() -> Void)? = nil) {
+    self.controller = controller
+    self.wsManager = wsManager
+    self.onClose = onClose
+    self.onToggleHistory = onToggleHistory
+    self.onHistoryRefresh = onHistoryRefresh
+    self.onNewChat = onNewChat
+    _conversationStore = StateObject(wrappedValue: ComposerConversationStore(endpoint: wsManager.runtimeEndpoint))
+    _workingDirectoryStore = StateObject(wrappedValue: WorkingDirectoryStore())
+  }
+
   private var pendingQuestion: AgentQuestionEnvelope? {
     questions.question(for: ObjectIdentifier(wsManager))
   }
 
   var body: some View {
-    ZStack(alignment: .topTrailing) {
+    trackRemoteConnection(ZStack(alignment: .topTrailing) {
       Group {
-        if controller.isExpanded {
+        if controller.isExpanded || controller.isManuallyResized {
           FloatingChatExpandedLayout {
             expandedSection
           } composer: {
             VStack(spacing: 12) {
-              conversationHeader
+              if !controller.isExpanded { conversationHeader }
               composerSection
             }
           }
@@ -80,7 +94,7 @@ struct FloatingChatView: View {
           VStack(spacing: 12) {
             conversationHeader
             if revisionSession.messageNumber == nil && (!streamingResponse.isEmpty || !lastCompletedResponse.isEmpty
-              || !visibleResponseEvents.isEmpty || !selectedResponseParts.isEmpty || isThinking || errorMessage != nil)
+              || !visibleResponseEvents.isEmpty || !selectedResponseParts.isEmpty || isThinking || errorMessage != nil || !messages.isEmpty)
             {
               responseSection
             }
@@ -149,10 +163,7 @@ struct FloatingChatView: View {
         }
       }
       .onChange(of: wsManager.conversationBranchState) { _, state in applyBranchReferences(state) }
-      .onChange(of: wsManager.isConnected) { _, connected in
-        if connected { wsManager.requestConversationBranches() }
-      }
-    }
+    })
     .padding(.top, 8)
     .padding(.bottom, controller.isExpanded ? 8 : 0)
     // Keep the conversation and composer centered within the borderless panel.
@@ -193,18 +204,48 @@ struct FloatingChatView: View {
       guard let insertion else { return }
       appendVoiceTranscription(insertion.text)
     }
-    // Keep the SwiftUI side of the borderless panel on the same fixed-width
-    // contract as FloatingComposerPanel. Media players and images must fill
-    // this proposal instead of shrinking the entire composer around their
+    // Keep SwiftUI content aligned to the panel's current user-selected width.
+    // Media players and images must fill this proposal instead of shrinking
+    // the entire composer around their
     // intrinsic size.
     // Give the entire expanded hierarchy a finite native height. In particular,
     // a history reload must not turn the transcript's ideal height into the
     // proposal used to position the composer.
     .frame(
-      width: FloatingWindowController.compactWindowWidth,
-      height: controller.isExpanded ? controller.expandedContentHeight : nil,
+      width: controller.windowContentWidth,
+      height: controller.contentViewportHeight,
       alignment: .topLeading
     )
+  }
+
+  private func trackRemoteConnection<Content: View>(_ content: Content) -> some View {
+    content
+      .onChange(of: wsManager.isConnected) { _, connected in
+        if connected {
+          wsManager.requestConversationBranches()
+          if let selected = workingDirectoryStore.remoteWorkspace,
+            selected.machineID == wsManager.remoteEndpoint?.machineID
+          {
+            workingDirectoryStore.setRemoteConnectionStatus(.connected)
+          }
+        }
+      }
+      .onChange(of: wsManager.remoteEndpoint) { _, _ in
+        conversationStore.updateEndpoint(wsManager.runtimeEndpoint)
+      }
+      .onChange(of: wsManager.lastError) { _, error in
+        guard let error, let selected = workingDirectoryStore.remoteWorkspace,
+          wsManager.remoteEndpoint?.machineID == selected.machineID, !wsManager.isConnected
+        else { return }
+        workingDirectoryStore.setRemoteConnectionStatus(.failed(error))
+      }
+      .onChange(of: workingDirectoryStore.remoteWorkspace) { _, target in
+        connectRemoteWorkspace(target)
+      }
+      .onReceive(NotificationCenter.default.publisher(for: NSWorkspace.didWakeNotification)) { _ in
+        guard let target = workingDirectoryStore.remoteWorkspace else { return }
+        connectRemoteWorkspace(target, forceReconnect: true)
+      }
   }
 
   @ViewBuilder
@@ -226,7 +267,9 @@ struct FloatingChatView: View {
     VStack(spacing: 0) {
       ProviderConversationNotice(conversation: wsManager.currentConversation, onNewChat: startNewChat)
       inputAndToolbarSection
-      WorkingDirectoryTray(store: workingDirectoryStore) { presented in
+      WorkingDirectoryTray(store: workingDirectoryStore, onReconnect: {
+        connectRemoteWorkspace(workingDirectoryStore.remoteWorkspace, forceReconnect: true)
+      }) { presented in
         isInputFocused = !presented && pendingQuestion == nil
       }
     }
@@ -237,13 +280,17 @@ struct FloatingChatView: View {
   @ViewBuilder
   private var expandedSection: some View {
     FloatingChatExpandedView(
-      messages: messages,
+      messages: revisionSession.isBranchingAfterResponse ? Array(messages.prefix(revisionSession.messageNumber ?? messages.count)) : messages,
       isThinking: isThinking,
       streamingResponse: streamingResponse,
       currentActivity: currentActivity,
       responseEvents: visibleResponseEvents,
       canRevise: canReviseMessages,
-      onRevise: reviseMessage
+      onRevise: reviseMessage,
+      onBranch: branchAfterResponse,
+      gitWorkspace: workingDirectoryStore.path,
+      gitConversationID: wsManager.currentConversationId,
+      gitEndpoint: wsManager.runtimeEndpoint
     )
     .themedSurface(in: RoundedRectangle(cornerRadius: theme.borderRadius, style: .continuous))
   }
@@ -258,7 +305,13 @@ struct FloatingChatView: View {
       isThinking: isThinking,
       errorMessage: errorMessage,
       currentActivity: currentActivity,
-      maxStreamingHeight: maxStreamingHeight
+      maxStreamingHeight: maxStreamingHeight,
+      canBranchResponse: canReviseMessages && selectedGitMessage?.branchReference?.canBranchAfter == true,
+      onBranchResponse: { branchAfterResponse(activeMessageIndex ?? messages.count - 1) },
+      gitMessage: selectedGitMessage,
+      gitWorkspace: workingDirectoryStore.path,
+      gitConversationID: wsManager.currentConversationId,
+      gitEndpoint: wsManager.runtimeEndpoint
     )
     .themedSurface(in: RoundedRectangle(cornerRadius: theme.borderRadius, style: .continuous))
     .overlay {
@@ -280,7 +333,7 @@ struct FloatingChatView: View {
         ComposerQuestionView(request: request, center: questions, controller: controller, onClose: onClose)
       } else {
         if let number = revisionSession.messageNumber {
-          ComposerRevisionBanner(messageNumber: number, error: errorMessage, onCancel: cancelMessageRevision)
+          ComposerRevisionBanner(messageNumber: number, afterResponse: revisionSession.isBranchingAfterResponse, error: errorMessage, onCancel: cancelMessageRevision)
             .padding(.horizontal, 18).padding(.top, 12)
         }
         // Main input area
@@ -354,6 +407,10 @@ struct FloatingChatView: View {
           onVoiceInput: { controller.onVoiceInputToggled?() },
           onSend: sendMessage,
           isRevising: revisionSession.messageNumber != nil,
+          isBranchingAfterResponse: revisionSession.isBranchingAfterResponse,
+          gitWorkspace: workingDirectoryStore.path,
+          gitConversationID: wsManager.currentConversationId,
+          gitEndpoint: wsManager.runtimeEndpoint,
           branches: availableBranches,
           onSelectBranch: switchConversationBranch
         )
@@ -368,6 +425,11 @@ struct FloatingChatView: View {
   }
 
   // Custom blur transition for compatibility
+  private var selectedGitMessage: ChatMessage? {
+    let index = activeMessageIndex ?? messages.count - 1
+    return messages.indices.contains(index) ? messages[index] : nil
+  }
+
   private struct BlurModifier: ViewModifier {
     let radius: CGFloat
     let opacity: Double

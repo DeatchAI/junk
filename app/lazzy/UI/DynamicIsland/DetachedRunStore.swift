@@ -4,6 +4,7 @@ import Foundation
 /// The local source of truth for detached agent work. It intentionally sits above the
 /// floating chat window so closing that window never drops the user-facing run state.
 final class DetachedRunStore: ObservableObject {
+  static let completedVisibilityDuration: TimeInterval = 6
   @Published private(set) var runs: [DetachedAgentRun] = []
   var onUnreadChange: (([DetachedAgentRun]) -> Void)?
 
@@ -45,20 +46,31 @@ final class DetachedRunStore: ObservableObject {
     visibleActiveRuns.first ?? unreadRuns.first ?? runs.sorted { $0.updatedAt > $1.updatedAt }.first
   }
 
-  var presentationRuns: [DetachedAgentRun] {
+  var presentationRuns: [DetachedAgentRun] { presentationRuns(at: .now) }
+
+  /// Completed results remain in history/unread storage after their brief live appearance.
+  func presentationRuns(at date: Date) -> [DetachedAgentRun] {
     let active = visibleActiveRuns
     let recent = runs
       .filter { !$0.isActive }
       .sorted { $0.updatedAt > $1.updatedAt }
-      .prefix(3)
     let resumable = recent.filter { $0.state == .stopped || $0.state == .failed }
     let live = (active + resumable).sorted {
       if $0.needsAttention != $1.needsAttention { return $0.needsAttention }
       return $0.startedAt < $1.startedAt
     }
-    let ordered = live + unreadRuns + recent.filter { $0.state == .completed && $0.isDebugPreview }
+    let completed = recent.filter {
+      $0.state == .completed && ($0.isDebugPreview ||
+        ($0.isUnread && date.timeIntervalSince($0.updatedAt) < Self.completedVisibilityDuration))
+    }
+    let ordered = live + completed
     var conversations = Set<String>()
     return ordered.filter { conversations.insert($0.conversationId ?? $0.id).inserted }
+  }
+
+  var nextCompletionExpiry: Date? {
+    presentationRuns.filter { $0.state == .completed && !$0.isDebugPreview }
+      .map { $0.updatedAt.addingTimeInterval(Self.completedVisibilityDuration) }.min()
   }
 
   var hasActiveRuns: Bool { !activeRuns.isEmpty }
@@ -150,13 +162,19 @@ final class DetachedRunStore: ObservableObject {
     }
   }
 
-  func waitForAnswer(runId: String, question: String? = nil) {
-    update(runId) { run in
+  func waitForAnswer(runId: String, question: String? = nil, conversationId: String? = nil,
+    agent: String? = nil, taskTitle: String? = nil) {
+    upsert(runId) { run in
       run.state = .awaitingInput
       run.status = question ?? "Waiting for your answer"
       run.toolName = nil
       run.event = nil
       run.updatedAt = .now
+    } create: {
+      DetachedAgentRun(id: runId, conversationId: conversationId, agent: agent ?? "agent",
+        prompt: "", chatTitle: taskTitle ?? "Agent question", status: question ?? "Waiting for your answer",
+        toolName: nil, event: nil, state: .awaitingInput, approval: nil, credential: nil,
+        isDebugPreview: false, startedAt: .now, updatedAt: .now)
     }
   }
 

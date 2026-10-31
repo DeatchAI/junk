@@ -234,7 +234,7 @@ struct SelectableTextView: NSViewRepresentable {
     }
 
     private func markdownFont(size: CGFloat, bold: Bool = false) -> NSFont {
-      let font = NSFont(name: "Geist-Regular", size: size) ?? NSFont.systemFont(ofSize: size)
+      let font = AppFont.nsFont(size: size)
       guard bold else { return font }
       return NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
     }
@@ -537,6 +537,9 @@ struct SelectableTextView: NSViewRepresentable {
 
 // Subclass to aid debugging if needed
 class SelectableNSTextView: NSTextView {
+  // Keep selection drags inside the response text instead of moving its panel.
+  override var mouseDownCanMoveWindow: Bool { false }
+
   override var intrinsicContentSize: NSSize {
     guard let layoutManager = layoutManager, let textContainer = textContainer else {
       return super.intrinsicContentSize

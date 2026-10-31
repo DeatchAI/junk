@@ -14,6 +14,10 @@ struct ChatMessage: Identifiable {
   var attachments: [ChatAttachment] = []
   var draft: ComposerDraft? = nil
   var branchReference: ConversationMessageReference? = nil
+  var gitRunID: String? = nil
+  var gitTimestamp: Int? = nil
+  var gitMessageOrdinal: Int? = nil
+  var gitRevision = 0
 
   var isComplete: Bool { aiResponse != nil }
 }

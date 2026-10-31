@@ -3,7 +3,6 @@ import SwiftUI
 struct AboutSettingsView: View {
   @ObservedObject private var theme = ThemeManager.shared
   @State private var isHoveringLogo = false
-  @Environment(\.colorScheme) var colorScheme
 
   private var appVersion: String {
     let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
@@ -13,7 +12,7 @@ struct AboutSettingsView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 26) {
+      VStack(alignment: .leading, spacing: 18) {
         SettingsPageHeader(
           title: "About",
           subtitle: "Product information, version details, and helpful links."
@@ -21,12 +20,11 @@ struct AboutSettingsView: View {
 
         SettingsCard {
           HStack(spacing: 18) {
-            Image(colorScheme == .dark ? "LazzyIcon-lg-dark" : "LazzyIcon-lg-white")
+            Image("DetachBrand")
               .resizable()
               .scaledToFit()
               .frame(width: 76, height: 76)
               .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-              .grayscale(isHoveringLogo ? 0 : 0.15)
               .scaleEffect(isHoveringLogo ? 1.025 : 1.0)
               .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHoveringLogo)
               .onHover { isHoveringLogo = $0 }
@@ -95,7 +93,7 @@ struct AboutLink: View {
       HStack(spacing: 12) {
         Image(systemName: icon)
           .font(.system(size: 12, weight: .medium))
-          .foregroundColor(isHovered ? theme.accentColor : theme.secondaryTextColor)
+          .foregroundColor(isHovered ? theme.textColor : theme.secondaryTextColor)
           .frame(width: 20)
 
         VStack(alignment: .leading, spacing: 2) {
@@ -111,7 +109,7 @@ struct AboutLink: View {
 
         Image(systemName: "arrow.up.right")
           .font(.system(size: 9, weight: .semibold))
-          .foregroundColor(isHovered ? theme.accentColor : theme.secondaryTextColor.opacity(0.7))
+          .foregroundColor(isHovered ? theme.textColor : theme.secondaryTextColor.opacity(0.7))
       }
       .padding(.horizontal, 16)
       .padding(.vertical, 11)

@@ -121,9 +121,10 @@ final class FloatingWindowWorkspaceController: ObservableObject {
     at location: NSPoint,
     with content: DetectedContent? = nil,
     conversationId: String? = nil,
-    centered: Bool = false
+    centered: Bool = false,
+    runtimeEndpoint: RuntimeEndpoint? = nil
   ) -> Task {
-    let wsManager = WebSocketManager()
+    let wsManager = WebSocketManager(runtimeEndpoint: runtimeEndpoint)
     // Set the identity before connecting or constructing the chat view. This
     // lets both the WebSocket connection and the UI agree that this is a
     // conversation reopen, never a blank task.

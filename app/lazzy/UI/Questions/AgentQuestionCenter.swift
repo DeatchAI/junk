@@ -10,6 +10,7 @@ final class AgentQuestionCenter: ObservableObject {
   @Published private(set) var drafts: [String: [String: String]] = [:]
   @Published private(set) var submitting: Set<String> = []
   @Published private(set) var errors: [String: String] = [:]
+  @Published private(set) var pages: [String: Int] = [:]
 
   private struct Destination {
     let owner: ObjectIdentifier
@@ -70,7 +71,8 @@ final class AgentQuestionCenter: ObservableObject {
     {
       destinations[request.id] = Destination(owner: owner, respond: respond)
       requests.append(request)
-      runStore?.waitForAnswer(runId: request.runId, question: request.questions.first?.question)
+      runStore?.waitForAnswer(runId: request.runId, question: request.questions.first?.question,
+        conversationId: request.conversationId, agent: request.agent, taskTitle: request.taskTitle)
       presentIfNeeded()
     } else if let id = message["id"] as? String, destinations[id]?.owner == owner {
       if type == "agent_question_error" {
@@ -102,6 +104,14 @@ final class AgentQuestionCenter: ObservableObject {
     drafts[request.id]?[question.id] ?? ""
   }
 
+  func page(for request: AgentQuestionEnvelope) -> Int {
+    min(max(pages[request.id] ?? 0, 0), max(request.questions.count - 1, 0))
+  }
+
+  func setPage(_ page: Int, for request: AgentQuestionEnvelope) {
+    pages[request.id] = min(max(page, 0), max(request.questions.count - 1, 0))
+  }
+
   func submit(_ request: AgentQuestionEnvelope, cancelled: Bool = false) {
     guard !submitting.contains(request.id), let destination = destinations[request.id] else { return }
     var answers: [String: AgentQuestionResponse.Answer] = [:]
@@ -126,6 +136,7 @@ final class AgentQuestionCenter: ObservableObject {
     requests.removeAll { $0.id == id }
     destinations[id] = nil
     drafts[id] = nil
+    pages[id] = nil
     submitting.remove(id)
     errors[id] = nil
     if let runId, !requests.contains(where: { $0.runId == runId }) { runStore?.resumeAfterAnswer(runId: runId) }
@@ -135,13 +146,14 @@ final class AgentQuestionCenter: ObservableObject {
   }
 
   private func presentIfNeeded() {
-    guard let request = standaloneQuestion else {
-      window?.orderOut(nil)
-      return
-    }
-    if AppSettings.notchLiveActivitiesEnabled {
+    // A visible composer must not suppress the ambient interruption surface.
+    if AppSettings.notchLiveActivitiesEnabled && !requests.isEmpty {
       window?.orderOut(nil)
       island?.showApproval()
+      return
+    }
+    guard let request = standaloneQuestion else {
+      window?.orderOut(nil)
       return
     }
     if window == nil {
@@ -168,5 +180,7 @@ final class AgentQuestionCenter: ObservableObject {
 }
 
 final class AgentQuestionPanel: NSPanel {
-  override var canBecomeKey: Bool { true }
+  // Ambient panels opt out until an explicit click; standalone reply windows stay keyable.
+  var allowsKeyFocus = true
+  override var canBecomeKey: Bool { allowsKeyFocus }
 }

@@ -7,12 +7,15 @@ struct ActivityIslandView: View {
   @ObservedObject var store: DetachedRunStore
   @ObservedObject var controller: ActivityIslandWindowController
   @ObservedObject var controls: DetachedRunControls
+  @ObservedObject var interaction: ActivityIslandTaskState
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let onToggle: () -> Void
   let onOpenConversation: (String) -> Void
   let onApprovalResponse: (String, Bool) -> Void
 
   private var activeRuns: [DetachedAgentRun] { store.visibleActiveRuns }
-  private var needsAttention: Bool { activeRuns.contains(where: \.needsAttention) }
+  private var attentionCount: Int { activeRuns.filter(\.needsAttention).count }
+  private var needsAttention: Bool { attentionCount > 0 }
 
   var body: some View {
     VStack(spacing: 0) {
@@ -21,7 +24,10 @@ struct ActivityIslandView: View {
           Color.clear.frame(height: controller.physicalNotchHeight)
         }
         ActivityIslandTaskList(store: store, controls: controls, questions: questions,
-          onOpenConversation: onOpenConversation, onApprovalResponse: onApprovalResponse)
+          interaction: interaction, onOpenConversation: onOpenConversation,
+          onApprovalResponse: onApprovalResponse,
+          onBeginInteraction: { controller.focusForInteraction() },
+          onDismiss: { controller.collapse() })
           .padding(.horizontal, controller.placement.isSide
             ? ActivityIslandContentLayout.sideInset : ActivityIslandContentLayout.topInset)
           .padding(.vertical, controller.placement.isSide ? ActivityIslandContentLayout.sideInset : 0)
@@ -34,7 +40,7 @@ struct ActivityIslandView: View {
     .themedSurface(in: ScreenEdgeNotchShape(placement: controller.placement))
     .preferredColorScheme(theme.surfaceColorScheme)
     .tint(theme.textColor)
-    .animation(.easeInOut(duration: 0.28), value: controller.isExpanded)
+    .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: controller.isExpanded)
     .onHover { controller.setHovering($0) }
   }
 
@@ -42,8 +48,15 @@ struct ActivityIslandView: View {
     Button(action: onToggle) {
       Group {
         if controller.placement.isSide {
-          VStack(spacing: 10) {
+          VStack(spacing: 9) {
             compactMark
+            if activeRuns.count > 1 {
+              HStack(spacing: 4) {
+                ForEach(Array(activeRuns.dropFirst().prefix(2))) { run in
+                  ProviderLogo(agent: run.agent, size: 11)
+                }
+              }.accessibilityHidden(true)
+            }
             compactCountBadge
           }.frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -66,14 +79,14 @@ struct ActivityIslandView: View {
     if let run = store.primaryRun {
       ProviderLogo(agent: run.agent, size: controller.placement.isSide ? 18 : 20)
     } else {
-      Image("DetachedMark").renderingMode(.template).resizable().scaledToFit().frame(width: 18, height: 18)
+      Image("AppIcon").renderingMode(.template).resizable().scaledToFit().frame(width: 18, height: 18)
     }
   }
 
   private var compactCountBadge: some View {
     Group {
       if needsAttention {
-        Image(systemName: "questionmark").font(.system(size: 10, weight: .bold))
+        Text("\(attentionCount)").font(.appFont(size: 10, weight: .semibold)).monospacedDigit()
       } else if activeRuns.isEmpty && store.hasUnreadResults {
         Text("\(store.unreadRuns.count)").font(.appFont(size: 10, weight: .semibold)).monospacedDigit()
       } else if !activeRuns.isEmpty {
@@ -86,7 +99,7 @@ struct ActivityIslandView: View {
     }
     .foregroundStyle(theme.backgroundColor).frame(minWidth: 18, minHeight: 18, maxHeight: 18)
     .padding(.horizontal, 1).background(theme.textColor, in: Capsule())
-    .accessibilityLabel(needsAttention ? "Needs your attention" :
+    .accessibilityLabel(needsAttention ? "\(attentionCount) tasks need your attention" :
       activeRuns.isEmpty ? (store.hasUnreadResults ? "\(store.unreadRuns.count) unread results" : store.primaryRun?.stateLabel ?? "No active tasks") : "\(activeRuns.count) active tasks")
   }
 }

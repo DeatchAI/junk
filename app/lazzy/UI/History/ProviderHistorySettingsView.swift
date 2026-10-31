@@ -4,7 +4,7 @@ struct ProviderHistorySettingsView: View {
   @ObservedObject var manager: WebSocketManager
   @ObservedObject var state: ProviderHistoryState
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: 7) {
       SettingsSectionHeader(title: "Provider history",
         subtitle: "Your agents own your chats. Detach keeps a searchable local cache, not a separate conversation store.")
       SettingsCard {
@@ -18,7 +18,7 @@ struct ProviderHistorySettingsView: View {
         }
       }
       if !state.notices.isEmpty {
-        DisclosureGroup("Provider availability") {
+        AppDisclosure("Provider availability") {
           VStack(alignment: .leading, spacing: 8) {
             ForEach(state.notices, id: \.self) { Text($0) }
           }.padding(.top, 8)

@@ -10,6 +10,12 @@ struct FloatingChatResponseView: View {
   let errorMessage: String?
   let currentActivity: String
   var maxStreamingHeight: CGFloat
+  var canBranchResponse = false
+  var onBranchResponse: (() -> Void)? = nil
+  var gitMessage: ChatMessage? = nil
+  var gitWorkspace: String? = nil
+  var gitConversationID: String? = nil
+  var gitEndpoint: RuntimeEndpoint = .local
 
   // Internal state for content height
   @State private var contentHeight: CGFloat = 54
@@ -62,7 +68,8 @@ struct FloatingChatResponseView: View {
     let shouldShowLiveActivityHeader =
       isLive && !currentActivity.isEmpty && !hasActivity
 
-    let actionBarHeight: CGFloat = !displayText.isEmpty && !isLive ? 41 : 0
+    let showActions = !isLive && (!displayText.isEmpty || gitMessage != nil)
+    let actionBarHeight: CGFloat = showActions ? 52 : 0
     let responseHeight = min(max(contentHeight, 0), max(maxStreamingHeight - actionBarHeight, 0))
 
     return VStack(spacing: 0) {
@@ -76,24 +83,23 @@ struct FloatingChatResponseView: View {
       .frame(height: responseHeight)
       .background(Color.clear)
 
-      if !displayText.isEmpty && !isLive {
-        HStack {
-          Button(action: {
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            pasteboard.setString(displayText, forType: .string)
-          }) {
-            Label("Copy", systemImage: "doc.on.doc")
-              .font(.appFont(size: 11))
-              .foregroundColor(theme.secondaryTextColor)
+      if showActions {
+        HStack(spacing: 12) {
+          if !displayText.isEmpty {
+            ResponseActionButtons(text: ChatTranscript.readableText(ChatTranscript.parts(text: displayText, structured: completedParts)),
+              responseID: gitMessage?.id.uuidString ?? gitConversationID ?? "response",
+              canBranch: canBranchResponse, onBranch: onBranchResponse)
           }
-          .buttonStyle(.plain)
-          .help("Copy to clipboard")
-
           Spacer(minLength: 0)
+          if let message = gitMessage {
+            GitTaskChangeCard(workspace: gitWorkspace, runID: message.gitRunID, conversationID: gitConversationID,
+              prompt: message.userPrompt, timestamp: message.gitTimestamp, ordinal: message.gitMessageOrdinal,
+              revision: message.gitRevision, endpoint: gitEndpoint)
+          }
         }
+        .frame(minHeight: 32)
         .padding(.horizontal, 18)
-        .padding(.vertical, 11)
+        .padding(.vertical, 10)
       }
     }
     .onPreferenceChange(ViewHeightKey.self) { height in

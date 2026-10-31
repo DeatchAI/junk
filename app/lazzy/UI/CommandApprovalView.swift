@@ -106,7 +106,7 @@ struct CommandApprovalView: View {
           .frame(maxWidth: .infinity)
           .padding(.vertical, 8)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(AppButtonStyle())
         .tint(.red)
 
         Button(action: {
@@ -121,7 +121,7 @@ struct CommandApprovalView: View {
           .frame(maxWidth: .infinity)
           .padding(.vertical, 8)
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(AppButtonStyle(kind: .primary))
         .tint(riskLevel == "dangerous" ? .orange : .green)
       }
     }

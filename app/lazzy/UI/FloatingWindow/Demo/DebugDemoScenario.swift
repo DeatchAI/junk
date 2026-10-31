@@ -74,6 +74,18 @@ enum DebugDemoCatalog {
       fixturePaths: ["meeting-transcript.md"],
       mcpServerIDs: []
     ),
+    DebugDemoScenario(
+      prompt: "Run the iMessage approval demo and wait for my decision.",
+      commandID: "plan",
+      fixturePaths: [],
+      mcpServerIDs: []
+    ),
+    DebugDemoScenario(
+      prompt: "Run the iMessage clarification demo and wait for my answer.",
+      commandID: "plan",
+      fixturePaths: [],
+      mcpServerIDs: []
+    ),
   ]
 
   static let chatPrompts = scenarios.map(\.prompt)

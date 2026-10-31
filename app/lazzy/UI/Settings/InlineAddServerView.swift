@@ -15,127 +15,42 @@ struct InlineAddServerView: View {
   @ObservedObject private var theme = ThemeManager.shared
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 24) {
-      HStack(alignment: .top, spacing: 32) {
-        // Left Column: Basic Info
-        VStack(alignment: .leading, spacing: 16) {
-          VStack(alignment: .leading, spacing: 6) {
-            Text("Name")
-              .font(.appFont(size: 11, weight: .bold))
-              .foregroundColor(theme.secondaryTextColor)
-            TextField("", text: $name)
-              .placeholder(when: name.isEmpty) {
-                Text("e.g. GitHub").foregroundColor(theme.secondaryTextColor)
-              }
-              .foregroundColor(theme.textColor)
-              .textFieldStyle(.plain)
-              .padding(10)
-              .background(theme.inputBackgroundColor)
-              .cornerRadius(theme.borderRadius / 1.5)
-              .overlay(
-                RoundedRectangle(cornerRadius: theme.borderRadius / 1.5).stroke(
-                  theme.borderColor, lineWidth: 0.5))
-          }
-
-          VStack(alignment: .leading, spacing: 6) {
-            Text("Transport")
-              .font(.appFont(size: 11, weight: .bold))
-              .foregroundColor(theme.secondaryTextColor)
-            CustomSegmentedPicker(
-              selection: $transport,
-              items: ["stdio", "http"],
-              titleProvider: { $0.uppercased() }
-            )
-          }
+    VStack(alignment: .leading, spacing: 14) {
+      SettingsCard {
+        SettingsRow(title: "Name", controlWidth: 280) {
+          AppTextField("For example: GitHub", text: $name)
         }
-        .frame(width: 180)
-
-        // Right Column: Dynamic Config
-        VStack(alignment: .leading, spacing: 16) {
-          if transport == "stdio" {
-            VStack(alignment: .leading, spacing: 6) {
-              Text("Command")
-                .font(.appFont(size: 11, weight: .bold))
-                .foregroundColor(theme.secondaryTextColor)
-              TextField("", text: $command)
-                .placeholder(when: command.isEmpty) {
-                  Text("e.g. npx").foregroundColor(theme.secondaryTextColor)
-                }
-                .foregroundColor(theme.textColor)
-                .textFieldStyle(.plain)
-                .padding(10)
-                .background(theme.inputBackgroundColor)
-                .cornerRadius(theme.borderRadius / 1.5)
-                .foregroundStyle(theme.textColor)
-                .overlay(
-                  RoundedRectangle(cornerRadius: theme.borderRadius / 1.5).stroke(
-                    theme.borderColor, lineWidth: 0.5)
-                )
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-              Text("Arguments")
-                .font(.appFont(size: 11, weight: .bold))
-                .foregroundColor(theme.secondaryTextColor)
-              TextField("", text: $args)
-                .placeholder(when: args.isEmpty) {
-                  Text("e.g. @modelcontextprotocol/server-github")
-                    .foregroundColor(theme.secondaryTextColor)
-                }
-                .foregroundColor(theme.textColor)
-                .textFieldStyle(.plain)
-                .padding(10)
-                .background(theme.inputBackgroundColor)
-                .cornerRadius(theme.borderRadius / 1.5)
-                .foregroundStyle(theme.textColor)
-                .overlay(
-                  RoundedRectangle(cornerRadius: theme.borderRadius / 1.5).stroke(
-                    theme.borderColor, lineWidth: 0.5)
-                )
-            }
-          } else {
-            VStack(alignment: .leading, spacing: 6) {
-              Text("Server URL")
-                .font(.appFont(size: 11, weight: .bold))
-                .foregroundColor(theme.secondaryTextColor)
-              TextField("", text: $url)
-                .placeholder(when: url.isEmpty) {
-                  Text("http://...").foregroundColor(theme.secondaryTextColor)
-                }
-                .foregroundColor(theme.textColor)
-                .textFieldStyle(.plain)
-                .padding(10)
-                .background(theme.inputBackgroundColor)
-                .cornerRadius(theme.borderRadius / 1.5)
-                .foregroundStyle(theme.textColor)
-                .overlay(
-                  RoundedRectangle(cornerRadius: theme.borderRadius / 1.5).stroke(
-                    theme.borderColor, lineWidth: 0.5)
-                )
-            }
+        SettingsCardDivider()
+        SettingsRow(title: "Connection", subtitle: "Run a local command or use a remote endpoint.") {
+          AppSegmentedControl(selection: $transport, items: ["stdio", "http"],
+            title: { $0 == "stdio" ? "Local" : "Remote" })
+        }
+        SettingsCardDivider()
+        if transport == "stdio" {
+          SettingsRow(title: "Command", controlWidth: 280) {
+            AppTextField("For example: npx", text: $command)
+          }
+          SettingsCardDivider()
+          SettingsRow(title: "Arguments", controlWidth: 280) {
+            AppTextField("@modelcontextprotocol/server-github", text: $args)
+          }
+        } else {
+          SettingsRow(title: "Server URL", controlWidth: 280) {
+            AppTextField("https://…", text: $url)
           }
         }
       }
-
       HStack {
         Spacer()
         Button(action: addServer) {
-          if isAdding {
-            ProgressView().scaleEffect(0.6)
-          } else {
-            Text("Save Server Configuration")
-              .font(.appFont(size: 13, weight: .bold))
-              .foregroundColor(.white)
-              .padding(.horizontal, 24)
-              .padding(.vertical, 10)
-              .background(canAdd ? theme.accentColor : Color.gray.opacity(0.3))
-              .cornerRadius(theme.borderRadius / 1.5)
+          HStack(spacing: 7) {
+            if isAdding { AppSpinner() }
+            Text(isAdding ? "Saving…" : "Save server")
           }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(AppButtonStyle(kind: .primary))
         .disabled(!canAdd || isAdding)
       }
-      .padding(.top, 8)
     }
   }
 

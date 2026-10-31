@@ -7,69 +7,45 @@ struct HistoryChatList: View {
   let isPresented: Bool
   let onSelect: (Conversation) -> Void
   @ObservedObject private var theme = ThemeManager.shared
-  @State private var bottomY: CGFloat = .infinity
 
   var body: some View {
-    GeometryReader { viewport in
-      ScrollView {
-        LazyVStack(alignment: .leading, spacing: 2) {
-          ForEach(groups) { group in
-            Section {
-              ForEach(group.conversations) { conversation in
-                HistoryRowView(conversation: conversation, isSelected: manager.currentConversationId == conversation.id,
-                  onSelect: { onSelect(conversation) }, onHide: { manager.deleteConversation(id: conversation.id) })
-              }
-            } header: {
-              projectHeader(group)
-            }
-          }
-          Color.clear.frame(height: 1).background {
-            GeometryReader { marker in
-              Color.clear.preference(key: HistoryBottomPosition.self, value: marker.frame(in: .named("historyScroll")).minY)
-            }
-          }.accessibilityHidden(true)
-        }.padding(.bottom, 8)
+    ScrollView {
+      LazyVStack(alignment: .leading, spacing: 14) {
+        ForEach(groups) { group in
+          HistoryProjectSection(
+            group: group,
+            selectedConversationID: manager.currentConversationId,
+            isSearching: isSearching,
+            onSelect: onSelect,
+            onHide: { manager.deleteConversation(id: $0.id) }
+          )
+        }
+        if !isSearching && manager.hasMoreConversations {
+          loadOlderChats
+        }
       }
-      .coordinateSpace(name: "historyScroll")
-      .scrollIndicators(.hidden)
-      .onPreferenceChange(HistoryBottomPosition.self) { bottomY = $0 }
-      .task(id: pagination(viewportHeight: viewport.size.height)) {
-        // Let the appended page settle before deciding whether the viewport still needs filling.
-        try? await Task.sleep(for: .milliseconds(100))
-        guard !Task.isCancelled, pagination(viewportHeight: viewport.size.height).shouldLoadMore else { return }
-        manager.loadMoreConversations()
-      }
+      .padding(.top, 4)
+      .padding(.bottom, 8)
     }
+    .scrollIndicators(.hidden)
   }
 
-  private func projectHeader(_ group: HistoryProviderGroup) -> some View {
-    VStack(alignment: .leading, spacing: 9) {
-      if group.id != groups.first?.id {
-        Rectangle().fill(theme.textColor.opacity(0.1)).frame(height: 0.5)
-          .padding(.horizontal, 12)
+  /// Explicit loading prevents collapsed projects from repeatedly fetching pages
+  /// just because their shortened lists no longer fill the scroll viewport.
+  private var loadOlderChats: some View {
+    Button { manager.loadMoreConversations() } label: {
+      HStack(spacing: 7) {
+        if manager.isLoadingMoreConversations { AppSpinner() }
+        Text(manager.isLoadingMoreConversations ? "Loading older chats…" : "Load older chats")
+          .font(.appFont(size: 11))
       }
-      HStack(spacing: 8) {
-        ComposerFolderIcon().frame(width: 16, height: 16)
-        Text(group.name).font(.system(size: 13, weight: .medium))
-          .lineLimit(1).truncationMode(.middle)
-        Spacer(minLength: 0)
-      }
-      .foregroundStyle(theme.textColor.opacity(0.82))
-      .padding(.horizontal, 12)
+      .foregroundStyle(theme.secondaryTextColor)
+      .frame(maxWidth: .infinity)
+      .frame(height: 30)
+      .contentShape(Rectangle())
     }
-    .padding(.top, group.id == groups.first?.id ? 8 : 12)
-    .padding(.bottom, 4)
-    .help(group.workspacePath ?? group.name)
+    .buttonStyle(.plain)
+    .disabled(!isPresented || !manager.isConnected || manager.isLoadingMoreConversations)
+    .accessibilityLabel("Load older chats from your agents")
   }
-
-  private func pagination(viewportHeight: CGFloat) -> HistoryPaginationState {
-    HistoryPaginationState(bottomY: bottomY, viewportHeight: viewportHeight, count: manager.conversations.count,
-      hasMore: manager.hasMoreConversations, isLoading: manager.isLoadingMoreConversations,
-      isConnected: manager.isConnected, isSearching: isSearching, isPresented: isPresented)
-  }
-}
-
-private struct HistoryBottomPosition: PreferenceKey {
-  static let defaultValue: CGFloat = .infinity
-  static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = min(value, nextValue()) }
 }

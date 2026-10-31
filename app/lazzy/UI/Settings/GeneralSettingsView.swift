@@ -10,6 +10,7 @@ import SwiftUI
 struct GeneralSettingsView: View {
   @ObservedObject var wsManager: WebSocketManager
   @ObservedObject private var theme = ThemeManager.shared
+  @ObservedObject private var appPresentation = AppPresentationController.shared
 
   @StateObject private var loginItem = LaunchAtLoginController()
   @AppStorage(AppSettings.notchLiveActivitiesKey) private var notchLiveActivitiesEnabled = true
@@ -48,12 +49,15 @@ struct GeneralSettingsView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 26) {
+      VStack(alignment: .leading, spacing: 18) {
         SettingsPageHeader(
           title: "General",
           subtitle: "Choose the agent Detach uses and configure its everyday behavior."
         )
         runtimeSection
+        if selectedAgent == "cursor" {
+          CursorProviderSettingsView(wsManager: wsManager)
+        }
         ProviderHistorySettingsView(manager: wsManager, state: wsManager.providerHistory)
         appBehaviorSection
         instructionsSection
@@ -86,7 +90,7 @@ struct GeneralSettingsView: View {
   }
 
   private var debugSection: some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: 7) {
       SettingsSectionHeader(title: "Developer")
 
       SettingsCard {
@@ -110,10 +114,10 @@ struct GeneralSettingsView: View {
   }
 
   private var runtimeSection: some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: 7) {
       SettingsSectionHeader(
         title: "Agent runtime",
-        subtitle: "Use your own coding-agent, fx, or OpenCode account."
+        subtitle: "Use your coding-agent, Cursor, fx, or OpenCode account."
       )
 
       SettingsCard {
@@ -159,7 +163,6 @@ struct GeneralSettingsView: View {
             ),
             showsProviderLogos: true
           )
-          .frame(width: 170)
         }
 
         SettingsCardDivider()
@@ -186,7 +189,6 @@ struct GeneralSettingsView: View {
               )
             }
           )
-          .frame(width: 170)
         }
 
         SettingsCardDivider()
@@ -196,13 +198,10 @@ struct GeneralSettingsView: View {
             ? permissionMode.detail : "Managed by this agent's native configuration."
         ) {
           if AgentPermissionMode.supportsOverrides(for: selectedAgent) {
-            Picker("Permissions", selection: $permissionMode) {
-              ForEach(AgentPermissionMode.allCases) { mode in
-                Text(mode.title(for: selectedAgent)).tag(mode)
-              }
-            }
-            .labelsHidden()
-            .frame(width: 170)
+            AppSelect(title: "Permissions", selection: $permissionMode,
+              options: AgentPermissionMode.allCases.map {
+                .init(title: $0.title(for: selectedAgent), value: $0)
+              })
             .onChange(of: permissionMode) {
               DetachSettings.setPermissionMode(permissionMode, for: selectedAgent)
             }
@@ -231,7 +230,7 @@ struct GeneralSettingsView: View {
   }
 
   private var appBehaviorSection: some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: 7) {
       SettingsSectionHeader(title: "App behavior")
 
       SettingsCard {
@@ -240,6 +239,20 @@ struct GeneralSettingsView: View {
           subtitle: "Start Detach automatically when you sign in to your Mac",
           isOn: Binding(get: { loginItem.isEnabled }, set: loginItem.setEnabled)
         )
+
+        SettingsCardDivider()
+
+        SettingsRow(
+          title: "App location",
+          subtitle: appPresentation.mode.subtitle
+        ) {
+          AppSelect(
+            title: "App location",
+            selection: Binding(get: { appPresentation.mode }, set: appPresentation.select),
+            options: AppPresentationMode.allCases.map { .init(title: $0.title, value: $0) },
+            menuWidth: 220
+          )
+        }
 
         if loginItem.needsApproval {
           SettingsRow(title: "Approval needed", subtitle: "Finish enabling Detach in Login Items.") {
@@ -265,14 +278,8 @@ struct GeneralSettingsView: View {
           title: "Live activity position",
           subtitle: "Use a side to keep the top notch free for other apps"
         ) {
-          Picker("Live activity position", selection: $activityIslandPlacement) {
-            ForEach(ActivityIslandPlacement.allCases) { placement in
-              Text(placement.title).tag(placement.rawValue)
-            }
-          }
-          .labelsHidden()
-          .pickerStyle(.menu)
-          .frame(width: 110)
+          AppSelect(title: "Live activity position", selection: $activityIslandPlacement,
+            options: ActivityIslandPlacement.allCases.map { .init(title: $0.title, value: $0.rawValue) })
           .disabled(!notchLiveActivitiesEnabled)
         }
       }
@@ -280,20 +287,14 @@ struct GeneralSettingsView: View {
   }
 
   private var instructionsSection: some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: 7) {
       SettingsSectionHeader(
         title: "Additional instructions",
         subtitle: "Optional instructions you choose to share with agents. Leave empty to use their native defaults."
       )
 
       SettingsCard {
-        TextEditor(text: $systemPrompt)
-          .font(.appFont(size: 12))
-          .foregroundColor(theme.textColor)
-          .padding(12)
-          .frame(height: 112)
-          .scrollContentBackground(.hidden)
-          .background(Color.clear)
+        AppTextEditor(title: "Additional instructions", text: $systemPrompt, height: 88).padding(10)
       }
     }
   }
@@ -356,38 +357,6 @@ struct AgentCapabilityRow: View {
 
       Spacer()
     }
-  }
-}
-
-struct SettingsToggleRow: View {
-  let title: String
-  let subtitle: String?
-  @Binding var isOn: Bool
-
-  @ObservedObject private var theme = ThemeManager.shared
-
-  var body: some View {
-    HStack {
-      VStack(alignment: .leading, spacing: 2) {
-        Text(title)
-          .font(.appFont(size: 13))
-          .foregroundColor(theme.textColor)
-
-        if let subtitle = subtitle {
-          Text(subtitle)
-            .font(.appFont(size: 11))
-            .foregroundColor(theme.textColor.opacity(0.6))
-        }
-      }
-
-      Spacer()
-
-      Toggle("", isOn: $isOn)
-        .toggleStyle(SwitchToggleStyle(tint: theme.textColor))
-        .labelsHidden()
-    }
-    .padding(.horizontal, 16)
-    .padding(.vertical, 12)
   }
 }
 

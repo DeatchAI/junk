@@ -11,7 +11,7 @@ struct RoutingOnboardingView: View {
         .font(OnboardingWelcomeFonts.inter(size: 11)).foregroundStyle(.secondary)
       RouterPreferencesForm(router: router, compact: true)
       HStack {
-        Toggle("Consider my remaining allowance", isOn: $router.configuration.considerUsage)
+        AppLabeledToggle(title: "Consider my remaining allowance", isOn: $router.configuration.considerUsage)
         Spacer()
         Button("Add a preference") { newRule = RouterRule() }
           .disabled(router.configuration.activeRules.count >= RouterConfiguration.maxRules)

@@ -84,13 +84,14 @@ struct HistoryPanelView: View {
     .background(theme.mode == .liquidGlass ? theme.controlBackgroundColor : theme.textColor.opacity(0.045), in: Capsule())
     .overlay { Capsule().strokeBorder(theme.textColor.opacity(0.07), lineWidth: 0.5).allowsHitTesting(false) }
     .padding(.horizontal, 8)
+    .padding(.top, 4)
   }
 
   @ViewBuilder
   private var content: some View {
     if isLoading || (isSearching && history.isSearching && history.results.isEmpty) {
       VStack(spacing: 12) {
-        ProgressView().controlSize(.small)
+        AppSpinner()
         Text(isSearching ? "Searching histories…" : "Finding your conversations…")
           .font(.appFont(size: 12))
           .foregroundStyle(theme.secondaryTextColor)

@@ -3,12 +3,15 @@ import AppKit
 extension FloatingWindowController {
   /// Calculates a window frame using the screen under the cursor, or centers it
   /// on that screen for sessions opened from the Activity Notch.
-  func calculateWindowFrame(for location: NSPoint, currentHeight: CGFloat, centered: Bool = false)
-    -> (frame: NSRect, region: AnchorRegion)
-  {
+  func calculateWindowFrame(
+    for location: NSPoint, currentHeight: CGFloat, centered: Bool = false, windowWidth: CGFloat? = nil
+  ) -> (frame: NSRect, region: AnchorRegion) {
+    let windowWidth = windowWidth ?? Self.compactWindowWidth
     let screenFrame = FloatingChatWindowLayout.visibleFrame(near: location)
     if centered {
-      return (FloatingChatWindowLayout.centeredFrame(visibleFrame: screenFrame, height: currentHeight), .center)
+      return (FloatingChatWindowLayout.centeredFrame(
+        visibleFrame: screenFrame, height: currentHeight, windowWidth: windowWidth
+      ), .center)
     }
     let relY = (location.y - screenFrame.minY) / screenFrame.height
     let relX = (location.x - screenFrame.minX) / screenFrame.width
@@ -23,11 +26,12 @@ extension FloatingWindowController {
       y = location.y - currentHeight - 20
       region = .top
     }
-    if relX > 0.7 { x = location.x - Self.compactWindowWidth - 20 }
+    if relX > 0.7 { x = location.x - windowWidth - 20 }
 
-    x = max(screenFrame.minX + 10, min(x, screenFrame.maxX - Self.compactWindowWidth - 10))
+    let safeWidth = max(1, min(windowWidth, screenFrame.width - 20))
+    x = max(screenFrame.minX + 10, min(x, screenFrame.maxX - safeWidth - 10))
     y = max(screenFrame.minY + 10, min(y, screenFrame.maxY - currentHeight - 10))
-    return (NSRect(x: x, y: y, width: Self.compactWindowWidth, height: currentHeight), region)
+    return (NSRect(x: x, y: y, width: safeWidth, height: currentHeight), region)
   }
 
   func rememberCurrentWindowFrame() {

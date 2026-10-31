@@ -5,11 +5,14 @@ import SwiftUI
 
 class OnboardingWindowController: NSObject, ObservableObject, NSWindowDelegate {
   private var window: NSWindow?
+  private var licenseOnly = false
   @Published var isVisible = false
 
   var onComplete: (() -> Void)?
 
-  func show() {
+  func show(licenseOnly: Bool = false) {
+    if window != nil, self.licenseOnly != licenseOnly { close() }
+    self.licenseOnly = licenseOnly
     if window == nil {
       createWindow()
     }
@@ -53,6 +56,7 @@ class OnboardingWindowController: NSObject, ObservableObject, NSWindowDelegate {
     window.delegate = self
 
     let onboardingView = OnboardingView(
+      licenseOnly: licenseOnly,
       onComplete: { [weak self] in
         self?.onComplete?()
       }

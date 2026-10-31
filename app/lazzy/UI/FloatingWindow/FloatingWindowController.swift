@@ -19,6 +19,9 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
   @Published private(set) var isFrontmost = false
   @Published var isExpanded = false
   @Published private(set) var expandedContentHeight: CGFloat = 600
+  @Published var windowContentWidth: CGFloat = FloatingChatWindowLayout.width
+  @Published var isManuallyResized = false
+  @Published var manuallyResizedHeight: CGFloat?
   @Published var selectedAgent: String
   @Published var selectedModel: String?
   @Published var selectedModelSettings: AgentModelSettings?
@@ -73,11 +76,13 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
   var onVisibilityChanged: (() -> Void)?
 
   // Window configuration
-  /// The compact composer is deliberately fixed-width. Without a width
-  /// contract, NSHostingView can re-fit a borderless panel when a media view
-  /// changes from its loading state to its natural video size.
+  /// A stable default for new sessions; individual panels retain their resized width.
   static let compactWindowWidth = FloatingChatWindowLayout.width
-  private let windowWidth: CGFloat = FloatingWindowController.compactWindowWidth
+  private var windowWidth: CGFloat { windowContentWidth }
+  var contentViewportHeight: CGFloat? {
+    if isExpanded { return expandedContentHeight }
+    return isManuallyResized ? manuallyResizedHeight : nil
+  }
   // Initial height until SwiftUI reports the visible content's natural height.
   private let windowHeight = FloatingChatWindowLayout.minimumHeight
 
@@ -119,9 +124,15 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
     // Calculate smart frame based on cursor location
     // Use current window height if visible to maintain size during re-trigger
     let currentH = chatWindow?.frame.height ?? windowHeight
-    let result = calculateWindowFrame(for: location, currentHeight: currentH, centered: centered)
+    let result = calculateWindowFrame(
+      for: location, currentHeight: currentH, centered: centered, windowWidth: windowContentWidth
+    )
     let frame = result.frame
     self.activeAnchor = result.region
+    if abs(windowContentWidth - frame.width) > 0.5 {
+      windowContentWidth = frame.width
+      (chatWindow as? FloatingComposerPanel)?.fixedContentWidth = frame.width
+    }
 
     chatWindow?.setFrame(frame, display: true)
     chatWindow?.alphaValue = 1
@@ -147,7 +158,11 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
         for: preferredFrame, fallbackLocation: NSEvent.mouseLocation)
       let restoredFrame = FloatingChatWindowLayout.restoredFrame(
         from: preferredFrame, visibleFrame: visibleFrame, expanded: isExpanded,
-        fallbackHeight: chatWindow.frame.height)
+        fallbackHeight: chatWindow.frame.height, windowWidth: windowContentWidth)
+      if abs(windowContentWidth - restoredFrame.width) > 0.5 {
+        windowContentWidth = restoredFrame.width
+        (chatWindow as? FloatingComposerPanel)?.fixedContentWidth = restoredFrame.width
+      }
       chatWindow.setFrame(restoredFrame, display: true)
       resetAnchor()
       placementState.handoffInProgress = false
@@ -275,7 +290,7 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
     // Create a floating panel - borderless for clean look
     let panel = FloatingComposerPanel(
       contentRect: NSRect(x: 0, y: 0, width: windowWidth, height: windowHeight),
-      styleMask: [.borderless, .nonactivatingPanel],
+      styleMask: [.borderless, .nonactivatingPanel, .resizable],
       backing: .buffered,
       defer: false
     )
@@ -283,8 +298,14 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
     // Keep AppKit from adopting the hosting view's intrinsic width. Height
     // remains managed by updateWindowHeight below.
     panel.fixedContentWidth = windowWidth
-    panel.minSize = NSSize(width: windowWidth, height: FloatingChatWindowLayout.compactMinimumHeight)
-    panel.maxSize = NSSize(width: windowWidth, height: .greatestFiniteMagnitude)
+    panel.minSize = NSSize(
+      width: FloatingChatWindowLayout.minimumWidth, height: FloatingChatWindowLayout.resizeMinimumHeight
+    )
+    let visibleFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+    let resizeBounds = visibleFrame.insetBy(
+      dx: FloatingChatWindowLayout.margin, dy: FloatingChatWindowLayout.margin
+    )
+    panel.maxSize = NSSize(width: resizeBounds.width, height: resizeBounds.height)
 
     panel.isMovableByWindowBackground = true
     panel.level = .floating
@@ -309,7 +330,7 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
       onNewChat: onNewChat
     )
 
-    let hostingView = FirstClickHostingView(rootView: chatView.font(.custom("Geist-Regular", size: 14)))
+    let hostingView = FirstClickHostingView(rootView: chatView.useAppFont(size: 14))
     // Window height is measured and applied explicitly below. Prevent the
     // hosting view from independently changing NSWindow size constraints.
     hostingView.sizingOptions = []
@@ -359,7 +380,7 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
 
   /// Update window height with animation
   func updateWindowHeight(_ newHeight: CGFloat) {
-    guard newHeight.isFinite, newHeight > 0, !isExpanded else { return }
+    guard newHeight.isFinite, newHeight > 0, !isExpanded, !isManuallyResized else { return }
 
     pendingWindowHeight = newHeight
     guard !isWindowHeightUpdateScheduled else { return }
@@ -378,7 +399,7 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
   }
 
   private func applyWindowHeight(_ requestedHeight: CGFloat) {
-    guard let window = chatWindow, !isExpanded else { return }
+    guard let window = chatWindow, !isExpanded, !isManuallyResized else { return }
 
     let currentFrame = window.frame
     let screenFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? NSRect.zero
@@ -445,17 +466,6 @@ class FloatingWindowController: NSObject, ObservableObject, NSWindowDelegate {
     // When the user moves the window manually, we must refresh the anchors
     // otherwise the next height update will "snap" it back to the old position.
     resetAnchor()
-    rememberCurrentWindowFrame()
-  }
-
-  func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
-    guard sender === chatWindow else { return frameSize }
-    let screen = sender.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? sender.frame
-    return FloatingChatWindowLayout.resize(frameSize, visibleFrame: screen, expanded: isExpanded)
-  }
-
-  func windowDidResize(_ notification: Notification) {
-    updateExpandedContentHeight()
     rememberCurrentWindowFrame()
   }
 

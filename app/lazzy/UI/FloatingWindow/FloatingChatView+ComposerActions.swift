@@ -66,8 +66,10 @@ extension FloatingChatView {
 
     let prompts = DebugDemoCatalog.chatPrompts
     let keyCodes = [kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4,
-                    kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8]
-    guard let promptIndex = keyCodes.firstIndex(of: Int(event.keyCode)) else { return nil }
+                    kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8,
+                    kVK_ANSI_9, kVK_ANSI_0]
+    guard let promptIndex = keyCodes.firstIndex(of: Int(event.keyCode)),
+      prompts.indices.contains(promptIndex) else { return nil }
     return prompts[promptIndex]
   }
 
@@ -113,6 +115,10 @@ extension FloatingChatView {
   func handlePaste() -> Bool {
     let attachments = AttachmentHelper.getAttachmentsFromClipboard()
     guard !attachments.isEmpty else { return false }
+    guard !workingDirectoryStore.isRemote else {
+      errorMessage = "Local file attachments are not available for remote runs."
+      return true
+    }
 
     for attachment in attachments {
       addPendingAttachment(attachment)
@@ -236,6 +242,7 @@ extension FloatingChatView {
   }
 
   func addBrowserTabAttachment(_ tab: BrowserTab) {
+    guard !workingDirectoryStore.isRemote else { return }
     let attachment = tab.attachment
     guard !pendingBrowserTabs.contains(where: { $0.id == attachment.id }) else { return }
     pendingBrowserTabs.append(attachment)
@@ -246,6 +253,10 @@ extension FloatingChatView {
   }
 
   func addFileAttachment(_ url: URL) {
+    guard !workingDirectoryStore.isRemote else {
+      errorMessage = "Local file attachments are not available for remote runs."
+      return
+    }
     guard let attachment = AttachmentHelper.createAttachment(from: url) else { return }
     addPendingAttachment(attachment)
   }
@@ -256,6 +267,10 @@ extension FloatingChatView {
   /// still handles local file URLs itself, while this path covers drops on the
   /// response/header area, raw browser image data, and browser web URLs.
   func handleMediaDrop(_ providers: [NSItemProvider]) -> Bool {
+    guard !workingDirectoryStore.isRemote else {
+      errorMessage = "Local file attachments are not available for remote runs."
+      return false
+    }
     guard !providers.isEmpty else { return false }
     for provider in providers {
       loadMediaDrop(provider)
@@ -329,6 +344,10 @@ extension FloatingChatView {
   }
 
   func addPendingAttachment(_ attachment: ChatAttachment) {
+    guard !workingDirectoryStore.isRemote else {
+      errorMessage = "Local file attachments are not available for remote runs."
+      return
+    }
     if let id = attachment.conversationID, pendingAttachments.contains(where: { $0.conversationID == id }) { return }
     guard !pendingAttachments.contains(where: { $0.fileRequest.path == attachment.fileRequest.path }) else {
       return
@@ -378,6 +397,7 @@ extension FloatingChatView {
   }
 
   func runComposerCommandAction(_ action: SavedWorkflow) {
+    guard remoteSendIsReady() else { return }
     guard wsManager.isConnected, !wsManager.isStreaming, !wsManager.isStoppingRun,
       validateDraftAttachments() else { return }
     guard wsManager.currentConversation?.isProviderHistory != true || wsManager.currentConversation?.canResume != false else { return }
@@ -417,7 +437,7 @@ extension FloatingChatView {
       text: prompt,
       displayText: displayText,
       files: draft.files,
-      workspacePath: workingDirectoryStore.url?.path,
+      workspacePath: workingDirectoryStore.path,
       attachmentContext: currentContexts.compactMap(\.text).joined(separator: "\n\n"),
       zeroDataRetention: AISettings.zeroDataRetention,
       actionId: action.id,

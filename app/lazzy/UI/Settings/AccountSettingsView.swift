@@ -11,7 +11,7 @@ struct AccountSettingsView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 24) {
+      VStack(alignment: .leading, spacing: 18) {
         if auth.isAuthenticated, let user = auth.currentUser {
           authenticatedView(user: user)
         } else {
@@ -28,13 +28,13 @@ struct AccountSettingsView: View {
       HStack(spacing: 16) {
         // Profile Avatar Placeholder
         Circle()
-          .fill(theme.accentColor.opacity(0.1))
+          .fill(theme.textColor.opacity(0.1))
           .frame(width: 60, height: 60)
           .overlay(
             Text(user.email?.prefix(1).uppercased() ?? "U")
               // .font(.appFont(size: 24, weight: .bold))
               .font(.custom("Sick-Regular", size: 24))
-              .foregroundColor(theme.accentColor)
+              .foregroundColor(theme.textColor)
           )
 
         VStack(alignment: .leading, spacing: 4) {
@@ -69,8 +69,8 @@ struct AccountSettingsView: View {
           .font(.appFont(size: 12))
           .padding(.horizontal, 12)
           .padding(.vertical, 6)
-          .background(theme.accentColor.opacity(0.3))
-          .foregroundColor(theme.accentColor)
+          .background(theme.textColor.opacity(0.3))
+          .foregroundColor(theme.textColor)
           .cornerRadius(theme.borderRadius / 1.5)
         }
         .buttonStyle(.plain)
@@ -100,18 +100,7 @@ struct AccountSettingsView: View {
           .foregroundColor(theme.textColor.opacity(0.4))
 
         HStack(spacing: 12) {
-          TextField("", text: $email)
-            .placeholder(when: email.isEmpty) {
-              Text("Email address").foregroundColor(theme.textColor.opacity(0.4))
-            }
-            .textFieldStyle(.plain)
-            .padding(8)
-            .background(theme.textColor.opacity(0.05))
-            .cornerRadius(theme.borderRadius / 2)
-            .overlay(
-              RoundedRectangle(cornerRadius: theme.borderRadius / 2)
-                .stroke(theme.textColor.opacity(0.1), lineWidth: 1)
-            )
+          AppTextField("Email address", text: $email)
 
           Button(action: {
             Task {
@@ -120,7 +109,7 @@ struct AccountSettingsView: View {
             }
           }) {
             if auth.isLoading {
-              ProgressView()
+              AppSpinner()
                 .controlSize(.small)
             } else {
               Text("Send Link")
@@ -130,7 +119,7 @@ struct AccountSettingsView: View {
           .buttonStyle(.plain)
           .padding(.horizontal, 16)
           .padding(.vertical, 8)
-          .background(theme.accentColor)
+          .background(theme.textColor)
           .foregroundColor(theme.backgroundColor)
           .cornerRadius(theme.borderRadius / 2)
           .disabled(email.isEmpty || auth.isLoading)
@@ -139,7 +128,7 @@ struct AccountSettingsView: View {
         if magicLinkSent {
           Text("Check your email for the login link!")
             .font(.appFont(size: 11))
-            .foregroundColor(theme.accentColor)
+            .foregroundColor(theme.textColor)
         }
       }
       .padding(.top, 10)
@@ -167,7 +156,7 @@ struct AccountSettingsView: View {
       if let error = auth.lastError {
         Text(error)
           .font(.appFont(size: 11))
-          .foregroundColor(.red)
+          .foregroundColor(.primary)
           .padding(.top, 10)
       }
     }

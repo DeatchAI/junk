@@ -3,6 +3,9 @@ import Carbon.HIToolbox
 import UniformTypeIdentifiers
 
 final class ComposerNSTextView: NSTextView {
+  // Text edits and selection should never start a drag of the floating panel.
+  override var mouseDownCanMoveWindow: Bool { false }
+
   var onSubmit: (() -> Void)?
   var onPasteAttachment: (() -> Bool)?
   var onBackspaceWhenEmpty: (() -> Void)?

@@ -39,7 +39,7 @@ struct MCPSettingsContentView: View {
     VStack(alignment: .leading, spacing: 20) {
       if isAddingServer {
         // Add Server View
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: 18) {
           // Inner Header with Back Button
           HStack(spacing: 12) {
             Button(action: { withAnimation(.easeInOut) { isAddingServer = false } }) {
@@ -93,51 +93,24 @@ struct MCPSettingsContentView: View {
                   .foregroundColor(theme.backgroundColor)
                   .padding(.horizontal, 12)
                   .padding(.vertical, 7)
-                  .background(theme.accentColor)
+                  .background(theme.textColor)
                   .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
               }
               .buttonStyle(.plain)
             }
           }
 
-          // Search bar + Add button row
-          HStack(spacing: 12) {
-            // Search field
-            HStack(spacing: 8) {
-              Image(systemName: "magnifyingglass")
-                .font(.appFont(size: 12))
-                .foregroundColor(theme.secondaryTextColor)
-
-              TextField("", text: $searchText)
-                .placeholder(when: searchText.isEmpty) {
-                  Text("Search MCP Servers")
-                    .foregroundColor(theme.secondaryTextColor)
+          AppTextField("Search integrations", text: $searchText, symbol: "magnifyingglass")
+            .onChange(of: searchText) { _, _ in
+              searchTask?.cancel()
+              searchTask = Task {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                if !Task.isCancelled {
+                  currentOffset = 0
+                  loadIntegrations()
                 }
-                .textFieldStyle(.plain)
-                .font(.appFont(size: 13))
-                .foregroundColor(theme.textColor)
-                .onChange(of: searchText) { oldValue, newValue in
-                  // Debounced search for Composio integrations
-                  searchTask?.cancel()
-                  searchTask = Task {
-                    try? await Task.sleep(nanoseconds: 500_000_000)
-                    if !Task.isCancelled {
-                      currentOffset = 0
-                      loadIntegrations()
-                    }
-                  }
-                }
+              }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(theme.inputBackgroundColor)
-            .clipShape(RoundedRectangle(cornerRadius: theme.borderRadius / 1.5))
-            .overlay(
-              RoundedRectangle(cornerRadius: theme.borderRadius / 1.5)
-                .stroke(theme.borderColor, lineWidth: 0.5)
-            )
-
-          }
 
           // List Section
           ScrollView {
@@ -172,7 +145,7 @@ struct MCPSettingsContentView: View {
                       Button(action: loadMore) {
                         HStack {
                           if wsManager.isLoadingComposio {
-                            ProgressView().scaleEffect(0.6)
+                            AppSpinner().scaleEffect(0.6)
                           } else {
                             Text(
                               "Load More (\(wsManager.totalComposioIntegrations - wsManager.composioIntegrations.count) remaining)"
@@ -183,7 +156,7 @@ struct MCPSettingsContentView: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
-                        .background(theme.accentColor)
+                        .background(theme.textColor)
                         .cornerRadius(5)
                       }
                       .buttonStyle(.plain)
@@ -312,14 +285,14 @@ struct MCPSettingsContentView: View {
         currentOffset = 0
         loadIntegrations()
       }
-      .buttonStyle(.bordered)
+      .buttonStyle(AppButtonStyle())
     }
     .frame(maxWidth: .infinity, minHeight: 100)
   }
 
   private var loadingView: some View {
     HStack {
-      ProgressView()
+      AppSpinner()
         .scaleEffect(0.7)
       Text(selectedType == .builtin ? "Loading integrations…" : "Loading MCP servers…")
         .font(.appFont(size: 13))
@@ -333,7 +306,7 @@ struct MCPSettingsContentView: View {
     VStack(spacing: 12) {
       Image(systemName: "lock.shield")
         .font(.appFont(size: 24))
-        .foregroundColor(theme.accentColor)
+        .foregroundColor(theme.textColor)
 
       Text("Composio integrations require a paid Detach plan")
         .font(.appFont(size: 14, weight: .semibold))
@@ -488,7 +461,7 @@ struct UnifiedServerRow: View {
         Button(action: { wsManager.deleteMCPServer(id: server.id) }) {
           Image(systemName: "trash")
             .font(.appFont(size: 14))
-            .foregroundColor(Color.red.opacity(0.7))
+            .foregroundColor(Color.primary.opacity(0.7))
         }
         .buttonStyle(.plain)
         .help("Delete")
@@ -499,14 +472,14 @@ struct UnifiedServerRow: View {
       if integration.connected {
         HStack(spacing: 8) {
           HStack(spacing: 4) {
-            Circle().fill(Color.green).frame(width: 6, height: 6)
+            Circle().fill(Color.primary).frame(width: 6, height: 6)
             Text("Connected")
               .font(.appFont(size: 11, weight: .medium))
-              .foregroundColor(Color.green)
+              .foregroundColor(Color.primary)
           }
           .padding(.horizontal, 8)
           .padding(.vertical, 4)
-          .background(Color.green.opacity(0.1))
+          .background(Color.primary.opacity(0.1))
           .clipShape(Capsule())
 
           Button(action: {
@@ -528,7 +501,7 @@ struct UnifiedServerRow: View {
           wsManager.connectComposioAccount(toolkit: integration.id)
         }) {
           if wsManager.connectingToolkit == integration.id {
-            ProgressView().scaleEffect(0.5).tint(theme.textColor)
+            AppSpinner().scaleEffect(0.5).tint(theme.textColor)
           } else {
             Image(systemName: "plus")
               .font(.appFont(size: 12, weight: .bold))
@@ -549,18 +522,18 @@ struct UnifiedServerRow: View {
       if let status = server.status, status.connected {
         Text("\(status.tools?.count ?? 0) tools")
           .font(.appFont(size: 10, weight: .medium))
-          .foregroundColor(Color.green.opacity(0.8))
+          .foregroundColor(Color.primary.opacity(0.8))
           .padding(.horizontal, 6)
           .padding(.vertical, 2)
-          .background(Color.green.opacity(0.1))
+          .background(Color.primary.opacity(0.1))
           .clipShape(Capsule())
       } else if server.status?.error != nil {
         Text("Error")
           .font(.appFont(size: 10, weight: .medium))
-          .foregroundColor(Color.red.opacity(0.8))
+          .foregroundColor(Color.primary.opacity(0.8))
           .padding(.horizontal, 6)
           .padding(.vertical, 2)
-          .background(Color.red.opacity(0.1))
+          .background(Color.primary.opacity(0.1))
           .clipShape(Capsule())
       }
     }

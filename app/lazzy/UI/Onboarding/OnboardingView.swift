@@ -3,12 +3,15 @@ import SwiftUI
 
 struct OnboardingView: View {
   private enum Page {
-    case welcome, keyboard, router, browserExtension, permissions
+    case welcome, licenseKey, keyboard, router, browserExtension, messagesRemote, permissions
   }
 
   @ObservedObject private var theme = ThemeManager.shared
   @Environment(\.colorScheme) private var colorScheme
   @State private var page: Page = .welcome
+  @ObservedObject private var license = LicenseManager.shared
+
+  var licenseOnly = false
 
   var onComplete: () -> Void
 
@@ -17,9 +20,15 @@ struct OnboardingView: View {
       switch page {
       case .welcome:
         OnboardingWelcomeView(
-          onStartTrial: advance,
-          onUnlockWithKey: advance
+          onStartTrial: {
+            if license.hasAccess { accessGranted() }
+            else if license.canStartTrial { license.startTrial() }
+            else { license.openCheckout() }
+          },
+          onUnlockWithKey: { page = .licenseKey }
         )
+      case .licenseKey:
+        LicenseActivationView(onBack: { page = .welcome })
       case .keyboard:
         OnboardingStepScreen(
           step: .keyboard,
@@ -53,6 +62,17 @@ struct OnboardingView: View {
         ) {
           BrowserExtensionOnboardingView()
         }
+      case .messagesRemote:
+        OnboardingStepScreen(
+          step: .messagesRemote,
+          title: "Use your agents from Messages",
+          subtitle: "Optional remote controls through a separate iMessage identity on this Mac.",
+          footnote: "Everything you need is included. Connect Messages and pair your phone in Settings → Messages Remote.",
+          onBack: goBack,
+          onContinue: advance
+        ) {
+          MessagesRemoteOnboardingView()
+        }
       case .permissions:
         OnboardingStepScreen(
           step: .permissions,
@@ -67,6 +87,13 @@ struct OnboardingView: View {
         }
       }
     }
+    .onAppear {
+      if license.hasAccess { accessGranted() }
+    }
+    .onChange(of: license.hasAccess) { _, granted in
+      if granted { accessGranted() }
+      else { page = .welcome }
+    }
     .preferredColorScheme(theme.surfaceColorScheme)
     .frame(minWidth: 700, maxWidth: .infinity, minHeight: 520, maxHeight: .infinity)
     .background(OnboardingPalette.background(for: resolvedColorScheme))
@@ -79,13 +106,20 @@ struct OnboardingView: View {
     theme.surfaceColorScheme ?? colorScheme
   }
 
+  private func accessGranted() {
+    if licenseOnly { onComplete() }
+    else { page = .keyboard }
+  }
+
   private func advance() {
+    guard license.requireAccess() else { page = .welcome; return }
     withAnimation(.easeInOut(duration: 0.2)) {
       switch page {
-      case .welcome: page = .keyboard
+      case .welcome, .licenseKey: page = .keyboard
       case .keyboard: page = .router
       case .router: page = .browserExtension
-      case .browserExtension: page = .permissions
+      case .browserExtension: page = .messagesRemote
+      case .messagesRemote: page = .permissions
       case .permissions: onComplete()
       }
     }
@@ -95,10 +129,12 @@ struct OnboardingView: View {
     withAnimation(.easeInOut(duration: 0.2)) {
       switch page {
       case .welcome: break
+      case .licenseKey: page = .welcome
       case .keyboard: page = .welcome
       case .router: page = .keyboard
       case .browserExtension: page = .router
-      case .permissions: page = .browserExtension
+      case .messagesRemote: page = .browserExtension
+      case .permissions: page = .messagesRemote
       }
     }
   }

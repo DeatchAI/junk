@@ -15,6 +15,11 @@ extension FloatingChatView {
   func setupWSManager() {
     installConversationLoadHandler()
     wsManager.onProviderSession = acceptBranchSession
+    let manager = wsManager
+    manager.onConversationsLoaded = { [weak manager] conversations in
+      guard let machineID = manager?.remoteEndpoint?.machineID else { return }
+      RemoteConversationIndex.shared.record(conversations, machineID: machineID)
+    }
     wsManager.connect()
 
     // Handle streaming chunks in real-time
@@ -38,6 +43,7 @@ extension FloatingChatView {
       let response = streamingResponse
       deactivateResponseActivities()
       if !messages.isEmpty {
+        messages[messages.count - 1].gitRevision += 1
         messages[messages.count - 1].responseParts = responseEvents.map(\.messagePart)
         messages[messages.count - 1].assistantMessageId = assistantId
         messages[messages.count - 1].userMessageId = userId
@@ -77,6 +83,7 @@ extension FloatingChatView {
     }
 
     wsManager.onChatSent = { request in
+      self.workingDirectoryStore.lockSelection()
       // Keep subsequent turns on the routed provider without changing global manual preferences.
       if let agent = request.agent { self.controller.selectedAgent = agent }
       self.controller.selectedModel = request.model
@@ -84,6 +91,11 @@ extension FloatingChatView {
       if self.wsManager.isResumingDetachedRun {
         self.messages.append(ChatMessage(userPrompt: request.displayText ?? "Continue task", context: [], aiResponse: nil))
         self.activeMessageIndex = self.messages.count - 1
+      }
+      if self.branchSubmission == nil, !self.messages.isEmpty {
+        self.messages[self.messages.count - 1].gitRunID = request.runId
+        self.messages[self.messages.count - 1].gitTimestamp = Int(Date().timeIntervalSince1970 * 1000)
+        self.messages[self.messages.count - 1].gitMessageOrdinal = self.messages.count - 1
       }
       self.prepareForRequest()
     }
@@ -102,6 +114,10 @@ extension FloatingChatView {
       isThinking = false
       deactivateResponseActivities()
       errorMessage = error
+      if let last = messages.indices.last, let runID = wsManager.activeChatRequest?.runId, messages[last].gitRunID == runID {
+        messages[last].gitRevision += 1
+        if messages[last].aiResponse == nil { messages[last].aiResponse = streamingResponse }
+      }
       handleBranchError()
       retainSentAttachments()
       print("❌ UI received error: \(error)")
@@ -207,6 +223,7 @@ extension FloatingChatView {
   }
 
   func sendMessage() {
+    guard remoteSendIsReady() else { return }
     guard canSendMessage, validateDraftAttachments() else { return }
 
     let draft = composerDraft
@@ -266,7 +283,7 @@ extension FloatingChatView {
       text: userText,
       displayText: displayText,
       files: draft.files,
-      workspacePath: workingDirectoryStore.url?.path,
+      workspacePath: workingDirectoryStore.path,
       branchFrom: branchFrom,
       attachmentContext: contextPart.isEmpty ? nil : contextPart,
       fastMode: fastMode,
@@ -316,6 +333,7 @@ extension FloatingChatView {
 
   /// Start a new chat session - clears local state and notifies parent
   func startNewChat() {
+    workingDirectoryStore.unlockSelectionForNewChat()
     conversationStore.cancelAttachment()
     conversationStore.cancelSearch()
     // Clear local state
@@ -349,6 +367,10 @@ extension FloatingChatView {
 
   /// Start the interactive UI indexing mode
   func startIndexingMode() {
+    guard !workingDirectoryStore.isRemote else {
+      errorMessage = "App indexing is available when you run an agent on this Mac."
+      return
+    }
     print("🎯 Starting UI Indexing Mode")
 
     // Clear current state for fresh indexing session
@@ -358,7 +380,7 @@ extension FloatingChatView {
     wsManager.sendChat(
       text: "[INDEXING_MODE] User wants to index an app's UI. Start the interactive indexing flow.",
       files: [],
-      workspacePath: workingDirectoryStore.url?.path,
+      workspacePath: workingDirectoryStore.path,
       fastMode: false,
       zeroDataRetention: AISettings.zeroDataRetention
     )
@@ -385,17 +407,28 @@ extension FloatingChatView {
     wsManager.onConversationLoaded = { [self] conv, loadedMessages in
       DispatchQueue.main.async {
         guard self.wsManager.currentConversationId == conv.id else { return }
-        self.errorMessage = nil
-        if let provider = conv.provider, AgentProvider(rawValue: provider) != nil {
-          DetachSettings.selectedAgent = provider
-          DetachSettings.setSelectedModel(conv.model, for: provider)
+        if let machineID = self.wsManager.remoteEndpoint?.machineID {
+          RemoteConversationIndex.shared.record(conversationID: conv.id, machineID: machineID)
         }
+        self.errorMessage = nil
+        self.restoreConversationAgent(conv)
         if let path = conv.workspacePath {
-          if conv.isProviderHistory { self.workingDirectoryStore.clear() }
-          self.workingDirectoryStore.setDirectory(URL(fileURLWithPath: path))
-        } else if conv.isProviderHistory {
+          if let machineID = self.wsManager.remoteEndpoint?.machineID,
+            let selection = RemoteMachineStore.shared.selection(machineID: machineID, path: path)
+          {
+            self.workingDirectoryStore.setRemoteWorkspace(selection)
+          } else {
+            if conv.isProviderHistory { self.workingDirectoryStore.clear() }
+            self.workingDirectoryStore.setDirectory(URL(fileURLWithPath: path))
+          }
+        } else if let machineID = self.wsManager.remoteEndpoint?.machineID,
+          let selection = RemoteMachineStore.shared.firstWorkspaceSelection(machineID: machineID)
+        {
+          self.workingDirectoryStore.setRemoteWorkspace(selection)
+        } else if conv.isProviderHistory && self.wsManager.remoteEndpoint == nil {
           self.workingDirectoryStore.clear()
         }
+        self.workingDirectoryStore.lockSelection()
         // Convert server messages to local ChatMessage format
         var pairs: [ChatMessage] = []
         var i = 0
@@ -409,6 +442,8 @@ extension FloatingChatView {
               context: nil,  // History doesn't have context data separated yet
               aiResponse: nil
             )
+            chatMsg.gitTimestamp = msg.created_at
+            chatMsg.gitMessageOrdinal = pairs.count
             if i + 1 < loadedMessages.count && loadedMessages[i + 1].isAssistant {
               let assistant = loadedMessages[i + 1]
               chatMsg.aiResponse = assistant.content

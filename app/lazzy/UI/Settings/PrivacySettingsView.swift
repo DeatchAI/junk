@@ -8,9 +8,10 @@ struct PrivacySettingsView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 24) {
+      VStack(alignment: .leading, spacing: 18) {
         SettingsPageHeader(title: "Privacy & data",
           subtitle: "Choose what Detach caches on this Mac and when it can access your screen.")
+        GitSnapshotSettingsView(connected: wsManager.isConnected)
         VStack(alignment: .leading, spacing: 10) {
           SettingsSectionHeader(title: "Local conversation cache",
             subtitle: "Your agents own the original chats. Detach can cache message text for search and offline reading.")

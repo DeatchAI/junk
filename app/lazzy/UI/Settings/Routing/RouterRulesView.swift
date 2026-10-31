@@ -9,7 +9,6 @@ struct RouterRulesView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
-      Text("Your preferences").font(.appFont(size: 12, weight: .medium))
       if rules.isEmpty {
         Text("Auto will choose for you. Add a preference for work you want routed a particular way.")
           .foregroundStyle(theme.secondaryTextColor)
@@ -22,14 +21,14 @@ struct RouterRulesView: View {
             Text(choiceLabel(rule.preset)).foregroundStyle(theme.secondaryTextColor).lineLimit(1)
           }
           Spacer(minLength: 8)
-          Menu {
-            Button("Edit") { editing = rule }
-            Button("Move up") { move(index, by: -1) }.disabled(index == 0)
-            Button("Move down") { move(index, by: 1) }.disabled(index == rules.count - 1)
-            Divider()
-            Button("Remove", role: .destructive) { remove(rule.id) }
-          } label: { Image(systemName: "ellipsis").frame(width: 24, height: 24) }
-            .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Options for \(rule.description)")
+          AppActionMenu(actions: [
+            .init(title: "Edit", symbol: "pencil") { editing = rule },
+            .init(title: "Move up", symbol: "arrow.up", isEnabled: index > 0) { move(index, by: -1) },
+            .init(title: "Move down", symbol: "arrow.down", isEnabled: index < rules.count - 1) { move(index, by: 1) },
+            .init(title: "Remove", symbol: "trash") { remove(rule.id) },
+          ]) {
+            Image(systemName: "ellipsis").frame(width: 12)
+          }.accessibilityLabel("Options for \(rule.description)")
         }
         .padding(10)
         .background(theme.controlBackgroundColor, in: RoundedRectangle(cornerRadius: 8))
@@ -83,8 +82,7 @@ struct RouterRuleEditor: View {
     VStack(alignment: .leading, spacing: 16) {
       Text("Routing preference").font(.appFont(size: 16, weight: .semibold))
       Text("When the request is about")
-      TextField("For example: UI, visual design, and landing pages", text: $rule.description)
-        .textFieldStyle(.roundedBorder)
+      AppTextField("For example: UI, visual design, and landing pages", text: $rule.description)
         .onChange(of: rule.description) { _, value in
           if value.count > 240 { rule.description = String(value.prefix(240)) }
           rule.matchingDetails = nil
@@ -105,6 +103,7 @@ struct RouterRuleEditor: View {
         .keyboardShortcut(.defaultAction)
       }
     }
+    .buttonStyle(AppButtonStyle())
     .font(.appFont(size: 12))
     .padding(22)
     .frame(width: 480)

@@ -8,7 +8,8 @@ struct ComposerQuestionView: View {
   @ObservedObject private var theme = ThemeManager.shared
 
   private var questionHeight: CGFloat {
-    controller.isExpanded ? min(300, max(140, controller.expandedContentHeight - 130)) : 300
+    let viewportHeight = controller.contentViewportHeight ?? 430
+    return min(300, max(140, viewportHeight - 130))
   }
 
   var body: some View {
