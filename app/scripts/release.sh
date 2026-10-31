@@ -123,6 +123,7 @@ note "Building the v2 Detach runtime"
   bun install --frozen-lockfile
   bun run build
 )
+/bin/bash "$SCRIPT_DIR/build-remote-runtimes.sh"
 ditto "$PROJECT_ROOT/server-v2/detach-runtime" "$PROJECT_ROOT/lazzy/detach-runtime"
 RUNTIME_HASHES="$(shasum -a 256 "$PROJECT_ROOT/server-v2/detach-runtime" "$PROJECT_ROOT/lazzy/detach-runtime" | awk '{print $1}' | uniq)"
 [[ "$(printf '%s\n' "$RUNTIME_HASHES" | wc -l | tr -d ' ')" == "1" ]] || fail "The bundled v2 runtime does not match the build output"
@@ -151,6 +152,7 @@ xcodebuild \
 APP_PATH="$(find "$EXPORT_PATH" -maxdepth 1 -type d -name '*.app' -print -quit)"
 [[ -n "$APP_PATH" ]] || fail "Xcode export did not produce an app"
 codesign --deep --strict --verify --verbose=2 "$APP_PATH"
+/bin/bash "$PROJECT_ROOT/scripts/messages/verify-imsg.sh" "$APP_PATH"
 
 ARCHIVED_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")"
 ARCHIVED_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Contents/Info.plist")"
@@ -227,17 +229,23 @@ if [[ "$PUBLISH" == true ]]; then
   mkdir -p "$GITHUB_ASSET_DIR"
   ditto "$DMG_PATH" "$GITHUB_ASSET_DIR/$RELEASE_DMG_NAME"
   ditto "$APPCAST_PATH" "$GITHUB_ASSET_DIR/appcast.xml"
+  for PLATFORM in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
+    ditto "$PROJECT_ROOT/server-v2/remote-runtimes/detach-runtime-$PLATFORM" \
+      "$GITHUB_ASSET_DIR/detach-runtime-$PLATFORM"
+  done
 
   if gh release view "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" >/dev/null 2>&1; then
     gh release upload "$RELEASE_TAG" \
       "$GITHUB_ASSET_DIR/$RELEASE_DMG_NAME" \
       "$GITHUB_ASSET_DIR/appcast.xml" \
+      "$GITHUB_ASSET_DIR"/detach-runtime-* \
       --repo "$RELEASE_REPOSITORY" \
       --clobber
   else
     gh release create "$RELEASE_TAG" \
       "$GITHUB_ASSET_DIR/$RELEASE_DMG_NAME" \
       "$GITHUB_ASSET_DIR/appcast.xml" \
+      "$GITHUB_ASSET_DIR"/detach-runtime-* \
       --repo "$RELEASE_REPOSITORY" \
       --target "${GITHUB_SHA:-HEAD}" \
       --title "Detach $VERSION" \
@@ -251,4 +259,5 @@ echo "  DMG:     $DMG_PATH"
 echo "  Appcast: $APPCAST_PATH"
 if [[ "$PUBLISH" == true ]]; then
   echo "  Feed:    $UPDATE_FEED_URL"
+  echo "  Remote runtimes: $GITHUB_ASSET_DIR/detach-runtime-*"
 fi

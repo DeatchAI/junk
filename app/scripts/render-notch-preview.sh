@@ -13,8 +13,21 @@ cp "$built_app/Contents/Resources/Assets.car" "$bundle/Resources/"
 if [[ -f "$built_app/Contents/Resources/Geist-Regular.ttf" ]]; then
   cp "$built_app/Contents/Resources/Geist-Regular.ttf" "$bundle/Resources/"
 fi
+preview_sources=("$app_root/tests/activity-island/IslandVisualPreview.swift")
+if [[ "${3:-}" == "--interactive" ]]; then
+  preview_sources=(
+    "$app_root/lazzy/UI/DynamicIsland/ActivityIslandWindowController.swift"
+    "$app_root/tests/activity-island/IslandInteractionPreview.swift"
+  )
+elif [[ "${3:-}" == "--self-test" ]]; then
+  preview_sources=(
+    "$app_root/lazzy/UI/DynamicIsland/ActivityIslandWindowController.swift"
+    "$app_root/tests/activity-island/IslandPresentationTests.swift"
+  )
+fi
 xcrun swiftc -module-cache-path "$test_dir/modules" \
   "$app_root/lazzy/Models/AppearanceSettings.swift" \
+  "$app_root/lazzy/Models/AppFontChoice.swift" \
   "$app_root/lazzy/Core/ThemeDefinitions.swift" \
   "$app_root/lazzy/Core/ThemeManager.swift" \
   "$app_root/lazzy/UI/Components/Appearance/"*.swift \
@@ -31,9 +44,11 @@ xcrun swiftc -module-cache-path "$test_dir/modules" \
   "$app_root/lazzy/UI/Components/ScreenEdge/ScreenEdgeNotchShape.swift" \
   "$app_root/lazzy/UI/Components/ScreenEdge/ScreenEdgePanelLayout.swift" \
   "$app_root/lazzy/UI/DynamicIsland/DetachedRunOutcome.swift" \
+  "$app_root/lazzy/UI/DynamicIsland/DetachedRunProgress.swift" \
   "$app_root/lazzy/UI/DynamicIsland/DetachedAgentRun.swift" \
   "$app_root/lazzy/UI/DynamicIsland/DetachedRunStore.swift" \
   "$app_root/lazzy/UI/DynamicIsland/DetachedRunControls.swift" \
+  "$app_root/lazzy/UI/DynamicIsland/ActivityIslandTaskState.swift" \
   "$app_root/lazzy/UI/DynamicIsland/ActivityIslandContentLayout.swift" \
   "$app_root/lazzy/UI/DynamicIsland/ActivityIslandLayout.swift" \
   "$app_root/lazzy/UI/DynamicIsland/ActivityIslandView.swift" \
@@ -41,9 +56,14 @@ xcrun swiftc -module-cache-path "$test_dir/modules" \
   "$app_root/lazzy/UI/DynamicIsland/Components/"*.swift \
   "$app_root/lazzy/UI/Questions/AgentQuestionCenter.swift" \
   "$app_root/lazzy/UI/Questions/AgentQuestionForm.swift" \
+  "$app_root/lazzy/UI/Questions/AgentQuestionKeyboard.swift" \
   "$app_root/tests/activity-island/RunTestSupport.swift" \
-  "$app_root/tests/activity-island/IslandVisualPreview.swift" \
+  "${preview_sources[@]}" \
   -o "$bundle/MacOS/notch-preview"
+if [[ "${3:-}" == "--interactive" || "${3:-}" == "--self-test" ]]; then
+  "$bundle/MacOS/notch-preview"
+  exit 0
+fi
 if [[ "${3:-}" == "--compile-only" ]]; then
   echo "Native activity views and preview fixtures compiled successfully"
   exit 0

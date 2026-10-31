@@ -16,6 +16,7 @@ xcrun swiftc -module-cache-path "$test_dir/modules" \
   "$app_root/lazzy/Models/ConversationBranches.swift" \
   "$app_root/lazzy/Core/WebSocket/WebSocketManager+DetachedRuns.swift" \
   "$app_root/lazzy/UI/DynamicIsland/DetachedRunOutcome.swift" \
+  "$app_root/lazzy/UI/DynamicIsland/DetachedRunProgress.swift" \
   "$app_root/lazzy/UI/DynamicIsland/DetachedAgentRun.swift" \
   "$app_root/lazzy/UI/DynamicIsland/DetachedRunStore.swift" \
   "$app_root/lazzy/Core/KeepAwake/KeepAwakeWorkPolicy.swift" \
