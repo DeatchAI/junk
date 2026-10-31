@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="200 200 800 800" role="img" aria-labelledby="title desc">
+  <title id="title">Detach panel mark</title>
+  <desc id="desc">Two offset solid panels form the Detach mark.</desc>
+<rect x="486" y="254" width="461" height="455" fill="#000000"/>
+<path d="M 254,514 H 431 V 766 H 685 V 947 H 254 Z" fill="#000000"/>
+</svg>
